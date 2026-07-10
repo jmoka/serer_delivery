@@ -2,50 +2,157 @@
 
 API REST + MCP Server para plataforma de delivery white-label multi-tenant.
 
+## Arquitetura do projeto
+
+Este backend foi separado do frontend e vive em repositório próprio. A stack completa tem três partes independentes:
+
+| Parte      | Repositório                                              | Onde roda                                   |
+|------------|-----------------------------------------------------------|----------------------------------------------|
+| Frontend   | `deliveryhub_white_label` (Vite + React)                  | `C:\Users\Micro\3D Objects\DEV\deliveryhub_white_label` |
+| Backend    | `server_delivery` (este repo, NestJS)                      | `C:\Users\Micro\3D Objects\DEV\server_delivery`         |
+| Banco      | Supabase (Postgres + Auth + Storage)                       | local via Supabase CLI (dev) ou hospedado (produção) |
+
+Os três se comunicam por variáveis de ambiente (URLs + chaves) — nenhum depende de estar dentro da pasta do outro.
+
 ## Stack
 
 - NestJS 11 + TypeScript
-- Supabase (PostgreSQL local porta 54331)
+- Supabase (PostgreSQL)
 - PagBank API v4 (PIX + cartão)
 - MCP Server (Claude Code integration)
 
-## Setup
+---
+
+## Instalação local (desenvolvimento)
+
+O `config.toml` do Supabase (portas customizadas 5433x) vive dentro do repo do **frontend**, em `deliveryhub_white_label/supabase/`. É de lá que o Supabase local é iniciado, mesmo estando o backend em outra pasta.
 
 ```bash
-# 1. Instalar dependências
+# 1. Clonar os dois repos lado a lado (mesma pasta pai)
+#    DEV/deliveryhub_white_label
+#    DEV/server_delivery
+
+# 2. Subir o Supabase local (a partir do repo do frontend)
+cd deliveryhub_white_label
+supabase start
+# Anota a API URL e a service_role key que aparecem no output
+# (ou rode "supabase status" depois se já estiver rodando)
+
+# 3. Instalar e configurar o backend
+cd ../server_delivery
 npm install
-
-# 2. Copiar e preencher variáveis
 cp .env.example .env
+# Edita o .env com os valores do passo 2:
+#   SUPABASE_URL=http://127.0.0.1:54331
+#   SUPABASE_SERVICE_ROLE_KEY=<service_role do supabase start>
 
-# 3. Iniciar Supabase local (na pasta delivery-base/)
-cd .. && supabase start
-
-# 4. Aplicar migrations
+# 4. Aplicar migrations (a partir do repo do frontend, onde ficam as migrations)
+cd ../deliveryhub_white_label
 supabase migration up
 
-# 5. Iniciar backend
+# 5. Iniciar o backend
+cd ../server_delivery
 npm run start:dev
+# Sobe em http://localhost:3002
+
+# 6. Iniciar o frontend
+cd ../deliveryhub_white_label
+npm install
+cp .env.example .env
+# Edita o .env do frontend com VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
+# (mesmos valores do supabase start, chave anon/publishable)
+npm run dev
+# Sobe em http://localhost:4028
 ```
 
-Variáveis obrigatórias no `.env`:
+O Vite (`vite.config.mjs`) já tem proxy configurado: chamadas para `/api/*` no frontend são redirecionadas para `http://localhost:3002` (o backend), e chamadas para `/rest/v1`, `/auth/v1`, `/storage/v1`, `/realtime/v1` vão direto para o Supabase local. Em desenvolvimento local isso é automático — não precisa configurar nada extra.
+
+Variáveis obrigatórias no `.env` do backend:
 
 ```env
 SUPABASE_URL=http://127.0.0.1:54331
 SUPABASE_SERVICE_ROLE_KEY=<chave do supabase start>
+PORT=3002
 PAGBANK_TOKEN=<token do painel PagBank>
 PAGBANK_SANDBOX=true
 PAGBANK_WEBHOOK_URL=http://localhost:3002/pagamentos/webhook
 ```
 
-## Portas
+### Portas (desenvolvimento local)
 
 | Serviço       | Porta |
 |---------------|-------|
+| Frontend      | 4028  |
 | Backend HTTP  | 3002  |
 | Supabase API  | 54331 |
-| Studio        | 54333 |
-| Postgres      | 54332 |
+| Supabase DB   | 54332 |
+| Supabase Studio | 54333 |
+
+---
+
+## Deploy em produção (VPS)
+
+Em produção, backend e frontend rodam em processos/domínios separados — não existe mais o proxy do Vite, então cada um precisa apontar explicitamente para os endereços reais.
+
+### 1. Provisionar o Supabase
+
+Duas opções, escolha uma:
+
+**Opção A — Supabase Cloud (hospedado, mais simples de manter):**
+1. Criar um projeto em [supabase.com](https://supabase.com).
+2. Rodar as migrations do projeto (`supabase/migrations/`) contra esse projeto (`supabase link` + `supabase db push`, ou colar o SQL direto no SQL Editor do painel).
+3. Em **Project Settings → API**, pegar: `Project URL`, `anon public key` e `service_role key`.
+
+**Opção B — Supabase self-hosted na própria VPS (Docker):**
+1. Instalar Docker + Docker Compose na VPS.
+2. Subir a stack self-hosted do Supabase (docker-compose oficial do Supabase, ou `supabase start` apontando pra um projeto configurado pra produção).
+3. Aplicar as migrations (`supabase migration up` ou `supabase db push` contra a instância da VPS).
+4. Pegar `API URL` (endereço público/domínio da VPS + porta configurada) e as chaves `anon` / `service_role` geradas na própria configuração.
+
+Em ambas as opções, o que sai desse passo são 3 valores: **URL**, **anon key** e **service_role key**.
+
+### 2. Configurar o backend (este repo) na VPS
+
+```bash
+git clone git@github.com:jmoka/serer_delivery.git
+cd serer_delivery
+npm install
+npm run build
+cp .env.example .env
+```
+
+Editar o `.env` com as credenciais do passo 1 e os dados reais de produção:
+
+```env
+SUPABASE_URL=<Project URL ou URL pública da VPS>
+SUPABASE_SERVICE_ROLE_KEY=<service_role key>
+PORT=3002
+PAGBANK_TOKEN=<token de produção do PagBank>
+PAGBANK_SANDBOX=false
+PAGBANK_WEBHOOK_URL=https://SEU_DOMINIO/pagamentos/webhook
+```
+
+Rodar com `npm run start:prod` (idealmente atrás de um process manager como PM2, para reiniciar sozinho em caso de queda):
+
+```bash
+pm2 start dist/main.js --name delivery-backend
+```
+
+### 3. Configurar o frontend (`deliveryhub_white_label`) apontando pra produção
+
+No `.env` de produção do frontend:
+
+```env
+VITE_SUPABASE_URL=<mesma Project URL do passo 1>
+VITE_SUPABASE_ANON_KEY=<anon key do passo 1>
+```
+
+**Atenção — ponto pendente:** hoje o frontend chama o backend com caminhos relativos fixos (`fetch('/api/...')`), que só funcionam em desenvolvimento por causa do proxy do Vite. Em produção, com backend em domínio/porta separado, isso exige uma das duas soluções:
+
+- Configurar um reverse proxy (nginx/Apache no cPanel ou na VPS) que roteie `/api/*` do domínio do frontend para o processo Node do backend (porta 3002); **ou**
+- Ajustar o frontend para usar uma URL de API absoluta configurável via variável de ambiente (ex. `VITE_API_URL`), ainda não implementado.
+
+Esse ajuste está registrado como pendência técnica e precisa ser resolvido antes do primeiro deploy real em produção.
 
 ---
 
