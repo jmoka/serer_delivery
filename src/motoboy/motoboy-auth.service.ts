@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SupabaseJwtService } from '../auth/supabase-jwt.service';
 
 export interface CadastroMotoboyBody {
   name: string;
@@ -13,6 +14,9 @@ export interface CadastroMotoboyBody {
   documento_frente: string;
   documento_verso?: string;
   comprovante_endereco: string;
+  // Token da sessão de cliente (Supabase Auth) já logada, se houver — usado
+  // pra vincular a conta e promover user_profiles.role pra 'motoboy'.
+  supabase_access_token?: string;
 }
 
 const BUCKET = 'motoboy-documentos';
@@ -22,7 +26,25 @@ export class MotoboyAuthService {
   constructor(
     private supabase: SupabaseService,
     private config: ConfigService,
+    private supabaseJwt: SupabaseJwtService,
   ) {}
+
+  // Se veio um token de cliente logado, vincula o motoboy a essa conta e
+  // promove user_profiles.role pra 'motoboy' — a pessoa deixa de contar como
+  // cliente comum a partir daqui (decisão do produto).
+  private async vincularContaCliente(motoboyId: number, supabaseAccessToken?: string) {
+    if (!supabaseAccessToken) return;
+
+    const verified = await this.supabaseJwt.verificar(supabaseAccessToken);
+    const userId = verified?.sub;
+    if (!userId) return;
+
+    await this.supabase.client.from('motoboys').update({ user_id: userId }).eq('id', motoboyId);
+    await this.supabase.client
+      .from('user_profiles')
+      .update({ role: 'motoboy', updated_at: new Date().toISOString() })
+      .eq('id', userId);
+  }
 
   private gerarToken(motoboyId: number): string {
     const secret = this.config.getOrThrow('MOTOBOY_JWT_SECRET');
@@ -84,6 +106,8 @@ export class MotoboyAuthService {
       .update({ foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url })
       .eq('id', motoboy.id);
 
+    await this.vincularContaCliente(motoboy.id, body.supabase_access_token);
+
     return { token: this.gerarToken(motoboy.id) };
   }
 
@@ -131,6 +155,8 @@ export class MotoboyAuthService {
       })
       .eq('id', motoboyId);
     if (error) throw error;
+
+    await this.vincularContaCliente(motoboyId, body.supabase_access_token);
 
     return { token: this.gerarToken(motoboyId) };
   }
