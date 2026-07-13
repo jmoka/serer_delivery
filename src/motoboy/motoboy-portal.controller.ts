@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { MotoboyGuard } from '../auth/motoboy.guard';
 import { MotoboyService } from './motoboy.service';
 
@@ -12,9 +12,19 @@ export class MotoboyPortalController {
     return this.service.infoMotoboy(req.motoboyId);
   }
 
+  @Get('ganhos')
+  ganhos(@Req() req: any) {
+    return this.service.ganhosResumo(req.motoboyId);
+  }
+
+  @Get('ganhos/historico')
+  ganhosHistorico(@Query('restaurant_id') restaurantId: string | undefined, @Req() req: any) {
+    return this.service.ganhosHistorico(req.motoboyId, restaurantId ? Number(restaurantId) : undefined);
+  }
+
   @Get('pedidos/disponiveis')
-  disponiveis(@Req() req: any) {
-    return this.service.pedidosDisponiveis(req.motoboyId);
+  disponiveis(@Query('restaurant_id', ParseIntPipe) restaurantId: number, @Req() req: any) {
+    return this.service.pedidosDisponiveis(req.motoboyId, restaurantId);
   }
 
   @Get('pedidos')

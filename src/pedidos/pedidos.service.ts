@@ -1,12 +1,43 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
+import { GeocodingService } from '../motoboy/geocoding.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
 
 @Injectable()
 export class PedidosService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private geocoding: GeocodingService,
+  ) {}
+
+  private async geocodificarEnderecoCliente(customerId: number) {
+    const { data: customer } = await this.supabase.client
+      .from('customers')
+      .select('address_json, address_geocode_hash')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (!customer?.address_json) return;
+
+    const hash = crypto.createHash('md5').update(JSON.stringify(customer.address_json)).digest('hex');
+    if (hash === customer.address_geocode_hash) return; // endereço não mudou desde a última geocodificação
+
+    const { logradouro, numero, bairro, cidade, estado, cep } = customer.address_json as Record<string, string>;
+    const texto = [logradouro, numero, bairro, cidade, estado, cep].filter(Boolean).join(', ');
+    const coords = await this.geocoding.geocodeEndereco(texto);
+
+    await this.supabase.client
+      .from('customers')
+      .update({
+        lat: coords?.lat ?? null,
+        lng: coords?.lng ?? null,
+        address_geocode_hash: hash,
+        address_geocoded_at: new Date().toISOString(),
+      })
+      .eq('id', customerId);
+  }
 
   async listar(filtros: {
     empresa_id?: number;
@@ -108,7 +139,7 @@ export class PedidosService {
     // Busca frete do restaurante e soma ao total
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('frete_motoboy')
+      .select('frete_motoboy, motoboy_comissao_tipo')
       .eq('id', body.restaurant_id)
       .maybeSingle();
 
@@ -146,6 +177,12 @@ export class PedidosService {
 
         if (novoCliente) customerId = novoCliente.id;
       }
+    }
+
+    // Geocodifica o endereço do cliente em background (best-effort) — só quando a comissão
+    // do motoboy for por km, pra não gastar chamadas do Nominatim à toa. Nunca trava o checkout.
+    if (customerId && rest?.motoboy_comissao_tipo === 'km') {
+      this.geocodificarEnderecoCliente(customerId).catch(() => {});
     }
 
     // Busca caixa aberto para vincular o pedido
