@@ -10,9 +10,10 @@ import { SupabaseModule } from '../supabase/supabase.module';
 import { CategoriasModule } from '../categorias/categorias.module';
 import { ProdutosModule } from '../produtos/produtos.module';
 import { PedidosModule } from '../pedidos/pedidos.module';
+import { MotoboyModule } from '../motoboy/motoboy.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, CategoriasModule, ProdutosModule, PedidosModule],
+  imports: [AuthModule, SupabaseModule, CategoriasModule, ProdutosModule, PedidosModule, MotoboyModule],
   controllers: [RestauranteController, OnboardingController, CatalogoController, CozinhaPortalController],
   providers: [RestauranteService, CozinhaGuard],
 })

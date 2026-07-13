@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { CategoriasService } from '../categorias/categorias.service';
 import { ProdutosService } from '../produtos/produtos.service';
 import { PedidosService } from '../pedidos/pedidos.service';
+import { GeocodingService } from '../motoboy/geocoding.service';
 
 @Injectable()
 export class RestauranteService {
@@ -11,6 +12,7 @@ export class RestauranteService {
     private categorias: CategoriasService,
     private produtos: ProdutosService,
     private pedidos: PedidosService,
+    private geocoding: GeocodingService,
   ) {}
 
   async minhaEmpresa(userId: string) {
@@ -426,7 +428,27 @@ export class RestauranteService {
       .maybeSingle();
 
     if (error) throw error;
+
+    // Geocodifica o endereço em background (best-effort) pro cálculo de comissão por km —
+    // nunca falha a request de salvar o endereço por causa disso.
+    if (body.address !== undefined) {
+      this.geocodificarEndereco(restaurantId, body.address).catch(() => {});
+    }
+
     return data;
+  }
+
+  private async geocodificarEndereco(restaurantId: number, endereco: string) {
+    const coords = await this.geocoding.geocodeEndereco(endereco);
+    await this.supabase.client
+      .from('restaurants')
+      .update({
+        lat: coords?.lat ?? null,
+        lng: coords?.lng ?? null,
+        geocoded_at: new Date().toISOString(),
+        geocode_falhou: !coords,
+      })
+      .eq('id', restaurantId);
   }
 
   async getAparencia(restaurantId: number) {
@@ -459,7 +481,9 @@ export class RestauranteService {
   async getConfig(restaurantId: number) {
     const { data } = await this.supabase.client
       .from('restaurants')
-      .select('payment_config, frete_motoboy')
+      .select(
+        'payment_config, frete_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou',
+      )
       .eq('id', restaurantId)
       .maybeSingle();
 
@@ -477,6 +501,12 @@ export class RestauranteService {
       taxa_pagbank_percent: cfg.taxa_pagbank_percent ?? null,
       chave_pix: cfg.chave_pix ?? null,
       frete_motoboy: parseFloat(data?.frete_motoboy ?? 0),
+      motoboy_comissao_tipo: data?.motoboy_comissao_tipo ?? 'fixo',
+      motoboy_comissao_valor_fixo: parseFloat(data?.motoboy_comissao_valor_fixo ?? 0),
+      motoboy_comissao_percentual: parseFloat(data?.motoboy_comissao_percentual ?? 0),
+      motoboy_comissao_valor_km: parseFloat(data?.motoboy_comissao_valor_km ?? 0),
+      motoboy_comissao_km_fallback: parseFloat(data?.motoboy_comissao_km_fallback ?? 0),
+      geocode_falhou: !!data?.geocode_falhou,
     };
   }
 
@@ -490,6 +520,11 @@ export class RestauranteService {
       taxa_pagbank_percent?: number | null;
       chave_pix?: string | null;
       frete_motoboy?: number;
+      motoboy_comissao_tipo?: 'fixo' | 'percentual' | 'km';
+      motoboy_comissao_valor_fixo?: number;
+      motoboy_comissao_percentual?: number;
+      motoboy_comissao_valor_km?: number;
+      motoboy_comissao_km_fallback?: number;
     },
   ) {
     const { data: atual } = await this.supabase.client
@@ -512,6 +547,11 @@ export class RestauranteService {
 
     const update: Record<string, any> = { payment_config: novo, updated_at: new Date().toISOString() };
     if (body.frete_motoboy !== undefined) update.frete_motoboy = body.frete_motoboy;
+    if (body.motoboy_comissao_tipo !== undefined) update.motoboy_comissao_tipo = body.motoboy_comissao_tipo;
+    if (body.motoboy_comissao_valor_fixo !== undefined) update.motoboy_comissao_valor_fixo = body.motoboy_comissao_valor_fixo;
+    if (body.motoboy_comissao_percentual !== undefined) update.motoboy_comissao_percentual = body.motoboy_comissao_percentual;
+    if (body.motoboy_comissao_valor_km !== undefined) update.motoboy_comissao_valor_km = body.motoboy_comissao_valor_km;
+    if (body.motoboy_comissao_km_fallback !== undefined) update.motoboy_comissao_km_fallback = body.motoboy_comissao_km_fallback;
 
     const { error } = await this.supabase.client
       .from('restaurants')

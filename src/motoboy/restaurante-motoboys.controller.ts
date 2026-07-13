@@ -12,23 +12,24 @@ export class RestauranteMotoboysController {
     return this.service.listar(req.restaurantId);
   }
 
-  @Post()
-  criar(@Req() req: any, @Body() body: { name: string; phone?: string }) {
-    return this.service.criar(req.restaurantId, body);
+  @Get('solicitacoes')
+  solicitacoes(@Req() req: any) {
+    return this.service.listarSolicitacoes(req.restaurantId);
   }
 
-  @Patch(':id/renovar-token')
-  renovarToken(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.service.renovarToken(id, req.restaurantId);
+  @Patch('solicitacoes/:id/aceitar')
+  aceitar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.aceitarSolicitacao(id, req.restaurantId);
   }
 
-  @Patch(':id/toggle')
-  toggle(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() body: { ativo: boolean },
-    @Req() req: any,
-  ) {
-    return this.service.toggle(id, req.restaurantId, body.ativo);
+  @Patch('solicitacoes/:id/recusar')
+  recusar(@Param('id', ParseIntPipe) id: number, @Body() body: { motivo?: string }, @Req() req: any) {
+    return this.service.recusarSolicitacao(id, req.restaurantId, body?.motivo);
+  }
+
+  @Patch(':motoboyId/remover')
+  remover(@Param('motoboyId', ParseIntPipe) motoboyId: number, @Req() req: any) {
+    return this.service.removerAfiliacao(motoboyId, req.restaurantId);
   }
 
   @Patch(':pedidoId/atribuir')
