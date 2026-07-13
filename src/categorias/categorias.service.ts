@@ -44,6 +44,44 @@ export class CategoriasService {
     return { tipos: data ?? [] };
   }
 
+  async criarTipoEstabelecimento(body: { name: string; icon_name?: string }) {
+    const { data, error } = await this.supabase.client
+      .from('establishment_types')
+      .insert({ name: body.name, icon_name: body.icon_name ?? 'Store' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async atualizarTipoEstabelecimento(id: number, body: { name?: string; icon_name?: string }) {
+    const campos: Record<string, any> = {};
+    if (body.name !== undefined) campos.name = body.name;
+    if (body.icon_name !== undefined) campos.icon_name = body.icon_name;
+
+    const { data, error } = await this.supabase.client
+      .from('establishment_types')
+      .update(campos)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!data) throw new NotFoundException(`Tipo de estabelecimento ${id} não encontrado`);
+    return data;
+  }
+
+  async removerTipoEstabelecimento(id: number) {
+    const { error } = await this.supabase.client
+      .from('establishment_types')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    return { mensagem: `Tipo de estabelecimento ${id} removido` };
+  }
+
   async listarPorEmpresa(empresaId: number) {
     const { data, error } = await this.supabase.client
       .from('categories')

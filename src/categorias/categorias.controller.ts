@@ -18,6 +18,28 @@ export class CategoriasController {
     return this.service.listarTiposEstabelecimento();
   }
 
+  /** Admin — CRUD de tipos de estabelecimento */
+  @Post('establishment-types')
+  @UseGuards(AdminGuard)
+  criarTipoEstabelecimento(@Body() body: { name: string; icon_name?: string }) {
+    return this.service.criarTipoEstabelecimento(body);
+  }
+
+  @Patch('establishment-types/:id')
+  @UseGuards(AdminGuard)
+  atualizarTipoEstabelecimento(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { name?: string; icon_name?: string },
+  ) {
+    return this.service.atualizarTipoEstabelecimento(id, body);
+  }
+
+  @Delete('establishment-types/:id')
+  @UseGuards(AdminGuard)
+  removerTipoEstabelecimento(@Param('id', ParseIntPipe) id: number) {
+    return this.service.removerTipoEstabelecimento(id);
+  }
+
   /** Admin — CRUD de categorias globais */
   @Post('categorias/globais')
   @UseGuards(AdminGuard)
