@@ -16,6 +16,7 @@ export class OnboardingController {
       name: string;
       address?: string;
       business_hours?: object;
+      type_id?: number;
     },
   ) {
     const userId: string = req.userId;
@@ -38,6 +39,7 @@ export class OnboardingController {
         name: body.name,
         address: body.address ?? null,
         business_hours: body.business_hours ?? {},
+        type_id: body.type_id ?? null,
         user_id: userId,
         comissao_pct: 5.0,
         slug,

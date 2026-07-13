@@ -12,6 +12,12 @@ export class CategoriasController {
     return this.service.listarGlobais();
   }
 
+  /** Público — tipos de estabelecimento (restaurante, farmácia, mat. construção...) pro cadastro */
+  @Get('establishment-types')
+  listarTiposEstabelecimento() {
+    return this.service.listarTiposEstabelecimento();
+  }
+
   /** Admin — CRUD de categorias globais */
   @Post('categorias/globais')
   @UseGuards(AdminGuard)
