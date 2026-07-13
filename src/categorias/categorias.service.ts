@@ -34,6 +34,16 @@ export class CategoriasService {
     };
   }
 
+  async listarTiposEstabelecimento() {
+    const { data, error } = await this.supabase.client
+      .from('establishment_types')
+      .select('id, name, icon_name')
+      .order('name');
+
+    if (error) throw error;
+    return { tipos: data ?? [] };
+  }
+
   async listarPorEmpresa(empresaId: number) {
     const { data, error } = await this.supabase.client
       .from('categories')
