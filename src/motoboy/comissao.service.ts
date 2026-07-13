@@ -53,9 +53,11 @@ export class ComissaoService {
       .maybeSingle();
     if (!restaurant) return null;
 
-    const freteCobrado = Number(pedido.frete_cobrado ?? 0);
+    // O motoboy sempre recebe o frete cobrado do cliente — o tipo configurado
+    // (fixo/percentual/km) é um ADICIONAL somado em cima disso, não substituto.
+    const freteRepassado = Number(pedido.frete_cobrado ?? 0);
     let tipo = restaurant.motoboy_comissao_tipo as string;
-    let comissaoValor = 0;
+    let adicional = 0;
     let distanciaKm: number | null = null;
     let valorPorKm: number | null = null;
     let percentual: number | null = null;
@@ -63,23 +65,25 @@ export class ComissaoService {
 
     if (tipo === 'fixo') {
       valorBase = Number(restaurant.motoboy_comissao_valor_fixo);
-      comissaoValor = valorBase;
+      adicional = valorBase;
     } else if (tipo === 'percentual') {
       percentual = Number(restaurant.motoboy_comissao_percentual);
-      valorBase = freteCobrado;
-      comissaoValor = freteCobrado * (percentual / 100);
+      valorBase = freteRepassado;
+      adicional = freteRepassado * (percentual / 100);
     } else if (tipo === 'km') {
       const distancia = await this.calcularDistanciaPedido(pedido.customer_id, restaurant.lat, restaurant.lng);
       if (distancia !== null) {
         distanciaKm = parseFloat(distancia.toFixed(2));
         valorPorKm = Number(restaurant.motoboy_comissao_valor_km);
-        comissaoValor = distancia * valorPorKm;
+        adicional = distancia * valorPorKm;
       } else {
         tipo = 'km_fallback';
         valorBase = Number(restaurant.motoboy_comissao_km_fallback);
-        comissaoValor = valorBase;
+        adicional = valorBase;
       }
     }
+
+    const comissaoValor = freteRepassado + adicional;
 
     const { data, error } = await this.supabase.client
       .from('motoboy_comissoes')
@@ -89,6 +93,7 @@ export class ComissaoService {
         pedido_id: pedido.id,
         tipo,
         valor_base: valorBase,
+        frete_repassado: parseFloat(freteRepassado.toFixed(2)),
         percentual,
         distancia_km: distanciaKm,
         valor_por_km: valorPorKm,

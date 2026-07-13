@@ -583,7 +583,7 @@ export class MotoboyService {
   async ganhosHistorico(motoboyId: number, restaurantId?: number) {
     let query = this.supabase.client
       .from('motoboy_comissoes')
-      .select('id, restaurant_id, pedido_id, tipo, distancia_km, comissao_valor, status, criado_em, restaurant:restaurants(name)')
+      .select('id, restaurant_id, pedido_id, tipo, distancia_km, frete_repassado, valor_base, comissao_valor, status, criado_em, restaurant:restaurants(name)')
       .eq('motoboy_id', motoboyId)
       .order('criado_em', { ascending: false })
       .limit(100);
