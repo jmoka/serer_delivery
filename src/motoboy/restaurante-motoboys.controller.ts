@@ -1,4 +1,4 @@
-import { Body, Controller, Param, ParseIntPipe, Patch, Post, Get, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Param, ParseIntPipe, Patch, Post, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { MotoboyService } from './motoboy.service';
 
@@ -12,9 +12,14 @@ export class RestauranteMotoboysController {
     return this.service.listar(req.restaurantId);
   }
 
+  @Get('solicitacoes/count')
+  solicitacoesCount(@Req() req: any) {
+    return this.service.contarSolicitacoesPendentes(req.restaurantId);
+  }
+
   @Get('solicitacoes')
-  solicitacoes(@Req() req: any) {
-    return this.service.listarSolicitacoes(req.restaurantId);
+  solicitacoes(@Query('status') status: 'pendente' | 'aceito' | 'recusado' | undefined, @Req() req: any) {
+    return this.service.listarSolicitacoes(req.restaurantId, status ?? 'pendente');
   }
 
   @Patch('solicitacoes/:id/aceitar')

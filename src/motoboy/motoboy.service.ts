@@ -50,16 +50,32 @@ export class MotoboyService {
     return { motoboys };
   }
 
-  async listarSolicitacoes(restaurantId: number) {
+  async listarSolicitacoes(restaurantId: number, status: 'pendente' | 'aceito' | 'recusado' = 'pendente') {
+    // Pra pendente precisamos da ficha completa (docs via signed URL); pra histórico
+    // (aceito/recusado) só o básico, evita gerar signed URL à toa por linha.
+    const campos = status === 'pendente'
+      ? 'motoboy:motoboys(id, name, phone, email, foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url)'
+      : 'motoboy:motoboys(id, name, phone, email)';
+
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')
-      .select(
-        'id, solicitado_em, motoboy:motoboys(id, name, phone, email, foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url)',
-      )
+      .select(`id, solicitado_em, respondido_em, motivo_recusa, ${campos}`)
       .eq('restaurant_id', restaurantId)
-      .eq('status', 'pendente')
-      .order('solicitado_em', { ascending: true });
+      .eq('status', status)
+      .order(status === 'pendente' ? 'solicitado_em' : 'respondido_em', { ascending: status === 'pendente' });
     if (error) throw error;
+
+    if (status !== 'pendente') {
+      return {
+        solicitacoes: (data ?? []).map((row: any) => ({
+          id: row.id,
+          solicitado_em: row.solicitado_em,
+          respondido_em: row.respondido_em,
+          motivo_recusa: row.motivo_recusa,
+          motoboy: row.motoboy,
+        })),
+      };
+    }
 
     const solicitacoes = await Promise.all(
       (data ?? []).map(async (row: any) => ({
@@ -75,6 +91,16 @@ export class MotoboyService {
       })),
     );
     return { solicitacoes };
+  }
+
+  async contarSolicitacoesPendentes(restaurantId: number) {
+    const { count, error } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'pendente');
+    if (error) throw error;
+    return { count: count ?? 0 };
   }
 
   async aceitarSolicitacao(id: number, restaurantId: number) {
