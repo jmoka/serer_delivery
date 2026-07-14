@@ -14,9 +14,10 @@ import { RestauranteMesasController } from './restaurante-mesas.controller';
 import { MesaAcompanharController } from './mesa-acompanhar.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { AgenteImpressaoModule } from '../agente-impressao/agente-impressao.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule],
+  imports: [AuthModule, SupabaseModule, AgenteImpressaoModule],
   controllers: [
     SalaoController,
     GarcomAuthController,

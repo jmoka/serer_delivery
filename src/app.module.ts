@@ -15,6 +15,7 @@ import { MotoboyModule } from './motoboy/motoboy.module';
 import { PerfilModule } from './perfil/perfil.module';
 import { TagsModule } from './tags/tags.module';
 import { SalaoModule } from './salao/salao.module';
+import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { SalaoModule } from './salao/salao.module';
     PerfilModule,
     TagsModule,
     SalaoModule,
+    AgenteImpressaoModule,
   ],
 })
 export class AppModule {}
