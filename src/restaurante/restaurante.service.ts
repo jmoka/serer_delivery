@@ -4,6 +4,7 @@ import { CategoriasService } from '../categorias/categorias.service';
 import { ProdutosService } from '../produtos/produtos.service';
 import { PedidosService } from '../pedidos/pedidos.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
+import { MotoboyService } from '../motoboy/motoboy.service';
 
 @Injectable()
 export class RestauranteService {
@@ -13,6 +14,7 @@ export class RestauranteService {
     private produtos: ProdutosService,
     private pedidos: PedidosService,
     private geocoding: GeocodingService,
+    private motoboyService: MotoboyService,
   ) {}
 
   async minhaEmpresa(userId: string) {
@@ -92,6 +94,49 @@ export class RestauranteService {
     if (!pedido) throw new NotFoundException('Pedido não encontrado neste restaurante');
 
     return this.pedidos.atualizarStatus(pedidoId, status as any);
+  }
+
+  // Painel de controle de entregas: tudo que está "em voo" agora (pronto aguardando
+  // atribuição, indo buscar, ou já saiu pra entrega), com dados de quem está entregando.
+  async listarEntregas(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('orders')
+      .select(
+        'id, status, total, payment_method, motoboy_id, entrega_propria, motoboy_lat, motoboy_lng, motoboy_location_at, created_at, updated_at, customer_id',
+      )
+      .eq('restaurant_id', restaurantId)
+      .in('status', ['ready', 'motoboy_collecting', 'out_for_delivery'])
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+
+    const motoboyIds = [...new Set((data ?? []).map((o) => o.motoboy_id).filter(Boolean))];
+    const customerIds = [...new Set((data ?? []).map((o) => o.customer_id).filter(Boolean))];
+
+    const [{ data: motoboys }, { data: customers }] = await Promise.all([
+      motoboyIds.length
+        ? this.supabase.client.from('motoboys').select('id, name, phone').in('id', motoboyIds)
+        : Promise.resolve({ data: [] as any[] }),
+      customerIds.length
+        ? this.supabase.client.from('customers').select('id, name, address_json').in('id', customerIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const motoboyMap = Object.fromEntries((motoboys ?? []).map((m: any) => [m.id, m]));
+    const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c]));
+
+    const entregas = (data ?? []).map((o) => ({
+      ...o,
+      motoboy: o.motoboy_id ? motoboyMap[o.motoboy_id] ?? null : null,
+      cliente: o.customer_id ? customerMap[o.customer_id] ?? null : null,
+    }));
+    return { entregas };
+  }
+
+  async entregarPedidoProprio(
+    pedidoId: number,
+    restaurantId: number,
+    entregaPagamento?: { metodo: string; dinheiro?: number; pix?: number },
+  ) {
+    return this.motoboyService.entregarProprio(pedidoId, restaurantId, entregaPagamento);
   }
 
   private async catIdsDoRestaurante(restaurantId: number): Promise<number[]> {
@@ -482,7 +527,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, frete_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou',
+        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -501,6 +546,7 @@ export class RestauranteService {
       taxa_pagbank_percent: cfg.taxa_pagbank_percent ?? null,
       chave_pix: cfg.chave_pix ?? null,
       frete_motoboy: parseFloat(data?.frete_motoboy ?? 0),
+      usa_motoboy: data?.usa_motoboy ?? true,
       motoboy_comissao_tipo: data?.motoboy_comissao_tipo ?? 'fixo',
       motoboy_comissao_valor_fixo: parseFloat(data?.motoboy_comissao_valor_fixo ?? 0),
       motoboy_comissao_percentual: parseFloat(data?.motoboy_comissao_percentual ?? 0),
@@ -520,6 +566,7 @@ export class RestauranteService {
       taxa_pagbank_percent?: number | null;
       chave_pix?: string | null;
       frete_motoboy?: number;
+      usa_motoboy?: boolean;
       motoboy_comissao_tipo?: 'fixo' | 'percentual' | 'km';
       motoboy_comissao_valor_fixo?: number;
       motoboy_comissao_percentual?: number;
@@ -547,6 +594,7 @@ export class RestauranteService {
 
     const update: Record<string, any> = { payment_config: novo, updated_at: new Date().toISOString() };
     if (body.frete_motoboy !== undefined) update.frete_motoboy = body.frete_motoboy;
+    if (body.usa_motoboy !== undefined) update.usa_motoboy = body.usa_motoboy;
     if (body.motoboy_comissao_tipo !== undefined) update.motoboy_comissao_tipo = body.motoboy_comissao_tipo;
     if (body.motoboy_comissao_valor_fixo !== undefined) update.motoboy_comissao_valor_fixo = body.motoboy_comissao_valor_fixo;
     if (body.motoboy_comissao_percentual !== undefined) update.motoboy_comissao_percentual = body.motoboy_comissao_percentual;

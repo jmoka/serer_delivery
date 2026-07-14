@@ -25,6 +25,20 @@ export class MotoboyService {
     if (!data) throw new ForbiddenException('Motoboy não está afiliado a este estabelecimento');
   }
 
+  // Estabelecimento que optou por entregar por conta própria não deve aparecer
+  // pra motoboys pegarem pedido sozinhos — o dono ainda pode atribuir manualmente
+  // como exceção (não passa por aqui).
+  private async exigirUsaMotoboy(restaurantId: number) {
+    const { data } = await this.supabase.client
+      .from('restaurants')
+      .select('usa_motoboy')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    if (data && data.usa_motoboy === false) {
+      throw new ForbiddenException('Este estabelecimento faz entregas por conta própria');
+    }
+  }
+
   private async signedUrl(path: string | null | undefined): Promise<string | null> {
     if (!path) return null;
     const { data } = await this.supabase.client.storage.from(DOC_BUCKET).createSignedUrl(path, SIGNED_URL_TTL);
@@ -370,6 +384,72 @@ export class MotoboyService {
     return { ok: true, pedido_id: pedidoId, status: 'delivered' };
   }
 
+  // Dono do restaurante marca um pedido como entregue pela própria loja, sem motoboy.
+  // Só permitido se não houver motoboy atribuído (evita marcar como entrega própria
+  // um pedido que já está com um motoboy de verdade).
+  async entregarProprio(
+    pedidoId: number,
+    restaurantId: number,
+    entregaPagamento?: { metodo: string; dinheiro?: number; pix?: number },
+  ) {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('id, status, restaurant_id, motoboy_id, total')
+      .eq('id', pedidoId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!pedido) throw new NotFoundException('Pedido não encontrado neste restaurante');
+    if (pedido.motoboy_id) throw new BadRequestException('Pedido já está atribuído a um motoboy');
+
+    const updatePayload: Record<string, any> = {
+      status: 'delivered',
+      entrega_propria: true,
+      updated_at: new Date().toISOString(),
+    };
+    if (entregaPagamento) updatePayload.entrega_pagamento = entregaPagamento;
+
+    const { error } = await this.supabase.client.from('orders').update(updatePayload).eq('id', pedidoId);
+    if (error) throw error;
+
+    if (entregaPagamento) {
+      const { data: caixa } = await this.supabase.client
+        .from('caixas')
+        .select('id, entradas')
+        .eq('restaurant_id', restaurantId)
+        .eq('status', 'aberto')
+        .maybeSingle();
+
+      if (caixa) {
+        const entradas = (caixa.entradas ?? []) as any[];
+        const novas: any[] = [];
+        const agora = new Date().toISOString();
+
+        if ((entregaPagamento.dinheiro ?? 0) > 0) {
+          novas.push({
+            descricao: `Entrega própria pedido #${pedidoId} — dinheiro`,
+            valor: entregaPagamento.dinheiro,
+            meio: 'dinheiro',
+            criado_em: agora,
+          });
+        }
+        if ((entregaPagamento.pix ?? 0) > 0) {
+          novas.push({
+            descricao: `Entrega própria pedido #${pedidoId} — PIX`,
+            valor: entregaPagamento.pix,
+            meio: 'pix',
+            criado_em: agora,
+          });
+        }
+
+        if (novas.length > 0) {
+          await this.supabase.client.from('caixas').update({ entradas: [...entradas, ...novas] }).eq('id', caixa.id);
+        }
+      }
+    }
+
+    return { ok: true, pedido_id: pedidoId, status: 'delivered', entrega_propria: true };
+  }
+
   async registrarOcorrencia(
     pedidoId: number,
     motoboyId: number,
@@ -402,6 +482,7 @@ export class MotoboyService {
 
   async pedidosDisponiveis(motoboyId: number, restaurantId: number) {
     await this.exigirAfiliacaoAceita(motoboyId, restaurantId);
+    await this.exigirUsaMotoboy(restaurantId);
 
     const { data, error } = await this.supabase.client
       .from('orders')
@@ -439,6 +520,7 @@ export class MotoboyService {
       .maybeSingle();
     if (!pedido) throw new NotFoundException('Pedido não encontrado');
     await this.exigirAfiliacaoAceita(motoboyId, pedido.restaurant_id);
+    await this.exigirUsaMotoboy(pedido.restaurant_id);
 
     const { data, error } = await this.supabase.client
       .from('orders')
@@ -463,6 +545,7 @@ export class MotoboyService {
       .maybeSingle();
     if (!pedido) throw new NotFoundException('Pedido não encontrado');
     await this.exigirAfiliacaoAceita(motoboyId, pedido.restaurant_id);
+    await this.exigirUsaMotoboy(pedido.restaurant_id);
 
     const { data, error } = await this.supabase.client
       .from('orders')
