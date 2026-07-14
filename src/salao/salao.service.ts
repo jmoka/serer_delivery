@@ -196,6 +196,11 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
+  // Marcador seguro pra "negrito desligado" — o comando ESC/POS real (ESC E 0x00) tem um
+  // byte NUL, que o Postgres TEXT não aceita (quebra o insert). Guardamos esse marcador no
+  // banco e só trocamos pelo byte real em printers.py, na hora de mandar pra impressora.
+  private static readonly MARCADOR_NEGRITO_OFF = '\x01BOLDOFF\x01';
+
   private formatarTicketTexto(
     setor: string,
     comanda: {
@@ -204,7 +209,7 @@ export class SalaoService {
       cliente_mesa_telefone?: string | null;
       garcons?: { nome: string } | null;
     },
-    itens: { product_name?: string; quantity: number; observacao?: string | null }[],
+    itens: { product_name?: string; quantity: number; description?: string | null; observacao?: string | null }[],
   ): string {
     // ESC/POS: fonte dupla (altura+largura) pra facilitar leitura em impressora térmica
     // (pedido de acessibilidade — usuário com baixa visão lê o ticket na cozinha/bar).
@@ -213,6 +218,8 @@ export class SalaoService {
     // impressora (ESC_INIT = ESC @) então não precisa resetar a fonte no fim deste.
     const ESC_INIT = '\x1b\x40';
     const FONTE_DUPLA = '\x1d\x21\x11';
+    const NEGRITO_ON = '\x1b\x45\x01';
+    const NEGRITO_OFF = SalaoService.MARCADOR_NEGRITO_OFF;
 
     const linhas: string[] = [];
     linhas.push(ESC_INIT + FONTE_DUPLA);
@@ -223,10 +230,16 @@ export class SalaoService {
     if (comanda.cliente_mesa_telefone) linhas.push(comanda.cliente_mesa_telefone);
     linhas.push(new Date().toLocaleString('pt-BR'));
     linhas.push('--------------------------------');
-    for (const item of itens) {
-      linhas.push(`${item.quantity}x ${item.product_name ?? 'Produto'}`);
-      if (item.observacao) linhas.push(`  obs: ${item.observacao}`);
-    }
+    itens.forEach((item, idx) => {
+      linhas.push(`${NEGRITO_ON}${item.product_name ?? 'Produto'}${NEGRITO_OFF}`);
+      linhas.push(`${NEGRITO_ON}Qtd: ${item.quantity}${NEGRITO_OFF}`);
+      if (item.description) linhas.push(`Descricao: ${item.description}`);
+      if (item.observacao) linhas.push(`Obs: ${item.observacao}`);
+      if (idx < itens.length - 1) {
+        linhas.push('');
+        linhas.push('---------------');
+      }
+    });
     linhas.push('--------------------------------');
     return linhas.join('\n');
   }
@@ -236,7 +249,7 @@ export class SalaoService {
 
     const { data: pendentes, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, observacao, products(name, impressora_id, impressoras(id, nome, setor, nome_sistema))')
+      .select('id, product_id, quantity, observacao, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema))')
       .eq('order_id', comandaId)
       .eq('status', 'pendente');
     if (error) throw error;
@@ -271,7 +284,12 @@ export class SalaoService {
           itens: [],
         });
       }
-      grupos.get(chave)!.itens.push({ product_name: item.products?.name, quantity: item.quantity, observacao: item.observacao });
+      grupos.get(chave)!.itens.push({
+        product_name: item.products?.name,
+        description: item.products?.description,
+        quantity: item.quantity,
+        observacao: item.observacao,
+      });
     }
 
     // Impressoras com agente local pareado (nome_sistema preenchido) viram um job de
