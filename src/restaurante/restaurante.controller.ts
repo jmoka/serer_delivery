@@ -21,6 +21,11 @@ export class RestauranteController {
     return this.service.updateEmpresa(req.restaurantId, body);
   }
 
+  @Get('entregas')
+  listarEntregas(@Req() req: any) {
+    return this.service.listarEntregas(req.restaurantId);
+  }
+
   @Get('pedidos')
   meusPedidos(
     @Req() req: any,
@@ -40,6 +45,15 @@ export class RestauranteController {
     @Req() req: any,
   ) {
     return this.service.atualizarStatusPedido(id, req.restaurantId, body.status);
+  }
+
+  @Patch('pedidos/:id/entregar-proprio')
+  entregarProprio(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { entrega_pagamento?: { metodo: string; dinheiro?: number; pix?: number } },
+    @Req() req: any,
+  ) {
+    return this.service.entregarPedidoProprio(id, req.restaurantId, body?.entrega_pagamento);
   }
 
   @Patch('pedidos/:id/cancelar')
