@@ -14,6 +14,7 @@ import { RestauranteModule } from './restaurante/restaurante.module';
 import { MotoboyModule } from './motoboy/motoboy.module';
 import { PerfilModule } from './perfil/perfil.module';
 import { TagsModule } from './tags/tags.module';
+import { SalaoModule } from './salao/salao.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { TagsModule } from './tags/tags.module';
     MotoboyModule,
     PerfilModule,
     TagsModule,
+    SalaoModule,
   ],
 })
 export class AppModule {}
