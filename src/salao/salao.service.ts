@@ -52,7 +52,7 @@ export class SalaoService {
   async produtos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, price, category_id')
+      .select('id, name, price, image_url, category_id')
       .eq('restaurant_id', restaurantId)
       .eq('is_active', true)
       .order('name', { ascending: true });
@@ -151,7 +151,7 @@ export class SalaoService {
 
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, status, enviado_em, products(name)')
+      .select('id, product_id, quantity, unit_price, status, enviado_em, products(name, image_url)')
       .eq('order_id', comandaId)
       .order('id', { ascending: true });
     if (error) throw error;
