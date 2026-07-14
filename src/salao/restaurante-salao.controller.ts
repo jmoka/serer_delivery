@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { SalaoPdvService } from './salao-pdv.service';
 import { GarconsService } from './garcons.service';
+import type { ItemComandaBody } from './salao.service';
 
 @Controller('restaurante/salao')
 @UseGuards(RestaurantOwnerGuard)
@@ -29,6 +30,21 @@ export class RestauranteSalaoController {
   @Get('comandas/:id')
   comandaDetalhe(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.comandaDetalhe(id, req.restaurantId);
+  }
+
+  @Post('comandas/:id/itens')
+  adicionarItens(@Param('id', ParseIntPipe) id: number, @Body() body: { itens: ItemComandaBody[] }, @Req() req: any) {
+    return this.service.adicionarItens(id, req.restaurantId, body.itens);
+  }
+
+  @Patch('comandas/:id/transferir-garcom')
+  transferirGarcom(@Param('id', ParseIntPipe) id: number, @Body() body: { garcom_id: number }, @Req() req: any) {
+    return this.service.transferirGarcom(id, req.restaurantId, body.garcom_id);
+  }
+
+  @Get('comandas/:id/sugestao-gorjeta')
+  sugestaoGorjeta(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.sugestaoGorjeta(id, req.restaurantId);
   }
 
   @Patch('comandas/:id/desconto')

@@ -64,7 +64,7 @@ export class SalaoService {
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
     const { data } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, mesa_id, garcom_id, cliente_mesa_nome, cliente_mesa_telefone, mesas(numero, nome), garcons(nome)')
+      .select('id, status, restaurant_id, mesa_id, garcom_id, numero_comanda, cliente_mesa_nome, cliente_mesa_telefone, mesas(numero, nome), garcons(nome)')
       .eq('id', comandaId)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -111,6 +111,18 @@ export class SalaoService {
       .eq('status', 'aberto')
       .maybeSingle();
 
+    // Numeração sequencial por dia — só pra identificação fácil ("comanda 3"), reinicia
+    // a cada dia. Não precisa ser à prova de corrida (volume baixo de comandas simultâneas).
+    const inicioDoDia = new Date();
+    inicioDoDia.setHours(0, 0, 0, 0);
+    const { count } = await this.supabase.client
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .gte('created_at', inicioDoDia.toISOString());
+    const numeroComanda = (count ?? 0) + 1;
+
     const { data: comanda, error } = await this.supabase.client
       .from('orders')
       .insert({
@@ -123,6 +135,7 @@ export class SalaoService {
         cliente_mesa_telefone: body.cliente_telefone,
         total: 0,
         caixa_id: caixaAberto?.id ?? null,
+        numero_comanda: numeroComanda,
       })
       .select()
       .single();
@@ -138,7 +151,7 @@ export class SalaoService {
   async minhasComandas(garcomId: number) {
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, created_at')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at')
       .eq('garcom_id', garcomId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -246,7 +259,16 @@ export class SalaoService {
 
   async enviarItens(comandaId: number, garcomId: number) {
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
+    return this.processarEnvioPendentes(comandaId, comanda);
+  }
 
+  // Mesmo processamento de envio/impressão, chamado pelo lado do estabelecimento (PDV) quando
+  // o dono/caixa inclui um item direto na comanda — não precisa do garçom "enviar" separado.
+  async enviarItensComoRestaurante(comandaId: number, comanda: any) {
+    return this.processarEnvioPendentes(comandaId, comanda);
+  }
+
+  private async processarEnvioPendentes(comandaId: number, comanda: any) {
     const { data: pendentes, error } = await this.supabase.client
       .from('order_items')
       .select('id, product_id, quantity, observacao, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema))')

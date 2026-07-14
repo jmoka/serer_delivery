@@ -1,12 +1,17 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SalaoService } from './salao.service';
+import type { ItemComandaBody } from './salao.service';
 
 // PDV do caixa (lado estabelecimento): ações de cancelar/desconto/acréscimo/pagar
 // são exclusivas do dono (RestaurantOwnerGuard) — o garçom nunca tem acesso a
 // essas rotas (ver salao.controller.ts, que só cobre abrir/adicionar/enviar/fechar).
 @Injectable()
 export class SalaoPdvService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private salaoService: SalaoService,
+  ) {}
 
   async mesas(restaurantId: number) {
     const { data: mesas, error } = await this.supabase.client
@@ -18,7 +23,7 @@ export class SalaoPdvService {
 
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, total, status, garcons(nome)')
+      .select('id, mesa_id, total, status, numero_comanda, garcons(nome)')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -32,7 +37,7 @@ export class SalaoPdvService {
   async comandasAbertas(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, status, payment_method, created_at, mesas(numero, nome), garcons(nome)')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, status, payment_method, numero_comanda, created_at, mesas(numero, nome), garcons(nome)')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -89,6 +94,66 @@ export class SalaoPdvService {
     return data;
   }
 
+  // Dono/caixa inclui item direto na comanda (o garçom não precisa estar envolvido) —
+  // vai pendente e já sai imprimindo/pra fila igual quando o garçom manda.
+  async adicionarItens(id: number, restaurantId: number, itens: ItemComandaBody[]) {
+    if (!itens?.length) throw new BadRequestException('Informe ao menos 1 item');
+
+    const comanda = await this.buscarComanda(id, restaurantId);
+    if (comanda.status !== 'aberta') throw new BadRequestException('Comanda não está aberta');
+
+    const prodIds = itens.map((i) => i.product_id);
+    const { data: produtos, error: errProd } = await this.supabase.client
+      .from('products')
+      .select('id, price, is_active')
+      .in('id', prodIds);
+    if (errProd) throw errProd;
+
+    const prodMap = Object.fromEntries((produtos ?? []).map((p) => [p.id, p]));
+    for (const item of itens) {
+      const prod = prodMap[item.product_id];
+      if (!prod) throw new BadRequestException(`Produto ${item.product_id} não encontrado`);
+      if (!prod.is_active) throw new BadRequestException(`Produto ${item.product_id} inativo`);
+    }
+
+    const { error } = await this.supabase.client.from('order_items').insert(
+      itens.map((i) => ({
+        order_id: id,
+        product_id: i.product_id,
+        quantity: i.quantity,
+        unit_price: prodMap[i.product_id].price,
+        observacao: i.observacao?.trim() || null,
+        status: 'pendente',
+      })),
+    );
+    if (error) throw error;
+
+    const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', id);
+    const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+    await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', id);
+
+    await this.salaoService.enviarItensComoRestaurante(id, comanda);
+    return this.comandaDetalhe(id, restaurantId);
+  }
+
+  // Troca o garçom responsável por uma comanda em andamento (ex: troca de turno).
+  async transferirGarcom(id: number, restaurantId: number, novoGarcomId: number) {
+    await this.buscarComanda(id, restaurantId);
+
+    const { data: garcom } = await this.supabase.client
+      .from('garcons')
+      .select('id, ativo')
+      .eq('id', novoGarcomId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!garcom) throw new NotFoundException('Garçom não encontrado');
+    if (!garcom.ativo) throw new BadRequestException('Garçom está desativado');
+
+    const { error } = await this.supabase.client.from('orders').update({ garcom_id: novoGarcomId }).eq('id', id);
+    if (error) throw error;
+    return { ok: true };
+  }
+
   async cancelar(id: number, restaurantId: number) {
     const comanda = await this.buscarComanda(id, restaurantId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
@@ -125,6 +190,23 @@ export class SalaoPdvService {
         valor_calculado: parseFloat(valorCalculado.toFixed(2)),
       });
     }
+  }
+
+  // Sugestão de gorjeta calculada a partir da % configurada no estabelecimento — o caixa
+  // pode ver o valor sugerido antes de confirmar, mas ainda pode ajustar na hora de pagar.
+  async sugestaoGorjeta(id: number, restaurantId: number) {
+    await this.buscarComanda(id, restaurantId);
+    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', id);
+    const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('gorjeta_percentual')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    const percentual = restaurante?.gorjeta_percentual ?? 0;
+
+    return { percentual, valor_sugerido: parseFloat(((subtotal * percentual) / 100).toFixed(2)) };
   }
 
   async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number) {
