@@ -17,7 +17,7 @@ export class ProdutosService {
 
     let query = this.supabase.client
       .from('products')
-      .select('id, name, description, price, image_url, is_active, category_id, created_at')
+      .select('id, name, description, price, image_url, is_active, category_id, impressora_id, created_at')
       .in('category_id', catIds)
       .order('name');
 
@@ -31,7 +31,7 @@ export class ProdutosService {
   async buscar(id: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, image_url, is_active, category_id, created_at')
+      .select('id, name, description, price, image_url, is_active, category_id, impressora_id, created_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -46,6 +46,7 @@ export class ProdutosService {
     price: number;
     image_url?: string;
     category_id: number;
+    impressora_id?: number;
   }) {
     const { data, error } = await this.supabase.client
       .from('products')
@@ -55,6 +56,7 @@ export class ProdutosService {
         price: body.price,
         image_url: body.image_url ?? null,
         category_id: body.category_id,
+        impressora_id: body.impressora_id ?? null,
         is_active: true,
       })
       .select()
@@ -70,6 +72,7 @@ export class ProdutosService {
     price: number;
     image_url: string;
     category_id: number;
+    impressora_id: number | null;
   }>) {
     const { data, error } = await this.supabase.client
       .from('products')

@@ -662,6 +662,62 @@ export class RestauranteService {
     return { pedidos };
   }
 
+  // KDS por setor (módulo Salão): tela genérica reaproveitável por impressora/setor
+  // (cozinha, bar, salgados...), mostrando só os itens já enviados e ainda não prontos.
+  async getKdsSetor(restaurantId: number, impressoraId: number) {
+    const { data: itens, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, quantity, unit_price, product_id, enviado_em, order_id, products(name), orders(id, mesa_id, cliente_mesa_nome, garcom_id, mesas(numero, nome))')
+      .eq('impressora_id', impressoraId)
+      .eq('status', 'enviado')
+      .order('enviado_em', { ascending: true });
+    if (error) throw error;
+
+    // orders() acima não traz restaurant_id selecionado — confirma posse via join explícito abaixo.
+    const comandaIds = [...new Set((itens ?? []).map((i: any) => i.order_id))];
+    if (comandaIds.length === 0) return { grupos: [] };
+
+    const { data: comandasDoRestaurante } = await this.supabase.client
+      .from('orders')
+      .select('id')
+      .in('id', comandaIds)
+      .eq('restaurant_id', restaurantId);
+    const idsValidos = new Set((comandasDoRestaurante ?? []).map((o: any) => o.id));
+
+    const grupos = new Map<number, { order_id: number; mesa: string | null; cliente: string | null; itens: any[] }>();
+    for (const item of itens as any[]) {
+      if (!idsValidos.has(item.order_id)) continue;
+      if (!grupos.has(item.order_id)) {
+        const mesa = item.orders?.mesas ? `Mesa ${item.orders.mesas.numero}${item.orders.mesas.nome ? ' - ' + item.orders.mesas.nome : ''}` : null;
+        grupos.set(item.order_id, { order_id: item.order_id, mesa, cliente: item.orders?.cliente_mesa_nome ?? null, itens: [] });
+      }
+      grupos.get(item.order_id)!.itens.push({
+        id: item.id,
+        product_name: item.products?.name,
+        quantity: item.quantity,
+        enviado_em: item.enviado_em,
+      });
+    }
+
+    return { grupos: Array.from(grupos.values()) };
+  }
+
+  async marcarItemPronto(itemId: number, restaurantId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, order_id, orders(restaurant_id)')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
+    }
+
+    const { error } = await this.supabase.client.from('order_items').update({ status: 'pronto' }).eq('id', itemId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
   private readonly STATUS_ABERTOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery'];
 
   private calcularResumo(pedidos: any[], saidas: any[], valor_inicial: number, entradas: any[] = []) {

@@ -27,6 +27,7 @@ export class ProdutosController {
     price: number;
     image_url?: string;
     category_id: number;
+    impressora_id?: number;
   }) {
     return this.service.criar(body);
   }
