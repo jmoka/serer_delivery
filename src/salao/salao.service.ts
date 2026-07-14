@@ -26,6 +26,17 @@ export class SalaoService {
     return data;
   }
 
+  async produtos(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('products')
+      .select('id, name, price, category_id')
+      .eq('restaurant_id', restaurantId)
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
     const { data } = await this.supabase.client
       .from('orders')

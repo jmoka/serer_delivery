@@ -13,6 +13,11 @@ export class SalaoController {
     return this.service.mesas(req.garcomRestaurantId);
   }
 
+  @Get('produtos')
+  produtos(@Req() req: any) {
+    return this.service.produtos(req.garcomRestaurantId);
+  }
+
   @Get('comandas')
   minhasComandas(@Req() req: any) {
     return this.service.minhasComandas(req.garcomId);
