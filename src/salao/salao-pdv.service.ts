@@ -23,7 +23,7 @@ export class SalaoPdvService {
 
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, total, status, numero_comanda, garcons(nome)')
+      .select('id, mesa_id, total, status, numero_comanda, cliente_mesa_nome, garcons(nome)')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])

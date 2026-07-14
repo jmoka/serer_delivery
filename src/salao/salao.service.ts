@@ -18,13 +18,26 @@ export class SalaoService {
   constructor(private supabase: SupabaseService) {}
 
   async mesas(restaurantId: number) {
-    const { data, error } = await this.supabase.client
+    const { data: mesas, error } = await this.supabase.client
       .from('mesas')
       .select('id, numero, nome, status')
       .eq('restaurant_id', restaurantId)
       .order('numero', { ascending: true });
     if (error) throw error;
-    return data;
+
+    // Precisa saber de quem é a comanda em cada mesa ocupada — o garçom só pode
+    // clicar/entrar se a comanda for dele (ver garcom-portal, grid de mesas).
+    const { data: comandas } = await this.supabase.client
+      .from('orders')
+      .select('id, mesa_id, garcom_id, cliente_mesa_nome, total')
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .in('status', ['aberta', 'fechada_garcom'])
+      .not('mesa_id', 'is', null);
+
+    const comandaPorMesa = new Map((comandas ?? []).map((c: any) => [c.mesa_id, c]));
+
+    return (mesas ?? []).map((m: any) => ({ ...m, comanda: comandaPorMesa.get(m.id) ?? null }));
   }
 
   // Acompanhamento público via QR (ideia 13) — sem auth, só o essencial pro cliente da mesa.
@@ -44,7 +57,7 @@ export class SalaoService {
 
     return {
       restaurante: (comanda as any).restaurants?.name,
-      mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : 'Comanda avulsa',
+      mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : null,
       status: comanda.status,
       itens: (itens ?? []).map((i: any) => ({ quantity: i.quantity, status: i.status, product_name: i.products?.name })),
     };
@@ -237,7 +250,7 @@ export class SalaoService {
     const linhas: string[] = [];
     linhas.push(ESC_INIT + FONTE_DUPLA);
     linhas.push(setor.toUpperCase());
-    linhas.push(comanda.mesas ? `Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}` : 'Comanda avulsa');
+    if (comanda.mesas) linhas.push(`Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}`);
     if (comanda.garcons?.nome) linhas.push(`Garcom: ${comanda.garcons.nome}`);
     if (comanda.cliente_mesa_nome) linhas.push(comanda.cliente_mesa_nome);
     if (comanda.cliente_mesa_telefone) linhas.push(comanda.cliente_mesa_telefone);

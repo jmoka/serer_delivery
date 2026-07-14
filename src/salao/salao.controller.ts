@@ -8,6 +8,11 @@ import type { AbrirComandaBody, ItemComandaBody } from './salao.service';
 export class SalaoController {
   constructor(private service: SalaoService) {}
 
+  @Get('me')
+  me(@Req() req: any) {
+    return { id: req.garcomId, nome: req.garcomNome };
+  }
+
   @Get('mesas')
   mesas(@Req() req: any) {
     return this.service.mesas(req.garcomRestaurantId);
