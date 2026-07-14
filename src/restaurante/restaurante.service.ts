@@ -20,12 +20,18 @@ export class RestauranteService {
   async minhaEmpresa(userId: string) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, slug, business_hours, payment_config, comissao_pct, created_at')
+      .select('id, name, address, logo_url, slug, business_hours, payment_config, comissao_pct, type_id, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
     if (error) throw error;
     if (!data) throw new NotFoundException('Nenhum restaurante vinculado');
+
+    const { data: tipoRestaurante } = await this.supabase.client
+      .from('establishment_types')
+      .select('id')
+      .eq('name', 'Restaurante')
+      .maybeSingle();
 
     const { data: pedidosData } = await this.supabase.client
       .from('orders')
@@ -39,7 +45,7 @@ export class RestauranteService {
     const faturamento = entregues.reduce((acc, p) => acc + (p.total ?? 0), 0);
 
     return {
-      empresa: data,
+      empresa: { ...data, tipo_restaurante: data.type_id === tipoRestaurante?.id },
       metricas: {
         total_pedidos: pedidosData?.length ?? 0,
         pedidos_pendentes: pendentes.length,
@@ -158,7 +164,7 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, image_url, is_active, category_id, restaurant_id, tags, destaque, created_at')
+      .select('id, name, description, price, preco_promo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, created_at')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
@@ -172,6 +178,7 @@ export class RestauranteService {
     body: {
       name: string; description?: string; price: number; image_url?: string;
       category_id: number; tags?: string[]; preco_promo?: number; destaque?: boolean;
+      impressora_id?: number;
     },
   ) {
     // Valida se a categoria é do restaurante ou global (restaurant_id IS NULL)
@@ -193,6 +200,7 @@ export class RestauranteService {
         restaurant_id: restaurantId,
         tags: body.tags ?? [],
         destaque: body.destaque ?? false,
+        impressora_id: body.impressora_id ?? null,
         is_active: true,
       })
       .select()
@@ -213,6 +221,7 @@ export class RestauranteService {
     if (body.image_url !== undefined) update.image_url = body.image_url ?? null;
     if (body.tags !== undefined) update.tags = body.tags;
     if (body.destaque !== undefined) update.destaque = body.destaque;
+    if (body.impressora_id !== undefined) update.impressora_id = body.impressora_id ?? null;
     if (body.category_id !== undefined) {
       const { data: cat } = await this.supabase.client
         .from('categories').select('id, restaurant_id').eq('id', body.category_id).maybeSingle();
