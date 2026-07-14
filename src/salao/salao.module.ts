@@ -9,6 +9,8 @@ import { ImpressorasService } from './impressoras.service';
 import { RestauranteImpressorasController } from './restaurante-impressoras.controller';
 import { SalaoPdvService } from './salao-pdv.service';
 import { RestauranteSalaoController } from './restaurante-salao.controller';
+import { MesasService } from './mesas.service';
+import { RestauranteMesasController } from './restaurante-mesas.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 
@@ -20,8 +22,9 @@ import { SupabaseModule } from '../supabase/supabase.module';
     RestauranteGarconsController,
     RestauranteImpressorasController,
     RestauranteSalaoController,
+    RestauranteMesasController,
   ],
-  providers: [SalaoService, GarcomAuthService, GarconsService, ImpressorasService, SalaoPdvService],
-  exports: [SalaoService, GarconsService, ImpressorasService, SalaoPdvService],
+  providers: [SalaoService, GarcomAuthService, GarconsService, ImpressorasService, SalaoPdvService, MesasService],
+  exports: [SalaoService, GarconsService, ImpressorasService, SalaoPdvService, MesasService],
 })
 export class SalaoModule {}
