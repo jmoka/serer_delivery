@@ -3,6 +3,7 @@ import { RestauranteController } from './restaurante.controller';
 import { OnboardingController } from './onboarding.controller';
 import { CatalogoController } from './catalogo.controller';
 import { CozinhaPortalController } from './cozinha-portal.controller';
+import { KdsPortalController } from './kds-portal.controller';
 import { RestauranteService } from './restaurante.service';
 import { CozinhaGuard } from '../auth/cozinha.guard';
 import { AuthModule } from '../auth/auth.module';
@@ -14,7 +15,7 @@ import { MotoboyModule } from '../motoboy/motoboy.module';
 
 @Module({
   imports: [AuthModule, SupabaseModule, CategoriasModule, ProdutosModule, PedidosModule, MotoboyModule],
-  controllers: [RestauranteController, OnboardingController, CatalogoController, CozinhaPortalController],
+  controllers: [RestauranteController, OnboardingController, CatalogoController, CozinhaPortalController, KdsPortalController],
   providers: [RestauranteService, CozinhaGuard],
 })
 export class RestauranteModule {}
