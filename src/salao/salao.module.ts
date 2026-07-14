@@ -11,6 +11,7 @@ import { SalaoPdvService } from './salao-pdv.service';
 import { RestauranteSalaoController } from './restaurante-salao.controller';
 import { MesasService } from './mesas.service';
 import { RestauranteMesasController } from './restaurante-mesas.controller';
+import { MesaAcompanharController } from './mesa-acompanhar.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 
@@ -23,6 +24,7 @@ import { SupabaseModule } from '../supabase/supabase.module';
     RestauranteImpressorasController,
     RestauranteSalaoController,
     RestauranteMesasController,
+    MesaAcompanharController,
   ],
   providers: [SalaoService, GarcomAuthService, GarconsService, ImpressorasService, SalaoPdvService, MesasService],
   exports: [SalaoService, GarconsService, ImpressorasService, SalaoPdvService, MesasService],

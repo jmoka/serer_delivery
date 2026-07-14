@@ -26,6 +26,29 @@ export class SalaoService {
     return data;
   }
 
+  // Acompanhamento público via QR (ideia 13) — sem auth, só o essencial pro cliente da mesa.
+  async acompanharPorToken(token: string) {
+    const { data: comanda } = await this.supabase.client
+      .from('orders')
+      .select('id, status, mesas(numero, nome), restaurants(name)')
+      .eq('tracking_token', token)
+      .eq('canal', 'presencial')
+      .maybeSingle();
+    if (!comanda) throw new NotFoundException('Comanda não encontrada');
+
+    const { data: itens } = await this.supabase.client
+      .from('order_items')
+      .select('quantity, status, products(name)')
+      .eq('order_id', comanda.id);
+
+    return {
+      restaurante: (comanda as any).restaurants?.name,
+      mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : 'Comanda avulsa',
+      status: comanda.status,
+      itens: (itens ?? []).map((i: any) => ({ quantity: i.quantity, status: i.status, product_name: i.products?.name })),
+    };
+  }
+
   async produtos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
