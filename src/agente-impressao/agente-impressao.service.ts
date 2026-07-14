@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 
@@ -66,6 +66,40 @@ export class AgenteImpressaoService {
     return (data ?? [])
       .filter((j: any) => j.impressoras?.nome_sistema)
       .map((j: any) => ({ id: j.id, conteudo: j.conteudo, nome_sistema: j.impressoras.nome_sistema }));
+  }
+
+  // Dono clica "Testar impressão" numa impressora cadastrada — só funciona se ela
+  // já tiver um agente pareado (nome_sistema preenchido), senão não tem quem imprima.
+  async criarJobTeste(restaurantId: number, impressoraId: number) {
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, nome, setor, nome_sistema')
+      .eq('id', impressoraId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!impressora) throw new NotFoundException('Impressora não encontrada');
+    if (!impressora.nome_sistema) {
+      throw new BadRequestException('Essa impressora ainda não está vinculada a um agente — vincule uma impressora detectada primeiro.');
+    }
+
+    const conteudo = [
+      'TESTE DE IMPRESSÃO',
+      impressora.nome,
+      `Setor: ${impressora.setor}`,
+      new Date().toLocaleString('pt-BR'),
+      '--------------------------------',
+      'Se você está lendo isso,',
+      'a impressora está funcionando!',
+      '--------------------------------',
+    ].join('\n');
+
+    const { error } = await this.supabase.client.from('impressao_jobs').insert({
+      restaurant_id: restaurantId,
+      impressora_id: impressoraId,
+      conteudo,
+    });
+    if (error) throw error;
+    return { ok: true };
   }
 
   private async garantirJobDoRestaurante(jobId: number, restaurantId: number) {

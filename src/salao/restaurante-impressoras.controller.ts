@@ -36,4 +36,9 @@ export class RestauranteImpressorasController {
   remover(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.remover(id, req.restaurantId);
   }
+
+  @Post(':id/teste')
+  testar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.agenteService.criarJobTeste(req.restaurantId, id);
+  }
 }
