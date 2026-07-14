@@ -35,6 +35,36 @@ export class MesasService {
     return data;
   }
 
+  // Cadastro em lote — pra estabelecimento com mesas fixas numeradas (ex: 1 a 20 de uma vez).
+  // Pula números que já existem em vez de dar erro, pra poder rodar de novo sem medo.
+  async criarEmLote(restaurantId: number, de: number, ate: number) {
+    if (!de || !ate) throw new BadRequestException('Informe o número inicial e final');
+    if (de > ate) throw new BadRequestException('Número inicial não pode ser maior que o final');
+    if (ate - de > 200) throw new BadRequestException('Máximo de 200 mesas por lote');
+
+    const { data: existentes } = await this.supabase.client
+      .from('mesas')
+      .select('numero')
+      .eq('restaurant_id', restaurantId)
+      .gte('numero', de)
+      .lte('numero', ate);
+    const jaExistem = new Set((existentes ?? []).map((m: any) => m.numero));
+
+    const novos: number[] = [];
+    for (let n = de; n <= ate; n++) {
+      if (!jaExistem.has(n)) novos.push(n);
+    }
+
+    if (novos.length) {
+      const { error } = await this.supabase.client
+        .from('mesas')
+        .insert(novos.map((numero) => ({ restaurant_id: restaurantId, numero })));
+      if (error) throw error;
+    }
+
+    return { criadas: novos.length, ja_existiam: jaExistem.size };
+  }
+
   async remover(id: number, restaurantId: number) {
     const { data } = await this.supabase.client
       .from('mesas')
