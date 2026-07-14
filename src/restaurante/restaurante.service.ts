@@ -676,7 +676,7 @@ export class RestauranteService {
   async getKdsSetor(restaurantId: number, impressoraId: number) {
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, product_id, enviado_em, order_id, products(name), orders(id, mesa_id, cliente_mesa_nome, garcom_id, mesas(numero, nome))')
+      .select('id, quantity, unit_price, observacao, product_id, enviado_em, order_id, products(name), orders(id, mesa_id, cliente_mesa_nome, garcom_id, mesas(numero, nome))')
       .eq('impressora_id', impressoraId)
       .eq('status', 'enviado')
       .order('enviado_em', { ascending: true });
@@ -704,6 +704,7 @@ export class RestauranteService {
         id: item.id,
         product_name: item.products?.name,
         quantity: item.quantity,
+        observacao: item.observacao,
         enviado_em: item.enviado_em,
       });
     }

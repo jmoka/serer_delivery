@@ -10,6 +10,7 @@ export interface AbrirComandaBody {
 export interface ItemComandaBody {
   product_id: number;
   quantity: number;
+  observacao?: string;
 }
 
 @Injectable()
@@ -52,12 +53,12 @@ export class SalaoService {
   async produtos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, price, image_url, category_id')
+      .select('id, name, price, image_url, category_id, categories(name)')
       .eq('restaurant_id', restaurantId)
       .eq('is_active', true)
       .order('name', { ascending: true });
     if (error) throw error;
-    return data;
+    return (data ?? []).map((p: any) => ({ ...p, category_name: p.categories?.name ?? 'Outros' }));
   }
 
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
@@ -151,7 +152,7 @@ export class SalaoService {
 
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, status, enviado_em, products(name, image_url)')
+      .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, products(name, image_url)')
       .eq('order_id', comandaId)
       .order('id', { ascending: true });
     if (error) throw error;
@@ -185,6 +186,7 @@ export class SalaoService {
         product_id: i.product_id,
         quantity: i.quantity,
         unit_price: prodMap[i.product_id].price,
+        observacao: i.observacao?.trim() || null,
         status: 'pendente',
       })),
     );
@@ -217,7 +219,7 @@ export class SalaoService {
 
     const { data: pendentes, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, products(name, impressora_id, impressoras(id, nome, setor, nome_sistema))')
+      .select('id, product_id, quantity, observacao, products(name, impressora_id, impressoras(id, nome, setor, nome_sistema))')
       .eq('order_id', comandaId)
       .eq('status', 'pendente');
     if (error) throw error;
@@ -252,7 +254,7 @@ export class SalaoService {
           itens: [],
         });
       }
-      grupos.get(chave)!.itens.push({ product_name: item.products?.name, quantity: item.quantity });
+      grupos.get(chave)!.itens.push({ product_name: item.products?.name, quantity: item.quantity, observacao: item.observacao });
     }
 
     // Impressoras com agente local pareado (nome_sistema preenchido) viram um job de
