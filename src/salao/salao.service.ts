@@ -64,7 +64,7 @@ export class SalaoService {
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
     const { data } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, mesa_id, garcom_id, cliente_mesa_nome, mesas(numero, nome)')
+      .select('id, status, restaurant_id, mesa_id, garcom_id, cliente_mesa_nome, cliente_mesa_telefone, mesas(numero, nome), garcons(nome)')
       .eq('id', comandaId)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -198,17 +198,34 @@ export class SalaoService {
 
   private formatarTicketTexto(
     setor: string,
-    comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null },
-    itens: { product_name?: string; quantity: number }[],
+    comanda: {
+      mesas?: { numero: number; nome: string | null } | null;
+      cliente_mesa_nome?: string | null;
+      cliente_mesa_telefone?: string | null;
+      garcons?: { nome: string } | null;
+    },
+    itens: { product_name?: string; quantity: number; observacao?: string | null }[],
   ): string {
+    // ESC/POS: fonte dupla (altura+largura) pra facilitar leitura em impressora térmica
+    // (pedido de acessibilidade — usuário com baixa visão lê o ticket na cozinha/bar).
+    // Nota: não dá pra mandar um byte 0x00 (reset de fonte) — Postgres TEXT não aceita
+    // NUL embutido, o insert falha silenciosamente. Cada ticket novo já reinicializa a
+    // impressora (ESC_INIT = ESC @) então não precisa resetar a fonte no fim deste.
+    const ESC_INIT = '\x1b\x40';
+    const FONTE_DUPLA = '\x1d\x21\x11';
+
     const linhas: string[] = [];
+    linhas.push(ESC_INIT + FONTE_DUPLA);
     linhas.push(setor.toUpperCase());
     linhas.push(comanda.mesas ? `Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}` : 'Comanda avulsa');
+    if (comanda.garcons?.nome) linhas.push(`Garcom: ${comanda.garcons.nome}`);
     if (comanda.cliente_mesa_nome) linhas.push(comanda.cliente_mesa_nome);
+    if (comanda.cliente_mesa_telefone) linhas.push(comanda.cliente_mesa_telefone);
     linhas.push(new Date().toLocaleString('pt-BR'));
     linhas.push('--------------------------------');
     for (const item of itens) {
       linhas.push(`${item.quantity}x ${item.product_name ?? 'Produto'}`);
+      if (item.observacao) linhas.push(`  obs: ${item.observacao}`);
     }
     linhas.push('--------------------------------');
     return linhas.join('\n');
@@ -264,11 +281,12 @@ export class SalaoService {
     for (const grupo of grupos.values()) {
       if (grupo.nome_sistema && grupo.impressora_id) {
         const conteudo = this.formatarTicketTexto(grupo.setor, comanda as any, grupo.itens);
-        await this.supabase.client.from('impressao_jobs').insert({
+        const { error: errJob } = await this.supabase.client.from('impressao_jobs').insert({
           restaurant_id: comanda.restaurant_id,
           impressora_id: grupo.impressora_id,
           conteudo,
         });
+        if (errJob) throw errJob;
       } else {
         gruposParaNavegador.push({ setor: grupo.setor, impressora_nome: grupo.impressora_nome, itens: grupo.itens });
       }
