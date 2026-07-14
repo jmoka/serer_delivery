@@ -7,6 +7,7 @@ export interface ImpressoraBody {
   tipo_conexao: 'local' | 'rede';
   endereco?: string;
   ativo?: boolean;
+  nome_sistema?: string;
 }
 
 @Injectable()
@@ -16,7 +17,7 @@ export class ImpressorasService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome, setor, tipo_conexao, endereco, ativo, created_at')
+      .select('id, nome, setor, tipo_conexao, endereco, ativo, nome_sistema, created_at')
       .eq('restaurant_id', restaurantId)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -34,6 +35,7 @@ export class ImpressorasService {
         setor: body.setor,
         tipo_conexao: body.tipo_conexao ?? 'rede',
         endereco: body.endereco ?? null,
+        nome_sistema: body.nome_sistema ?? null,
       })
       .select()
       .single();

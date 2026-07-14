@@ -63,7 +63,7 @@ export class SalaoService {
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
     const { data } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, mesa_id, garcom_id')
+      .select('id, status, restaurant_id, mesa_id, garcom_id, cliente_mesa_nome, mesas(numero, nome)')
       .eq('id', comandaId)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -194,12 +194,30 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
+  private formatarTicketTexto(
+    setor: string,
+    comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null },
+    itens: { product_name?: string; quantity: number }[],
+  ): string {
+    const linhas: string[] = [];
+    linhas.push(setor.toUpperCase());
+    linhas.push(comanda.mesas ? `Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}` : 'Comanda avulsa');
+    if (comanda.cliente_mesa_nome) linhas.push(comanda.cliente_mesa_nome);
+    linhas.push(new Date().toLocaleString('pt-BR'));
+    linhas.push('--------------------------------');
+    for (const item of itens) {
+      linhas.push(`${item.quantity}x ${item.product_name ?? 'Produto'}`);
+    }
+    linhas.push('--------------------------------');
+    return linhas.join('\n');
+  }
+
   async enviarItens(comandaId: number, garcomId: number) {
-    await this.garantirComandaDoGarcom(comandaId, garcomId);
+    const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
 
     const { data: pendentes, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, products(name, impressora_id, impressoras(id, nome, setor))')
+      .select('id, product_id, quantity, products(name, impressora_id, impressoras(id, nome, setor, nome_sistema))')
       .eq('order_id', comandaId)
       .eq('status', 'pendente');
     if (error) throw error;
@@ -221,17 +239,40 @@ export class SalaoService {
       }
     }
 
-    const grupos = new Map<string, { setor: string; impressora_nome: string | null; itens: any[] }>();
+    const grupos = new Map<string, { setor: string; impressora_id: number | null; impressora_nome: string | null; nome_sistema: string | null; itens: any[] }>();
     for (const item of pendentes as any[]) {
       const impressora = item.products?.impressoras;
       const chave = impressora?.id ? String(impressora.id) : 'sem-impressora';
       if (!grupos.has(chave)) {
-        grupos.set(chave, { setor: impressora?.setor ?? 'Sem setor', impressora_nome: impressora?.nome ?? null, itens: [] });
+        grupos.set(chave, {
+          setor: impressora?.setor ?? 'Sem setor',
+          impressora_id: impressora?.id ?? null,
+          impressora_nome: impressora?.nome ?? null,
+          nome_sistema: impressora?.nome_sistema ?? null,
+          itens: [],
+        });
       }
       grupos.get(chave)!.itens.push({ product_name: item.products?.name, quantity: item.quantity });
     }
 
-    return { grupos: Array.from(grupos.values()) };
+    // Impressoras com agente local pareado (nome_sistema preenchido) viram um job de
+    // impressão na fila — o agente Python puxa e imprime. As demais continuam caindo
+    // no fallback de window.print() no navegador (grupos devolvidos pro frontend).
+    const gruposParaNavegador: any[] = [];
+    for (const grupo of grupos.values()) {
+      if (grupo.nome_sistema && grupo.impressora_id) {
+        const conteudo = this.formatarTicketTexto(grupo.setor, comanda as any, grupo.itens);
+        await this.supabase.client.from('impressao_jobs').insert({
+          restaurant_id: comanda.restaurant_id,
+          impressora_id: grupo.impressora_id,
+          conteudo,
+        });
+      } else {
+        gruposParaNavegador.push({ setor: grupo.setor, impressora_nome: grupo.impressora_nome, itens: grupo.itens });
+      }
+    }
+
+    return { grupos: gruposParaNavegador };
   }
 
   async fecharComanda(comandaId: number, garcomId: number, formaPagamento: string) {

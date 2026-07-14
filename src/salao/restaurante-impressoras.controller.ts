@@ -2,15 +2,24 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Req, U
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { ImpressorasService } from './impressoras.service';
 import type { ImpressoraBody } from './impressoras.service';
+import { AgenteImpressaoService } from '../agente-impressao/agente-impressao.service';
 
 @Controller('restaurante/impressoras')
 @UseGuards(RestaurantOwnerGuard)
 export class RestauranteImpressorasController {
-  constructor(private service: ImpressorasService) {}
+  constructor(
+    private service: ImpressorasService,
+    private agenteService: AgenteImpressaoService,
+  ) {}
 
   @Get()
   listar(@Req() req: any) {
     return this.service.listar(req.restaurantId);
+  }
+
+  @Get('detectadas')
+  detectadas(@Req() req: any) {
+    return this.agenteService.impressorasDetectadas(req.restaurantId);
   }
 
   @Post()
