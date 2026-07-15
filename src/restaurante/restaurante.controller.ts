@@ -260,6 +260,15 @@ export class RestauranteController {
     return this.service.marcarItemPronto(id, req.restaurantId);
   }
 
+  @Patch('kds/comandas/:orderId/iniciar-preparo')
+  kdsIniciarPreparo(
+    @Param('orderId', ParseIntPipe) orderId: number,
+    @Query('impressora_id', ParseIntPipe) impressoraId: number,
+    @Req() req: any,
+  ) {
+    return this.service.iniciarPreparoGrupo(orderId, impressoraId, req.restaurantId);
+  }
+
   @Post('kds/comandas/:orderId/reimprimir')
   kdsReimprimir(
     @Param('orderId', ParseIntPipe) orderId: number,
