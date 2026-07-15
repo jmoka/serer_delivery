@@ -10,7 +10,7 @@ export class SalaoController {
 
   @Get('me')
   me(@Req() req: any) {
-    return { id: req.garcomId, nome: req.garcomNome };
+    return { id: req.garcomId, nome: req.garcomNome, restauranteAberto: req.restauranteAberto };
   }
 
   @Get('mesas')
@@ -35,7 +35,7 @@ export class SalaoController {
 
   @Post('comandas/abrir')
   abrir(@Body() body: AbrirComandaBody, @Req() req: any) {
-    return this.service.abrirComanda(req.garcomId, req.garcomRestaurantId, body);
+    return this.service.abrirComanda(req.garcomId, req.garcomRestaurantId, body, req.restauranteAberto);
   }
 
   @Post('comandas/:id/itens')

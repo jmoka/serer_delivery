@@ -143,7 +143,10 @@ export class SalaoService {
       .eq('id', comandaId);
   }
 
-  async abrirComanda(garcomId: number, restaurantId: number, body: AbrirComandaBody) {
+  async abrirComanda(garcomId: number, restaurantId: number, body: AbrirComandaBody, restauranteAberto?: boolean) {
+    if (!restauranteAberto) {
+      throw new ForbiddenException('Restaurante fechado — não é possível abrir mesa/comanda');
+    }
     if (!body.cliente_nome || !body.cliente_telefone) {
       throw new BadRequestException('Nome e telefone do cliente são obrigatórios');
     }

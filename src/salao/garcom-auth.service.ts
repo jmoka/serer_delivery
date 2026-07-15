@@ -1,4 +1,4 @@
-import { BadRequestException, UnauthorizedException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, UnauthorizedException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
@@ -21,7 +21,7 @@ export class GarcomAuthService {
 
     const { data: garcom } = await this.supabase.client
       .from('garcons')
-      .select('id, password_hash, ativo')
+      .select('id, password_hash, ativo, restaurants(aparencia)')
       .eq('login_key', loginKey)
       .maybeSingle();
 
@@ -31,6 +31,9 @@ export class GarcomAuthService {
     const ok = await bcrypt.compare(password, garcom.password_hash);
     if (!ok) throw new UnauthorizedException('Credenciais inválidas');
 
-    return { token: this.gerarToken(garcom.id) };
+    const restauranteAberto = (garcom as any).restaurants?.aparencia?.aberto === true;
+    if (!restauranteAberto) throw new ForbiddenException('Restaurante fechado. Aguarde o caixa ser aberto para entrar.');
+
+    return { token: this.gerarToken(garcom.id), restauranteAberto };
   }
 }

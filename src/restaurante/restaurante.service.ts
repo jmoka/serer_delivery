@@ -732,6 +732,7 @@ export class RestauranteService {
   }
 
   private readonly STATUS_ABERTOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery'];
+  private readonly COMANDA_STATUS_ABERTOS = ['aberta', 'fechada_garcom'];
 
   private calcularResumo(pedidos: any[], saidas: any[], valor_inicial: number, entradas: any[] = []) {
     const entregues = pedidos.filter((p) => p.status === 'delivered');
@@ -885,11 +886,28 @@ export class RestauranteService {
       .eq('caixa_id', caixa.id)
       .in('status', this.STATUS_ABERTOS);
 
-    if ((pedidosAbertos ?? []).length > 0) {
+    const { data: comandasAbertas } = await this.supabase.client
+      .from('orders')
+      .select('id, status, mesa_id, mesas(numero, nome)')
+      .eq('caixa_id', caixa.id)
+      .eq('canal', 'presencial')
+      .in('status', this.COMANDA_STATUS_ABERTOS);
+
+    const { data: mesasAbertas } = await this.supabase.client
+      .from('mesas')
+      .select('id, numero, nome, status')
+      .eq('restaurant_id', restaurantId)
+      .neq('status', 'livre');
+
+    if ((pedidosAbertos ?? []).length > 0 || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0) {
       throw new ConflictException({
-        message: 'Existem pedidos em aberto neste caixa',
-        pedidos_abertos: pedidosAbertos!.length,
-        pedidos: pedidosAbertos,
+        message: 'Existem pendências em aberto: feche os pedidos, comandas e mesas antes de fechar o caixa',
+        pedidos_abertos: pedidosAbertos?.length ?? 0,
+        pedidos: pedidosAbertos ?? [],
+        comandas_abertas: comandasAbertas?.length ?? 0,
+        comandas: comandasAbertas ?? [],
+        mesas_abertas: mesasAbertas?.length ?? 0,
+        mesas: mesasAbertas ?? [],
       });
     }
 
@@ -916,6 +934,9 @@ export class RestauranteService {
     await this.supabase.client.from('caixas')
       .update({ status: 'fechado', fechado_em, resumo, destinacao_fechamento })
       .eq('id', caixa.id);
+
+    // Sem caixa aberto não há como aceitar pedidos/comandas — fecha o restaurante junto
+    await this.updateAparencia(restaurantId, { aberto: false });
 
     // saldo_caixa = dinheiro contado (o que vai pro cofre para o próximo caixa)
     await this.supabase.client.from('restaurants')
@@ -965,12 +986,12 @@ export class RestauranteService {
     // Zerar saldo_caixa — novo caixa está aberto, valor físico está dentro dele
     await this.supabase.client.from('restaurants').update({ saldo_caixa: 0 }).eq('id', restaurantId);
 
-    // Transferir pedidos abertos para o novo caixa
+    // Transferir pedidos e comandas abertos para o novo caixa (troca de turno não bloqueia, leva o que está em aberto)
     await this.supabase.client
       .from('orders')
       .update({ caixa_id: novoCaixa.id })
       .eq('restaurant_id', restaurantId)
-      .in('status', this.STATUS_ABERTOS)
+      .in('status', [...this.STATUS_ABERTOS, ...this.COMANDA_STATUS_ABERTOS])
       .eq('caixa_id', caixa.id);
 
     return {

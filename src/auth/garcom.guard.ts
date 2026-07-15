@@ -30,17 +30,21 @@ export class GarcomGuard implements CanActivate {
 
     const { data } = await this.supabase.client
       .from('garcons')
-      .select('id, restaurant_id, nome, ativo, permissoes')
+      .select('id, restaurant_id, nome, ativo, permissoes, restaurants(aparencia)')
       .eq('id', payload.garcomId)
       .maybeSingle();
 
     if (!data) throw new UnauthorizedException('Garçom não encontrado');
     if (!data.ativo) throw new ForbiddenException('Acesso desativado');
 
+    const restauranteAberto = (data as any).restaurants?.aparencia?.aberto === true;
+    if (!restauranteAberto) throw new ForbiddenException('Restaurante fechado. Aguarde o caixa ser aberto para entrar.');
+
     request.garcomId = data.id;
     request.garcomNome = data.nome;
     request.garcomRestaurantId = data.restaurant_id;
     request.garcomPermissoes = data.permissoes;
+    request.restauranteAberto = restauranteAberto;
 
     await this.supabase.client
       .from('garcons')
