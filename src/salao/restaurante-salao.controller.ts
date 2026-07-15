@@ -46,6 +46,25 @@ export class RestauranteSalaoController {
     return this.service.registrarPagamentoParcial(id, req.restaurantId, body.valor, body.forma_pagamento);
   }
 
+  @Patch('comandas/:id/pagamentos/:pagamentoId')
+  editarPagamentoParcial(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('pagamentoId', ParseIntPipe) pagamentoId: number,
+    @Body() body: { valor: number; forma_pagamento: string },
+    @Req() req: any,
+  ) {
+    return this.service.editarPagamentoParcial(id, req.restaurantId, pagamentoId, body.valor, body.forma_pagamento);
+  }
+
+  @Delete('comandas/:id/pagamentos/:pagamentoId')
+  removerPagamentoParcial(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('pagamentoId', ParseIntPipe) pagamentoId: number,
+    @Req() req: any,
+  ) {
+    return this.service.removerPagamentoParcial(id, req.restaurantId, pagamentoId);
+  }
+
   @Delete('comandas/:id/itens/:itemId')
   removerItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
     return this.service.removerItem(id, req.restaurantId, itemId);

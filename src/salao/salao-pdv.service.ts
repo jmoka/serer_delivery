@@ -83,6 +83,51 @@ export class SalaoPdvService {
     return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento);
   }
 
+  private async buscarPagamento(comandaId: number, pagamentoId: number) {
+    const { data } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('id')
+      .eq('id', pagamentoId)
+      .eq('order_id', comandaId)
+      .maybeSingle();
+    if (!data) throw new NotFoundException('Pagamento não encontrado');
+  }
+
+  // Editar/remover pagamento parcial é exclusivo do estabelecimento — o garçom só lança
+  // (ver salao.service.ts/salao.controller.ts, que não expõem essas rotas).
+  async editarPagamentoParcial(comandaId: number, restaurantId: number, pagamentoId: number, valor: number, formaPagamento: string) {
+    const comanda = await this.buscarComanda(comandaId, restaurantId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+    if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
+    if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
+
+    await this.buscarPagamento(comandaId, pagamentoId);
+
+    const { error } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .update({ valor, forma_pagamento: formaPagamento })
+      .eq('id', pagamentoId);
+    if (error) throw error;
+
+    return this.comandaDetalhe(comandaId, restaurantId);
+  }
+
+  async removerPagamentoParcial(comandaId: number, restaurantId: number, pagamentoId: number) {
+    const comanda = await this.buscarComanda(comandaId, restaurantId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+
+    await this.buscarPagamento(comandaId, pagamentoId);
+
+    const { error } = await this.supabase.client.from('comanda_pagamentos').delete().eq('id', pagamentoId);
+    if (error) throw error;
+
+    return this.comandaDetalhe(comandaId, restaurantId);
+  }
+
   async aplicarDesconto(id: number, restaurantId: number, valor: number) {
     if (valor < 0) throw new BadRequestException('Desconto não pode ser negativo');
     await this.buscarComanda(id, restaurantId);
