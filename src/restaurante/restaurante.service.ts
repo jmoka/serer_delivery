@@ -861,7 +861,7 @@ export class RestauranteService {
 
     const { data: ordersData } = await this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, troco_para, status, payment_method, canal, created_at, updated_at, customer_id, motoboy_id, caixa_id, customers(name, phone_e164), motoboys(name)')
+      .select('id, total, frete_cobrado, troco_para, status, payment_method, canal, created_at, updated_at, customer_id, motoboy_id, caixa_id, mesa_id, cliente_mesa_nome, numero_comanda, customers(name, phone_e164), motoboys(name), mesas(numero, nome)')
       .eq('restaurant_id', restaurantId)
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`)
       .order('created_at', { ascending: false });
