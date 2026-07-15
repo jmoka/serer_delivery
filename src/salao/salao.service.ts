@@ -491,6 +491,7 @@ export class SalaoService {
       formaPagamento: string;
       trocoDado?: number;
     },
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string }[],
   ): string {
     const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
     const PAGAMENTO_LABEL: Record<string, string> = { pix: 'PIX', credit_card: 'Cartao', debit_card: 'Debito', cash: 'Dinheiro' };
@@ -515,7 +516,16 @@ export class SalaoService {
     if (valores.acrescimo) linhas.push(`Acrescimo: + R$ ${fmt(valores.acrescimo)}`);
     if (valores.gorjeta) linhas.push(`Gorjeta: R$ ${fmt(valores.gorjeta)}`);
     linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(valores.total)}${NEGRITO_OFF}`);
-    linhas.push(`Pagamento: ${PAGAMENTO_LABEL[valores.formaPagamento] ?? valores.formaPagamento}`);
+    if (pagamentos?.length) {
+      linhas.push('--------------------------------');
+      linhas.push('Pagamentos:');
+      for (const p of pagamentos) {
+        const origemLabel = p.origem === 'garcom' ? 'garcom' : 'caixa';
+        linhas.push(`${PAGAMENTO_LABEL[p.forma_pagamento] ?? p.forma_pagamento} (${origemLabel}): R$ ${fmt(p.valor)}`);
+      }
+    } else {
+      linhas.push(`Pagamento: ${PAGAMENTO_LABEL[valores.formaPagamento] ?? valores.formaPagamento}`);
+    }
     if (valores.trocoDado) linhas.push(`Troco: R$ ${fmt(valores.trocoDado)}`);
     linhas.push('--------------------------------');
     linhas.push('Obrigado pela preferencia!');
@@ -530,6 +540,7 @@ export class SalaoService {
     comanda: any,
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
     valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; total: number; formaPagamento: string; trocoDado?: number },
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string }[],
   ): Promise<{ via: 'agente' } | { via: 'navegador' }> {
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
@@ -547,7 +558,7 @@ export class SalaoService {
       .maybeSingle();
     if (!impressora?.nome_sistema) return { via: 'navegador' };
 
-    const conteudo = this.formatarReciboTexto((restaurante as any)?.name, comanda, itens, valores);
+    const conteudo = this.formatarReciboTexto((restaurante as any)?.name, comanda, itens, valores, pagamentos);
     await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,

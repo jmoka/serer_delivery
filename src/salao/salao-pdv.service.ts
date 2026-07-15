@@ -509,6 +509,12 @@ export class SalaoPdvService {
 
     await this.lancarComissoes(comanda, subtotal, totalFinal);
 
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('valor, forma_pagamento, origem')
+      .eq('order_id', id)
+      .order('criado_em', { ascending: true });
+
     const recibo = await this.salaoService.imprimirReciboSeConfigurado(
       restaurantId, comanda,
       (itens ?? []).map((i: any) => ({ product_name: i.products?.name, quantity: i.quantity, unit_price: i.unit_price })),
@@ -521,8 +527,9 @@ export class SalaoPdvService {
         formaPagamento,
         trocoDado: troco && troco > 0 ? troco : 0,
       },
+      pagamentos ?? [],
     );
 
-    return { ok: true, total: parseFloat(totalFinal.toFixed(2)), troco, recibo };
+    return { ok: true, total: parseFloat(totalFinal.toFixed(2)), troco, recibo, pagamentos: pagamentos ?? [] };
   }
 }
