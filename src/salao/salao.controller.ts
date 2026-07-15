@@ -10,7 +10,7 @@ export class SalaoController {
 
   @Get('me')
   me(@Req() req: any) {
-    return { id: req.garcomId, nome: req.garcomNome, restauranteAberto: req.restauranteAberto };
+    return { id: req.garcomId, nome: req.garcomNome, restauranteAberto: req.restauranteAberto, permissoes: req.garcomPermissoes };
   }
 
   @Get('mesas')
@@ -64,7 +64,7 @@ export class SalaoController {
     @Body() body: { valor: number; forma_pagamento: string },
     @Req() req: any,
   ) {
-    return this.service.registrarPagamentoComoGarcom(id, req.garcomId, body.valor, body.forma_pagamento);
+    return this.service.registrarPagamentoComoGarcom(id, req.garcomId, body.valor, body.forma_pagamento, req.garcomPermissoes?.pagamento_parcial !== false);
   }
 
   @Post('comandas/:id/enviar')

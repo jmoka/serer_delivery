@@ -122,7 +122,10 @@ export class SalaoService {
     return this.saldoDevedor(comandaId);
   }
 
-  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string) {
+  // Permissão default true (opt-out) — preserva o comportamento de quem já usava
+  // isso sem restrição antes da permissão existir; dono desativa por garçom se quiser.
+  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string, podePagamentoParcial = true) {
+    if (!podePagamentoParcial) throw new ForbiddenException('Você não tem permissão para registrar pagamento parcial');
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
       throw new BadRequestException('Comanda já foi paga ou cancelada');

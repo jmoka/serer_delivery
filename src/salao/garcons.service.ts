@@ -7,7 +7,7 @@ export interface CriarGarcomBody {
   nome: string;
   telefone?: string;
   senha: string;
-  permissoes?: { desconto?: boolean; cancelar?: boolean; acrescimo?: boolean };
+  permissoes?: { desconto?: boolean; cancelar?: boolean; acrescimo?: boolean; pagamento_parcial?: boolean };
 }
 
 export interface AtualizarGarcomBody {
@@ -15,7 +15,7 @@ export interface AtualizarGarcomBody {
   telefone?: string;
   ativo?: boolean;
   senha?: string;
-  permissoes?: { desconto?: boolean; cancelar?: boolean; acrescimo?: boolean };
+  permissoes?: { desconto?: boolean; cancelar?: boolean; acrescimo?: boolean; pagamento_parcial?: boolean };
 }
 
 @Injectable()
@@ -55,6 +55,9 @@ export class GarconsService {
           desconto: !!body.permissoes?.desconto,
           cancelar: !!body.permissoes?.cancelar,
           acrescimo: !!body.permissoes?.acrescimo,
+          // Default true (diferente das outras) — pagamento parcial já era permitido sem
+          // restrição antes dessa permissão existir, então continua liberado por padrão.
+          pagamento_parcial: body.permissoes?.pagamento_parcial !== false,
         },
       })
       .select('id, nome, telefone, login_key, ativo, permissoes, created_at')
@@ -96,6 +99,7 @@ export class GarconsService {
         desconto: !!body.permissoes.desconto,
         cancelar: !!body.permissoes.cancelar,
         acrescimo: !!body.permissoes.acrescimo,
+        pagamento_parcial: body.permissoes.pagamento_parcial !== false,
       };
     }
     if (body.senha) {
