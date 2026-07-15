@@ -184,9 +184,15 @@ export class SalaoService {
       .eq('id', comandaId);
   }
 
-  async abrirComanda(garcomId: number, restaurantId: number, body: AbrirComandaBody, restauranteAberto?: boolean) {
+  async abrirComanda(garcomId: number, restaurantId: number, body: AbrirComandaBody, restauranteAberto?: boolean, salaoModo: 'mesas' | 'comandas' | 'ambos' = 'ambos') {
     if (!restauranteAberto) {
       throw new ForbiddenException('Restaurante fechado — não é possível abrir mesa/comanda');
+    }
+    if (salaoModo === 'mesas' && !body.mesa_id) {
+      throw new BadRequestException('Este restaurante só trabalha com mesas — selecione uma mesa');
+    }
+    if (salaoModo === 'comandas' && body.mesa_id) {
+      throw new BadRequestException('Este restaurante só trabalha com comandas avulsas — não vincule a uma mesa');
     }
     if (!body.cliente_nome || !body.cliente_telefone) {
       throw new BadRequestException('Nome e telefone do cliente são obrigatórios');

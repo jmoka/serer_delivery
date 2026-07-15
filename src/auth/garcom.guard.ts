@@ -30,7 +30,7 @@ export class GarcomGuard implements CanActivate {
 
     const { data } = await this.supabase.client
       .from('garcons')
-      .select('id, restaurant_id, nome, ativo, permissoes, restaurants(aparencia)')
+      .select('id, restaurant_id, nome, ativo, permissoes, restaurants(aparencia, salao_modo)')
       .eq('id', payload.garcomId)
       .maybeSingle();
 
@@ -45,6 +45,7 @@ export class GarcomGuard implements CanActivate {
     request.garcomRestaurantId = data.restaurant_id;
     request.garcomPermissoes = data.permissoes;
     request.restauranteAberto = restauranteAberto;
+    request.salaoModo = (data as any).restaurants?.salao_modo ?? 'ambos';
 
     await this.supabase.client
       .from('garcons')
