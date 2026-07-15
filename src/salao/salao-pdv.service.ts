@@ -129,6 +129,71 @@ export class SalaoPdvService {
     return this.comandaDetalhe(comandaId, restaurantId);
   }
 
+  // Venda direta no balcão: operador escolhe produtos, paga na hora, sem mesa/garçom/
+  // cliente prévios. Itens ainda passam pela fila de preparo normal (cozinha/bar) —
+  // só o fluxo de venda/pagamento é imediato, não o preparo.
+  async vendaDireta(restaurantId: number, itens: ItemComandaBody[], formaPagamento: string, valorRecebido?: number) {
+    if (!itens?.length) throw new BadRequestException('Informe ao menos 1 item');
+    if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
+
+    const prodIds = itens.map((i) => i.product_id);
+    const { data: produtos, error: errProd } = await this.supabase.client
+      .from('products').select('id, price, is_active').in('id', prodIds);
+    if (errProd) throw errProd;
+
+    const prodMap = Object.fromEntries((produtos ?? []).map((p: any) => [p.id, p]));
+    for (const item of itens) {
+      const prod = prodMap[item.product_id];
+      if (!prod) throw new BadRequestException(`Produto ${item.product_id} não encontrado`);
+      if (!prod.is_active) throw new BadRequestException(`Produto ${item.product_id} inativo`);
+    }
+    const total = itens.reduce((acc, i) => acc + i.quantity * prodMap[i.product_id].price, 0);
+
+    const { data: caixaAberto } = await this.supabase.client
+      .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    if (!caixaAberto) throw new BadRequestException('Abra o caixa antes de vender');
+
+    const { data: venda, error } = await this.supabase.client
+      .from('orders')
+      .insert({
+        restaurant_id: restaurantId,
+        canal: 'presencial',
+        status: 'aberta',
+        cliente_mesa_nome: 'Venda balcão',
+        total: parseFloat(total.toFixed(2)),
+        caixa_id: caixaAberto.id,
+      })
+      .select('*, mesas(numero, nome), garcons(id, nome)')
+      .single();
+    if (error) throw error;
+
+    const { error: errItens } = await this.supabase.client.from('order_items').insert(
+      itens.map((i) => ({
+        order_id: venda.id,
+        product_id: i.product_id,
+        quantity: i.quantity,
+        unit_price: prodMap[i.product_id].price,
+        observacao: i.observacao?.trim() || null,
+        status: 'pendente',
+      })),
+    );
+    if (errItens) throw errItens;
+
+    // Manda pra fila de preparo (cozinha/bar), igual uma comanda normal
+    await this.salaoService.enviarItensComoRestaurante(venda.id, venda);
+
+    // Paga na hora — origem 'estabelecimento' cobre troco/gorjeta automaticamente
+    await this.salaoService.registrarPagamento(venda.id, 'estabelecimento', total, formaPagamento, restaurantId, valorRecebido, 'Venda balcão');
+
+    const { error: errFechar } = await this.supabase.client
+      .from('orders')
+      .update({ status: 'paga', payment_method: formaPagamento })
+      .eq('id', venda.id);
+    if (errFechar) throw errFechar;
+
+    return this.comandaDetalhe(venda.id, restaurantId);
+  }
+
   async aplicarDesconto(id: number, restaurantId: number, valor: number) {
     if (valor < 0) throw new BadRequestException('Desconto não pode ser negativo');
     await this.buscarComanda(id, restaurantId);

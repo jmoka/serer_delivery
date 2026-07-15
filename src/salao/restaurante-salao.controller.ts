@@ -27,6 +27,14 @@ export class RestauranteSalaoController {
     return this.service.comandasAbertas(req.restaurantId);
   }
 
+  @Post('venda-direta')
+  vendaDireta(
+    @Body() body: { itens: ItemComandaBody[]; forma_pagamento: string; valor_recebido?: number },
+    @Req() req: any,
+  ) {
+    return this.service.vendaDireta(req.restaurantId, body.itens, body.forma_pagamento, body.valor_recebido);
+  }
+
   @Get('comandas/:id')
   comandaDetalhe(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.comandaDetalhe(id, req.restaurantId);
