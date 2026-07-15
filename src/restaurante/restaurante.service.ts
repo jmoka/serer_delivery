@@ -741,7 +741,34 @@ export class RestauranteService {
   // resumo/KPI do dashboard ignorava toda venda do salão (comanda nunca vira 'delivered').
   private readonly STATUS_VENDA_FINALIZADA = ['delivered', 'paga'];
 
-  private calcularResumo(pedidos: any[], saidas: any[], valor_inicial: number, entradas: any[] = []) {
+  // Comanda do salão pode ter N pagamentos com formas diferentes (parcial pelo garçom +
+  // resto pelo caixa) — orders.payment_method só guarda a última forma usada no
+  // fechamento, então pra decompor certo o "por forma de pagamento" precisa ir direto
+  // no ledger de comanda_pagamentos. Delivery continua com pagamento único (sem mudança).
+  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { valor: number; forma_pagamento: string }[]>> {
+    const idsComanda = pedidos.filter((p: any) => p.canal === 'presencial').map((p: any) => p.id);
+    const mapa = new Map<number, { valor: number; forma_pagamento: string }[]>();
+    if (!idsComanda.length) return mapa;
+
+    const { data } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('order_id, valor, forma_pagamento')
+      .in('order_id', idsComanda);
+
+    for (const p of (data ?? []) as any[]) {
+      if (!mapa.has(p.order_id)) mapa.set(p.order_id, []);
+      mapa.get(p.order_id)!.push({ valor: p.valor, forma_pagamento: p.forma_pagamento });
+    }
+    return mapa;
+  }
+
+  private calcularResumo(
+    pedidos: any[],
+    saidas: any[],
+    valor_inicial: number,
+    entradas: any[] = [],
+    pagamentosPorComanda?: Map<number, { valor: number; forma_pagamento: string }[]>,
+  ) {
     const entregues = pedidos.filter((p) => this.STATUS_VENDA_FINALIZADA.includes(p.status));
     const total_vendas = entregues.reduce((s: number, p: any) => s + (p.total ?? 0), 0);
     const total_saidas = saidas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
@@ -749,8 +776,16 @@ export class RestauranteService {
 
     const por_pagamento: Record<string, number> = {};
     for (const p of entregues) {
-      const m = p.payment_method ?? 'outro';
-      por_pagamento[m] = (por_pagamento[m] ?? 0) + (p.total ?? 0);
+      const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComanda?.get(p.id) : undefined;
+      if (pagamentosComanda?.length) {
+        for (const pag of pagamentosComanda) {
+          const m = pag.forma_pagamento ?? 'outro';
+          por_pagamento[m] = (por_pagamento[m] ?? 0) + (pag.valor ?? 0);
+        }
+      } else {
+        const m = p.payment_method ?? 'outro';
+        por_pagamento[m] = (por_pagamento[m] ?? 0) + (p.total ?? 0);
+      }
     }
 
     const vendas_dinheiro = por_pagamento['cash'] ?? 0;
@@ -823,7 +858,7 @@ export class RestauranteService {
 
     const { data: ordersData } = await this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, troco_para, status, payment_method, created_at, updated_at, customer_id, motoboy_id, caixa_id, customers(name, phone_e164), motoboys(name)')
+      .select('id, total, frete_cobrado, troco_para, status, payment_method, canal, created_at, updated_at, customer_id, motoboy_id, caixa_id, customers(name, phone_e164), motoboys(name)')
       .eq('restaurant_id', restaurantId)
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`)
       .order('created_at', { ascending: false });
@@ -831,7 +866,8 @@ export class RestauranteService {
     const pedidos = ordersData ?? [];
     const saidas = (caixa.saidas ?? []) as any[];
     const entradas = (caixa.entradas ?? []) as any[];
-    const resumo = this.calcularResumo(pedidos, saidas, caixa.valor_inicial, entradas);
+    const pagamentosPorComanda = await this.buscarPagamentosPorComanda(pedidos);
+    const resumo = this.calcularResumo(pedidos, saidas, caixa.valor_inicial, entradas, pagamentosPorComanda);
 
     return {
       status_restaurante,
@@ -919,12 +955,13 @@ export class RestauranteService {
     }
 
     const { data: todosPedidos } = await this.supabase.client
-      .from('orders').select('id, total, status, payment_method, created_at')
+      .from('orders').select('id, total, status, payment_method, canal, created_at')
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`);
 
     const saidas = (caixa.saidas ?? []) as any[];
     const entradas = (caixa.entradas ?? []) as any[];
-    const resumo = this.calcularResumo(todosPedidos ?? [], saidas, caixa.valor_inicial, entradas);
+    const pagamentosPorComanda = await this.buscarPagamentosPorComanda(todosPedidos ?? []);
+    const resumo = this.calcularResumo(todosPedidos ?? [], saidas, caixa.valor_inicial, entradas, pagamentosPorComanda);
     const fechado_em = new Date().toISOString();
 
     // Conferência: operador informa quanto contou; sistema compara com espécie calculada
@@ -974,11 +1011,12 @@ export class RestauranteService {
 
     // Fechar caixa atual (com resumo)
     const { data: todosPedidos } = await this.supabase.client
-      .from('orders').select('id, total, status, payment_method, created_at')
+      .from('orders').select('id, total, status, payment_method, canal, created_at')
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`);
 
     const saidas = (caixa.saidas ?? []) as any[];
-    const resumo = this.calcularResumo(todosPedidos ?? [], saidas, caixa.valor_inicial);
+    const pagamentosPorComanda = await this.buscarPagamentosPorComanda(todosPedidos ?? []);
+    const resumo = this.calcularResumo(todosPedidos ?? [], saidas, caixa.valor_inicial, [], pagamentosPorComanda);
     const fechado_em = new Date().toISOString();
     await this.supabase.client.from('caixas')
       .update({ status: 'fechado', fechado_em, resumo }).eq('id', caixa.id);
@@ -1216,7 +1254,7 @@ export class RestauranteService {
   async getRelatorio(restaurantId: number, de: string, ate: string) {
     const { data: orders, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, status, payment_method, created_at, customer_id, customers(name)')
+      .select('id, total, status, payment_method, canal, created_at, customer_id, customers(name)')
       .eq('restaurant_id', restaurantId)
       .gte('created_at', de)
       .lte('created_at', ate)
@@ -1270,7 +1308,18 @@ export class RestauranteService {
     const em_andamento = pedidos.filter((p: any) => !['canceled', 'delivered', 'paga'].includes(p.status));
     const nao_cancelados = pedidos.filter((p: any) => p.status !== 'canceled');
     const total_vendas = entregues.reduce((s: number, p: any) => s + (p.total ?? 0), 0);
+    const pagamentosPorComandaRelatorio = await this.buscarPagamentosPorComanda(nao_cancelados);
     const por_pagamento = nao_cancelados.reduce((acc: any, p: any) => {
+      const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComandaRelatorio.get(p.id) : undefined;
+      if (pagamentosComanda?.length) {
+        for (const pag of pagamentosComanda) {
+          const m = pag.forma_pagamento ?? 'unknown';
+          if (!acc[m]) acc[m] = { count: 0, total: 0 };
+          acc[m].count++;
+          acc[m].total += pag.valor ?? 0;
+        }
+        return acc;
+      }
       const m = p.payment_method ?? 'unknown';
       if (!acc[m]) acc[m] = { count: 0, total: 0 };
       acc[m].count++;
