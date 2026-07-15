@@ -536,7 +536,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, salao_modo',
+        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, salao_modo, recibo_impressora_id',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -564,6 +564,7 @@ export class RestauranteService {
       geocode_falhou: !!data?.geocode_falhou,
       gorjeta_percentual: parseFloat(data?.gorjeta_percentual ?? 0),
       salao_modo: data?.salao_modo ?? 'ambos',
+      recibo_impressora_id: data?.recibo_impressora_id ?? null,
     };
   }
 
@@ -585,6 +586,7 @@ export class RestauranteService {
       motoboy_comissao_km_fallback?: number;
       gorjeta_percentual?: number;
       salao_modo?: 'mesas' | 'comandas' | 'ambos';
+      recibo_impressora_id?: number | null;
     },
   ) {
     const { data: atual } = await this.supabase.client
@@ -615,6 +617,7 @@ export class RestauranteService {
     if (body.motoboy_comissao_km_fallback !== undefined) update.motoboy_comissao_km_fallback = body.motoboy_comissao_km_fallback;
     if (body.gorjeta_percentual !== undefined) update.gorjeta_percentual = body.gorjeta_percentual;
     if (body.salao_modo !== undefined) update.salao_modo = body.salao_modo;
+    if (body.recibo_impressora_id !== undefined) update.recibo_impressora_id = body.recibo_impressora_id;
 
     const { error } = await this.supabase.client
       .from('restaurants')

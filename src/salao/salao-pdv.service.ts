@@ -138,7 +138,7 @@ export class SalaoPdvService {
 
     const prodIds = itens.map((i) => i.product_id);
     const { data: produtos, error: errProd } = await this.supabase.client
-      .from('products').select('id, price, is_active').in('id', prodIds);
+      .from('products').select('id, name, price, is_active').in('id', prodIds);
     if (errProd) throw errProd;
 
     const prodMap = Object.fromEntries((produtos ?? []).map((p: any) => [p.id, p]));
@@ -191,7 +191,15 @@ export class SalaoPdvService {
       .eq('id', venda.id);
     if (errFechar) throw errFechar;
 
-    return this.comandaDetalhe(venda.id, restaurantId);
+    const trocoDado = formaPagamento === 'cash' && valorRecebido !== undefined ? Math.max(valorRecebido - total, 0) : 0;
+    const recibo = await this.salaoService.imprimirReciboSeConfigurado(
+      restaurantId, venda,
+      itens.map((i) => ({ product_name: prodMap[i.product_id]?.name, quantity: i.quantity, unit_price: prodMap[i.product_id]?.price })),
+      { subtotal: total, total, formaPagamento, trocoDado },
+    );
+
+    const detalhe = await this.comandaDetalhe(venda.id, restaurantId);
+    return { ...detalhe, recibo };
   }
 
   async aplicarDesconto(id: number, restaurantId: number, valor: number) {
@@ -446,7 +454,7 @@ export class SalaoPdvService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
 
-    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', id);
+    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price, products(name)').eq('order_id', id);
     const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     const totalFinal = subtotal - (comanda.desconto_valor ?? 0) + (comanda.acrescimo_valor ?? 0);
 
@@ -501,6 +509,20 @@ export class SalaoPdvService {
 
     await this.lancarComissoes(comanda, subtotal, totalFinal);
 
-    return { ok: true, total: parseFloat(totalFinal.toFixed(2)), troco };
+    const recibo = await this.salaoService.imprimirReciboSeConfigurado(
+      restaurantId, comanda,
+      (itens ?? []).map((i: any) => ({ product_name: i.products?.name, quantity: i.quantity, unit_price: i.unit_price })),
+      {
+        subtotal,
+        desconto: comanda.desconto_valor ?? 0,
+        acrescimo: comanda.acrescimo_valor ?? 0,
+        gorjeta,
+        total: parseFloat(totalFinal.toFixed(2)),
+        formaPagamento,
+        trocoDado: troco && troco > 0 ? troco : 0,
+      },
+    );
+
+    return { ok: true, total: parseFloat(totalFinal.toFixed(2)), troco, recibo };
   }
 }

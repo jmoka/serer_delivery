@@ -471,6 +471,91 @@ export class SalaoService {
     return linhas.join('\n');
   }
 
+  // Recibo do cliente (pagamento final / venda direta) — mesma ideia do ticket de setor,
+  // mas com preço/subtotal/desconto/gorjeta/total/forma de pagamento, pra impressora
+  // configurada em Config > "Impressora do recibo" (ver restaurante.service.ts).
+  formatarReciboTexto(
+    restauranteNome: string,
+    comanda: {
+      mesas?: { numero: number; nome: string | null } | null;
+      mesa_id?: number | null;
+      cliente_mesa_nome?: string | null;
+    },
+    itens: { product_name?: string; quantity: number; unit_price?: number }[],
+    valores: {
+      subtotal: number;
+      desconto?: number;
+      acrescimo?: number;
+      gorjeta?: number;
+      total: number;
+      formaPagamento: string;
+      trocoDado?: number;
+    },
+  ): string {
+    const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
+    const PAGAMENTO_LABEL: Record<string, string> = { pix: 'PIX', credit_card: 'Cartao', debit_card: 'Debito', cash: 'Dinheiro' };
+    const NEGRITO_ON = '\x1b\x45\x01';
+    const NEGRITO_OFF = SalaoService.MARCADOR_NEGRITO_OFF;
+
+    const linhas: string[] = [];
+    linhas.push('\x1b\x40');
+    linhas.push(this.removerAcentos(restauranteNome ?? 'RESTAURANTE'));
+    linhas.push('RECIBO DE PAGAMENTO');
+    linhas.push(comanda.mesa_id ? this.removerAcentos(`Mesa ${comanda.mesas?.numero ?? comanda.mesa_id}`) : 'Venda balcao');
+    if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
+    linhas.push(new Date().toLocaleString('pt-BR'));
+    linhas.push('--------------------------------');
+    for (const item of itens) {
+      linhas.push(this.removerAcentos(`${item.quantity}x ${item.product_name ?? 'Produto'}`));
+      linhas.push(`R$ ${fmt((item.quantity ?? 0) * (item.unit_price ?? 0))}`);
+    }
+    linhas.push('--------------------------------');
+    linhas.push(`Subtotal: R$ ${fmt(valores.subtotal)}`);
+    if (valores.desconto) linhas.push(`Desconto: - R$ ${fmt(valores.desconto)}`);
+    if (valores.acrescimo) linhas.push(`Acrescimo: + R$ ${fmt(valores.acrescimo)}`);
+    if (valores.gorjeta) linhas.push(`Gorjeta: R$ ${fmt(valores.gorjeta)}`);
+    linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(valores.total)}${NEGRITO_OFF}`);
+    linhas.push(`Pagamento: ${PAGAMENTO_LABEL[valores.formaPagamento] ?? valores.formaPagamento}`);
+    if (valores.trocoDado) linhas.push(`Troco: R$ ${fmt(valores.trocoDado)}`);
+    linhas.push('--------------------------------');
+    linhas.push('Obrigado pela preferencia!');
+    return linhas.join('\n');
+  }
+
+  // Imprime o recibo de venda na impressora configurada (Config > impressora do recibo)
+  // se pareada com agente local; senão devolve os dados pro front cair no fallback do
+  // navegador (printReciboCliente), como já acontecia antes dessa config existir.
+  async imprimirReciboSeConfigurado(
+    restaurantId: number,
+    comanda: any,
+    itens: { product_name?: string; quantity: number; unit_price?: number }[],
+    valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; total: number; formaPagamento: string; trocoDado?: number },
+  ): Promise<{ via: 'agente' } | { via: 'navegador' }> {
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('name, recibo_impressora_id')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    const impressoraId = (restaurante as any)?.recibo_impressora_id;
+    if (!impressoraId) return { via: 'navegador' };
+
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, nome_sistema')
+      .eq('id', impressoraId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!impressora?.nome_sistema) return { via: 'navegador' };
+
+    const conteudo = this.formatarReciboTexto((restaurante as any)?.name, comanda, itens, valores);
+    await this.supabase.client.from('impressao_jobs').insert({
+      restaurant_id: restaurantId,
+      impressora_id: impressoraId,
+      conteudo,
+    });
+    return { via: 'agente' };
+  }
+
   async enviarItens(comandaId: number, garcomId: number) {
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     return this.processarEnvioPendentes(comandaId, comanda);
