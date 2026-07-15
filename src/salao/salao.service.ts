@@ -267,6 +267,40 @@ export class SalaoService {
     return data;
   }
 
+  // Itens prontos pra buscar, das comandas abertas desse garçom — o portal dele faz
+  // polling nisso pra tocar o alarme sonoro (ver useNotificacaoSonora no front).
+  async itensProntos(garcomId: number) {
+    const { data: comandas } = await this.supabase.client
+      .from('orders')
+      .select('id, numero_comanda, mesa_id, mesas(numero, nome)')
+      .eq('garcom_id', garcomId)
+      .eq('canal', 'presencial')
+      .in('status', ['aberta', 'fechada_garcom']);
+
+    const comandaIds = (comandas ?? []).map((c: any) => c.id);
+    if (!comandaIds.length) return [];
+
+    const comandaMap = new Map((comandas ?? []).map((c: any) => [c.id, c]));
+
+    const { data: itens } = await this.supabase.client
+      .from('order_items')
+      .select('id, order_id, quantity, products(name)')
+      .in('order_id', comandaIds)
+      .eq('status', 'pronto');
+
+    return (itens ?? []).map((i: any) => {
+      const comanda = comandaMap.get(i.order_id);
+      return {
+        item_id: i.id,
+        order_id: i.order_id,
+        numero_comanda: comanda?.numero_comanda ?? i.order_id,
+        mesa: comanda?.mesas ? `Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}` : null,
+        product_name: i.products?.name,
+        quantity: i.quantity,
+      };
+    });
+  }
+
   async obterComanda(comandaId: number, garcomId: number) {
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
 

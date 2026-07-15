@@ -34,6 +34,11 @@ export class SalaoController {
     return this.service.minhasComandas(req.garcomId);
   }
 
+  @Get('itens-prontos')
+  itensProntos(@Req() req: any) {
+    return this.service.itensProntos(req.garcomId);
+  }
+
   @Get('comandas/:id')
   obterComanda(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.obterComanda(id, req.garcomId);
