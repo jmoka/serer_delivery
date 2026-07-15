@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { GarcomGuard } from '../auth/garcom.guard';
 import { SalaoService } from './salao.service';
 import type { AbrirComandaBody, ItemComandaBody } from './salao.service';
@@ -41,6 +41,30 @@ export class SalaoController {
   @Post('comandas/:id/itens')
   adicionarItens(@Param('id', ParseIntPipe) id: number, @Body() body: { itens: ItemComandaBody[] }, @Req() req: any) {
     return this.service.adicionarItens(id, req.garcomId, body.itens);
+  }
+
+  @Patch('comandas/:id/itens/:itemId')
+  editarItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Body() body: { quantity?: number; observacao?: string },
+    @Req() req: any,
+  ) {
+    return this.service.editarItem(id, req.garcomId, itemId, body);
+  }
+
+  @Delete('comandas/:id/itens/:itemId')
+  removerItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
+    return this.service.removerItem(id, req.garcomId, itemId);
+  }
+
+  @Post('comandas/:id/pagamento')
+  registrarPagamento(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { valor: number; forma_pagamento: string },
+    @Req() req: any,
+  ) {
+    return this.service.registrarPagamentoComoGarcom(id, req.garcomId, body.valor, body.forma_pagamento);
   }
 
   @Post('comandas/:id/enviar')

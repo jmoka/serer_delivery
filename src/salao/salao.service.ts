@@ -86,6 +86,50 @@ export class SalaoService {
     return data;
   }
 
+  // Saldo devedor considerando pagamentos parciais já registrados (garçom ou caixa).
+  async saldoDevedor(comandaId: number) {
+    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
+    const { data: comanda } = await this.supabase.client
+      .from('orders')
+      .select('desconto_valor, acrescimo_valor')
+      .eq('id', comandaId)
+      .maybeSingle();
+    const { data: pagamentos } = await this.supabase.client.from('comanda_pagamentos').select('valor').eq('order_id', comandaId);
+
+    const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+    const totalFinal = subtotal - (comanda?.desconto_valor ?? 0) + (comanda?.acrescimo_valor ?? 0);
+    const totalPago = (pagamentos ?? []).reduce((acc: number, p: any) => acc + p.valor, 0);
+
+    return {
+      subtotal: parseFloat(subtotal.toFixed(2)),
+      total: parseFloat(totalFinal.toFixed(2)),
+      total_pago: parseFloat(totalPago.toFixed(2)),
+      saldo: parseFloat((totalFinal - totalPago).toFixed(2)),
+    };
+  }
+
+  // Registra um pagamento parcial — não fecha a comanda sozinho, só abate do saldo devedor.
+  // Chamado tanto pelo garçom (informar forma de pagamento) quanto pelo caixa (conferência).
+  async registrarPagamento(comandaId: number, origem: 'garcom' | 'estabelecimento', valor: number, formaPagamento: string) {
+    if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
+    if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
+
+    const { error } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .insert({ order_id: comandaId, valor, forma_pagamento: formaPagamento, origem });
+    if (error) throw error;
+
+    return this.saldoDevedor(comandaId);
+  }
+
+  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string) {
+    const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento);
+  }
+
   private async recalcularTotal(comandaId: number) {
     const { data: itens } = await this.supabase.client
       .from('order_items')
@@ -183,7 +227,14 @@ export class SalaoService {
       .order('id', { ascending: true });
     if (error) throw error;
 
-    return { ...comanda, itens };
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('id, valor, forma_pagamento, origem, criado_em')
+      .eq('order_id', comandaId)
+      .order('criado_em', { ascending: true });
+    const saldo = await this.saldoDevedor(comandaId);
+
+    return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo };
   }
 
   async adicionarItens(comandaId: number, garcomId: number, itens: ItemComandaBody[]) {
@@ -222,10 +273,61 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
+  private async garantirItemPendenteDoGarcom(comandaId: number, garcomId: number, itemId: number) {
+    await this.garantirComandaDoGarcom(comandaId, garcomId);
+
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status')
+      .eq('id', itemId)
+      .eq('order_id', comandaId)
+      .maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+    // Depois de enviado pro setor, só o estabelecimento (PDV) pode remover — o garçom
+    // não edita/cancela mais nada que já foi impresso/pra fila de preparo.
+    if (item.status !== 'pendente') throw new ForbiddenException('Item já foi enviado — só o estabelecimento pode alterar');
+    return item;
+  }
+
+  async editarItem(comandaId: number, garcomId: number, itemId: number, body: { quantity?: number; observacao?: string }) {
+    await this.garantirItemPendenteDoGarcom(comandaId, garcomId, itemId);
+
+    const update: Record<string, unknown> = {};
+    if (body.quantity !== undefined) {
+      if (body.quantity < 1) throw new BadRequestException('Quantidade mínima é 1');
+      update.quantity = body.quantity;
+    }
+    if (body.observacao !== undefined) update.observacao = body.observacao?.trim() || null;
+
+    const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
+    if (error) throw error;
+
+    await this.recalcularTotal(comandaId);
+    return this.obterComanda(comandaId, garcomId);
+  }
+
+  async removerItem(comandaId: number, garcomId: number, itemId: number) {
+    await this.garantirItemPendenteDoGarcom(comandaId, garcomId, itemId);
+
+    const { error } = await this.supabase.client.from('order_items').delete().eq('id', itemId);
+    if (error) throw error;
+
+    await this.recalcularTotal(comandaId);
+    return this.obterComanda(comandaId, garcomId);
+  }
+
   // Marcador seguro pra "negrito desligado" — o comando ESC/POS real (ESC E 0x00) tem um
   // byte NUL, que o Postgres TEXT não aceita (quebra o insert). Guardamos esse marcador no
   // banco e só trocamos pelo byte real em printers.py, na hora de mandar pra impressora.
   private static readonly MARCADOR_NEGRITO_OFF = '\x01BOLDOFF\x01';
+
+  // Impressora térmica não usa a mesma codepage do texto enviado (cp850) — byte de acento
+  // acaba sendo lido como início de caractere multi-byte, "comendo" a letra seguinte junto
+  // (ex.: "Pão com Queijo" saía "P com Queijo"). Solução robusta e independente de firmware:
+  // tira o acento antes de imprimir, garantindo ASCII puro em qualquer impressora.
+  private removerAcentos(texto: string): string {
+    return texto.normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '');
+  }
 
   private formatarTicketTexto(
     setor: string,
@@ -249,18 +351,22 @@ export class SalaoService {
 
     const linhas: string[] = [];
     linhas.push(ESC_INIT + FONTE_DUPLA);
-    linhas.push(setor.toUpperCase());
-    if (comanda.mesas) linhas.push(`Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}`);
-    if (comanda.garcons?.nome) linhas.push(`Garcom: ${comanda.garcons.nome}`);
-    if (comanda.cliente_mesa_nome) linhas.push(comanda.cliente_mesa_nome);
-    if (comanda.cliente_mesa_telefone) linhas.push(comanda.cliente_mesa_telefone);
+    linhas.push(this.removerAcentos(setor.toUpperCase()));
+    if (comanda.mesas) {
+      linhas.push(
+        this.removerAcentos(`Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}`),
+      );
+    }
+    if (comanda.garcons?.nome) linhas.push(this.removerAcentos(`Garcom: ${comanda.garcons.nome}`));
+    if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(`Cliente: ${comanda.cliente_mesa_nome}`));
+    if (comanda.cliente_mesa_telefone) linhas.push(`Whatsapp: ${comanda.cliente_mesa_telefone}`);
     linhas.push(new Date().toLocaleString('pt-BR'));
     linhas.push('--------------------------------');
     itens.forEach((item, idx) => {
-      linhas.push(`${NEGRITO_ON}${item.product_name ?? 'Produto'}${NEGRITO_OFF}`);
+      linhas.push(`${NEGRITO_ON}${this.removerAcentos(item.product_name ?? 'Produto')}${NEGRITO_OFF}`);
       linhas.push(`${NEGRITO_ON}Qtd: ${item.quantity}${NEGRITO_OFF}`);
-      if (item.description) linhas.push(`Descricao: ${item.description}`);
-      if (item.observacao) linhas.push(`Obs: ${item.observacao}`);
+      if (item.description) linhas.push(this.removerAcentos(`Descricao: ${item.description}`));
+      if (item.observacao) linhas.push(this.removerAcentos(`Obs: ${item.observacao}`));
       if (idx < itens.length - 1) {
         linhas.push('');
         linhas.push('---------------');

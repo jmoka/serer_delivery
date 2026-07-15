@@ -65,7 +65,22 @@ export class SalaoPdvService {
       .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, products(name, image_url)')
       .eq('order_id', id)
       .order('id', { ascending: true });
-    return { ...comanda, itens };
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('id, valor, forma_pagamento, origem, criado_em')
+      .eq('order_id', id)
+      .order('criado_em', { ascending: true });
+    const saldo = await this.salaoService.saldoDevedor(id);
+    return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo };
+  }
+
+  // Pagamento parcial registrado pelo caixa — mesma regra do garçom (não fecha sozinho).
+  async registrarPagamentoParcial(id: number, restaurantId: number, valor: number, formaPagamento: string) {
+    const comanda = await this.buscarComanda(id, restaurantId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento);
   }
 
   async aplicarDesconto(id: number, restaurantId: number, valor: number) {
@@ -136,6 +151,32 @@ export class SalaoPdvService {
     return this.comandaDetalhe(id, restaurantId);
   }
 
+  // Estabelecimento pode remover qualquer item (pendente ou já enviado) — diferente do
+  // garçom, que só mexe em item ainda não enviado (ver salao.service.ts).
+  async removerItem(comandaId: number, restaurantId: number, itemId: number) {
+    const comanda = await this.buscarComanda(comandaId, restaurantId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id')
+      .eq('id', itemId)
+      .eq('order_id', comandaId)
+      .maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+
+    const { error } = await this.supabase.client.from('order_items').delete().eq('id', itemId);
+    if (error) throw error;
+
+    const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
+    const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+    await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', comandaId);
+
+    return this.comandaDetalhe(comandaId, restaurantId);
+  }
+
   // Troca o garçom responsável por uma comanda em andamento (ex: troca de turno).
   async transferirGarcom(id: number, restaurantId: number, novoGarcomId: number) {
     await this.buscarComanda(id, restaurantId);
@@ -152,6 +193,83 @@ export class SalaoPdvService {
     const { error } = await this.supabase.client.from('orders').update({ garcom_id: novoGarcomId }).eq('id', id);
     if (error) throw error;
     return { ok: true };
+  }
+
+  // Transfere/junta uma comanda em andamento — dois casos:
+  // 1) mesa_id de destino livre: só move a comanda pra essa mesa (troca física simples).
+  // 2) mesa_id de destino ocupada, ou comanda_destino_id direto: junta tudo (itens +
+  //    pagamentos parciais já registrados) na comanda de destino e encerra a origem.
+  async transferir(origemId: number, restaurantId: number, params: { mesa_id?: number; comanda_destino_id?: number }) {
+    const origem = await this.buscarComanda(origemId, restaurantId);
+    if (!['aberta', 'fechada_garcom'].includes(origem.status)) {
+      throw new BadRequestException('Só é possível transferir comandas abertas ou aguardando pagamento');
+    }
+
+    let destinoId = params.comanda_destino_id ?? null;
+
+    if (params.mesa_id) {
+      const { data: mesaDestino } = await this.supabase.client
+        .from('mesas')
+        .select('id, status')
+        .eq('id', params.mesa_id)
+        .eq('restaurant_id', restaurantId)
+        .maybeSingle();
+      if (!mesaDestino) throw new NotFoundException('Mesa de destino não encontrada');
+
+      if (mesaDestino.status === 'livre') {
+        // Caso simples: só move a comanda pra mesa nova, sem juntar nada.
+        const { error } = await this.supabase.client.from('orders').update({ mesa_id: mesaDestino.id }).eq('id', origemId);
+        if (error) throw error;
+        await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', mesaDestino.id);
+        if (origem.mesa_id) {
+          await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', origem.mesa_id);
+        }
+        return { ok: true, modo: 'movida' };
+      }
+
+      // Mesa de destino ocupada — precisa achar a comanda dela pra juntar.
+      const { data: comandaNaMesa } = await this.supabase.client
+        .from('orders')
+        .select('id')
+        .eq('mesa_id', mesaDestino.id)
+        .eq('restaurant_id', restaurantId)
+        .eq('canal', 'presencial')
+        .in('status', ['aberta', 'fechada_garcom'])
+        .maybeSingle();
+      if (!comandaNaMesa) throw new BadRequestException('Mesa de destino não tem comanda aberta pra juntar');
+      destinoId = comandaNaMesa.id;
+    }
+
+    if (!destinoId) throw new BadRequestException('Informe uma mesa de destino ou uma comanda de destino');
+    if (destinoId === origemId) throw new BadRequestException('Comanda de destino não pode ser a mesma da origem');
+
+    const destino = await this.buscarComanda(destinoId, restaurantId);
+    if (!['aberta', 'fechada_garcom'].includes(destino.status)) {
+      throw new BadRequestException('Comanda de destino não está aberta');
+    }
+
+    // Junta: itens e pagamentos da origem passam a pertencer à comanda de destino.
+    const { error: errItens } = await this.supabase.client.from('order_items').update({ order_id: destinoId }).eq('order_id', origemId);
+    if (errItens) throw errItens;
+
+    const { error: errPagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .update({ order_id: destinoId })
+      .eq('order_id', origemId);
+    if (errPagamentos) throw errPagamentos;
+
+    const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', destinoId);
+    const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+    await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', destinoId);
+
+    // Origem encerra sem itens — marcada como cancelada pra não sobrar comanda fantasma
+    // nem duplicar nos relatórios (os itens/pagamentos já estão todos no destino agora).
+    await this.supabase.client.from('orders').update({ status: 'canceled' }).eq('id', origemId);
+    if (origem.mesa_id) {
+      await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', origem.mesa_id);
+    }
+
+    return { ok: true, modo: 'juntada', comanda_destino_id: destinoId };
   }
 
   async cancelar(id: number, restaurantId: number) {
@@ -220,6 +338,13 @@ export class SalaoPdvService {
     const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', id);
     const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     const totalFinal = subtotal - (comanda.desconto_valor ?? 0) + (comanda.acrescimo_valor ?? 0);
+
+    // Se já teve pagamento parcial (garçom ou caixa), só registra o que ainda falta —
+    // o ledger de comanda_pagamentos fica completo pra conferência.
+    const { saldo } = await this.salaoService.saldoDevedor(id);
+    if (saldo > 0.01) {
+      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento);
+    }
 
     let caixaId = comanda.caixa_id;
     if (!caixaId) {

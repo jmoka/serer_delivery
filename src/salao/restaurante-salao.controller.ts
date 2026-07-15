@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { SalaoPdvService } from './salao-pdv.service';
 import { GarconsService } from './garcons.service';
@@ -37,9 +37,32 @@ export class RestauranteSalaoController {
     return this.service.adicionarItens(id, req.restaurantId, body.itens);
   }
 
+  @Post('comandas/:id/pagamento')
+  registrarPagamentoParcial(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { valor: number; forma_pagamento: string },
+    @Req() req: any,
+  ) {
+    return this.service.registrarPagamentoParcial(id, req.restaurantId, body.valor, body.forma_pagamento);
+  }
+
+  @Delete('comandas/:id/itens/:itemId')
+  removerItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
+    return this.service.removerItem(id, req.restaurantId, itemId);
+  }
+
   @Patch('comandas/:id/transferir-garcom')
   transferirGarcom(@Param('id', ParseIntPipe) id: number, @Body() body: { garcom_id: number }, @Req() req: any) {
     return this.service.transferirGarcom(id, req.restaurantId, body.garcom_id);
+  }
+
+  @Patch('comandas/:id/transferir')
+  transferir(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { mesa_id?: number; comanda_destino_id?: number },
+    @Req() req: any,
+  ) {
+    return this.service.transferir(id, req.restaurantId, body);
   }
 
   @Get('comandas/:id/sugestao-gorjeta')
