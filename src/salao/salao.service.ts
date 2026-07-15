@@ -390,7 +390,7 @@ export class SalaoService {
     return texto.normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '');
   }
 
-  private formatarTicketTexto(
+  formatarTicketTexto(
     setor: string,
     comanda: {
       mesas?: { numero: number; nome: string | null } | null;
@@ -513,6 +513,56 @@ export class SalaoService {
     }
 
     return { grupos: gruposParaNavegador };
+  }
+
+  // Reimpressão manual pedida na tela de KDS por setor — regera o ticket do grupo
+  // (comanda + itens já enviados pra essa impressora) e reenvia pro mesmo destino
+  // de sempre (fila do agente local ou fallback pro navegador).
+  async reimprimirGrupo(orderId: number, impressoraId: number, restaurantId: number) {
+    const { data: comanda } = await this.supabase.client
+      .from('orders')
+      .select('id, restaurant_id, mesas(numero, nome), cliente_mesa_nome, cliente_mesa_telefone, garcons(nome)')
+      .eq('id', orderId)
+      .maybeSingle();
+    if (!comanda || (comanda as any).restaurant_id !== restaurantId) {
+      throw new NotFoundException('Comanda não encontrada');
+    }
+
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, nome, setor, nome_sistema')
+      .eq('id', impressoraId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!impressora) throw new NotFoundException('Impressora não encontrada');
+
+    const { data: itens } = await this.supabase.client
+      .from('order_items')
+      .select('quantity, observacao, products(name, description)')
+      .eq('order_id', orderId)
+      .eq('impressora_id', impressoraId)
+      .eq('status', 'enviado');
+    if (!itens?.length) throw new BadRequestException('Nenhum item pendente desse setor pra reimprimir');
+
+    const itensFormatados = itens.map((i: any) => ({
+      product_name: i.products?.name,
+      description: i.products?.description,
+      quantity: i.quantity,
+      observacao: i.observacao,
+    }));
+    const conteudo = this.formatarTicketTexto((impressora as any).setor, comanda as any, itensFormatados);
+
+    if ((impressora as any).nome_sistema) {
+      const { error } = await this.supabase.client.from('impressao_jobs').insert({
+        restaurant_id: restaurantId,
+        impressora_id: impressoraId,
+        conteudo,
+      });
+      if (error) throw error;
+      return { ok: true, via: 'agente' };
+    }
+
+    return { ok: true, via: 'navegador', setor: (impressora as any).setor, impressora_nome: (impressora as any).nome, itens: itensFormatados };
   }
 
   async fecharComanda(comandaId: number, garcomId: number, formaPagamento: string) {
