@@ -40,10 +40,10 @@ export class RestauranteSalaoController {
   @Post('comandas/:id/pagamento')
   registrarPagamentoParcial(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { valor: number; forma_pagamento: string },
+    @Body() body: { valor: number; forma_pagamento: string; valor_recebido?: number },
     @Req() req: any,
   ) {
-    return this.service.registrarPagamentoParcial(id, req.restaurantId, body.valor, body.forma_pagamento);
+    return this.service.registrarPagamentoParcial(id, req.restaurantId, body.valor, body.forma_pagamento, body.valor_recebido);
   }
 
   @Patch('comandas/:id/pagamentos/:pagamentoId')
@@ -107,9 +107,9 @@ export class RestauranteSalaoController {
   @Post('comandas/:id/pagar')
   pagar(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { forma_pagamento: string; gorjeta_valor?: number },
+    @Body() body: { forma_pagamento: string; gorjeta_valor?: number; valor_recebido?: number },
     @Req() req: any,
   ) {
-    return this.service.pagar(id, req.restaurantId, body.forma_pagamento, body.gorjeta_valor);
+    return this.service.pagar(id, req.restaurantId, body.forma_pagamento, body.gorjeta_valor, body.valor_recebido);
   }
 }

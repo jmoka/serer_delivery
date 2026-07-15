@@ -108,29 +108,67 @@ export class SalaoService {
     };
   }
 
+  // Lança uma saída automática no caixa aberto do restaurante — usado pra registrar troco
+  // dado e gorjeta paga em dinheiro, sem o caixa precisar lançar isso manualmente depois.
+  async registrarSaidaCaixa(restaurantId: number, descricao: string, valor: number, tipo: 'troco' | 'gorjeta') {
+    if (!(valor > 0)) return;
+    const { data: caixa } = await this.supabase.client
+      .from('caixas')
+      .select('id, saidas')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aberto')
+      .maybeSingle();
+    if (!caixa) return; // sem caixa aberto: melhor não travar o pagamento por isso
+
+    const saidas = (caixa.saidas ?? []) as any[];
+    const nova = { descricao, valor, meio: 'dinheiro', tipo, criado_em: new Date().toISOString() };
+    await this.supabase.client.from('caixas').update({ saidas: [...saidas, nova] }).eq('id', caixa.id);
+  }
+
   // Registra um pagamento parcial — não fecha a comanda sozinho, só abate do saldo devedor.
   // Chamado tanto pelo garçom (informar forma de pagamento) quanto pelo caixa (conferência).
-  async registrarPagamento(comandaId: number, origem: 'garcom' | 'estabelecimento', valor: number, formaPagamento: string) {
+  // Em dinheiro, valorRecebido é o que o cliente entregou — troco é calculado e vira saída
+  // automática no caixa (ver registrarSaidaCaixa).
+  async registrarPagamento(
+    comandaId: number,
+    origem: 'garcom' | 'estabelecimento',
+    valor: number,
+    formaPagamento: string,
+    restaurantId: number,
+    valorRecebido?: number,
+    identificador?: string,
+  ) {
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
+    let troco: number | null = null;
+    if (formaPagamento === 'cash' && valorRecebido !== undefined) {
+      if (valorRecebido < valor) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
+      troco = parseFloat((valorRecebido - valor).toFixed(2));
+    }
+
     const { error } = await this.supabase.client
       .from('comanda_pagamentos')
-      .insert({ order_id: comandaId, valor, forma_pagamento: formaPagamento, origem });
+      .insert({ order_id: comandaId, valor, forma_pagamento: formaPagamento, origem, valor_recebido: valorRecebido ?? null, troco });
     if (error) throw error;
+
+    if (troco && troco > 0) {
+      await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco');
+    }
 
     return this.saldoDevedor(comandaId);
   }
 
   // Permissão default true (opt-out) — preserva o comportamento de quem já usava
   // isso sem restrição antes da permissão existir; dono desativa por garçom se quiser.
-  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string, podePagamentoParcial = true) {
+  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string, podePagamentoParcial = true, valorRecebido?: number) {
     if (!podePagamentoParcial) throw new ForbiddenException('Você não tem permissão para registrar pagamento parcial');
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
-    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento);
+    const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
+    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador);
   }
 
   private async recalcularTotal(comandaId: number) {

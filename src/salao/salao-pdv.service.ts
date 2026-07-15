@@ -75,12 +75,13 @@ export class SalaoPdvService {
   }
 
   // Pagamento parcial registrado pelo caixa — mesma regra do garçom (não fecha sozinho).
-  async registrarPagamentoParcial(id: number, restaurantId: number, valor: number, formaPagamento: string) {
+  async registrarPagamentoParcial(id: number, restaurantId: number, valor: number, formaPagamento: string, valorRecebido?: number) {
     const comanda = await this.buscarComanda(id, restaurantId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
-    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento);
+    const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
+    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador);
   }
 
   private async buscarPagamento(comandaId: number, pagamentoId: number) {
@@ -372,7 +373,7 @@ export class SalaoPdvService {
     return { percentual, valor_sugerido: parseFloat(((subtotal * percentual) / 100).toFixed(2)) };
   }
 
-  async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number) {
+  async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number) {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
     const comanda = await this.buscarComanda(id, restaurantId);
@@ -387,8 +388,23 @@ export class SalaoPdvService {
     // Se já teve pagamento parcial (garçom ou caixa), só registra o que ainda falta —
     // o ledger de comanda_pagamentos fica completo pra conferência.
     const { saldo } = await this.salaoService.saldoDevedor(id);
+    const gorjeta = gorjetaValor ?? 0;
+    // Em dinheiro, o cliente entrega pro que falta da comanda + gorjeta juntos nesse momento.
+    const valorACobrar = parseFloat((saldo + gorjeta).toFixed(2));
+    let troco: number | null = null;
+    if (formaPagamento === 'cash' && valorRecebido !== undefined) {
+      if (valorRecebido < valorACobrar) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
+      troco = parseFloat((valorRecebido - valorACobrar).toFixed(2));
+    }
+
     if (saldo > 0.01) {
-      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento);
+      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento, restaurantId);
+    }
+
+    if (formaPagamento === 'cash') {
+      const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
+      if (gorjeta > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Gorjeta - ${identificador}`, gorjeta, 'gorjeta');
+      if (troco && troco > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
     }
 
     let caixaId = comanda.caixa_id;
@@ -420,6 +436,6 @@ export class SalaoPdvService {
 
     await this.lancarComissoes(comanda, subtotal, totalFinal);
 
-    return { ok: true, total: parseFloat(totalFinal.toFixed(2)) };
+    return { ok: true, total: parseFloat(totalFinal.toFixed(2)), troco };
   }
 }
