@@ -5,11 +5,15 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { RestauranteService } from './restaurante.service';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
+import { SalaoService } from '../salao/salao.service';
 
 @Controller('restaurante')
 @UseGuards(RestaurantOwnerGuard)
 export class RestauranteController {
-  constructor(private service: RestauranteService) {}
+  constructor(
+    private service: RestauranteService,
+    private salaoService: SalaoService,
+  ) {}
 
   @Get('minha-empresa')
   minhaEmpresa(@Req() req: any) {
@@ -242,6 +246,27 @@ export class RestauranteController {
   @Patch('renovar-token-cozinha')
   renovarTokenCozinha(@Req() req: any) {
     return this.service.renovarTokenCozinha(req.restaurantId);
+  }
+
+  // KDS por setor (bar/copa/salgados...) acessado direto pelo dono logado — sem link/token
+  // separado, mesmo padrão de acesso da tela de cozinha (ver GET /cozinha acima).
+  @Get('kds')
+  kdsItens(@Query('impressora_id', ParseIntPipe) impressoraId: number, @Req() req: any) {
+    return this.service.getKdsSetor(req.restaurantId, impressoraId);
+  }
+
+  @Patch('kds/itens/:id/pronto')
+  kdsMarcarPronto(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.marcarItemPronto(id, req.restaurantId);
+  }
+
+  @Post('kds/comandas/:orderId/reimprimir')
+  kdsReimprimir(
+    @Param('orderId', ParseIntPipe) orderId: number,
+    @Query('impressora_id', ParseIntPipe) impressoraId: number,
+    @Req() req: any,
+  ) {
+    return this.salaoService.reimprimirGrupo(orderId, impressoraId, req.restaurantId);
   }
 
   @Post('storage/setup')
