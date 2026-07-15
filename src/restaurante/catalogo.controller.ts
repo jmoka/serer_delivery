@@ -57,7 +57,7 @@ export class CatalogoController {
   async todosOsProdutos() {
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, logo_url, slug, aparencia')
+      .select('id, name, logo_url, slug, aparencia, frete_motoboy')
       .not('slug', 'is', null)
       .eq('bloqueado', false);
 
