@@ -737,8 +737,12 @@ export class RestauranteService {
   private readonly STATUS_ABERTOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery'];
   private readonly COMANDA_STATUS_ABERTOS = ['aberta', 'fechada_garcom'];
 
+  // Venda finalizada = entregue (delivery) ou paga (comanda do salão) — sem isso o
+  // resumo/KPI do dashboard ignorava toda venda do salão (comanda nunca vira 'delivered').
+  private readonly STATUS_VENDA_FINALIZADA = ['delivered', 'paga'];
+
   private calcularResumo(pedidos: any[], saidas: any[], valor_inicial: number, entradas: any[] = []) {
-    const entregues = pedidos.filter((p) => p.status === 'delivered');
+    const entregues = pedidos.filter((p) => this.STATUS_VENDA_FINALIZADA.includes(p.status));
     const total_vendas = entregues.reduce((s: number, p: any) => s + (p.total ?? 0), 0);
     const total_saidas = saidas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
     const total_entradas = entradas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
@@ -761,7 +765,7 @@ export class RestauranteService {
     return {
       total_pedidos: pedidos.length,
       entregues: entregues.length,
-      em_andamento: pedidos.filter((p: any) => this.STATUS_ABERTOS.includes(p.status)).length,
+      em_andamento: pedidos.filter((p: any) => this.STATUS_ABERTOS.includes(p.status) || this.COMANDA_STATUS_ABERTOS.includes(p.status)).length,
       cancelados: pedidos.filter((p: any) => p.status === 'canceled').length,
       total_vendas,
       total_saidas,
@@ -1261,9 +1265,9 @@ export class RestauranteService {
 
     const pedidos = (orders ?? []).map((o: any) => ({ ...o, itens: itemsByOrder[o.id] ?? [] }));
 
-    const entregues = pedidos.filter((p: any) => p.status === 'delivered');
+    const entregues = pedidos.filter((p: any) => this.STATUS_VENDA_FINALIZADA.includes(p.status));
     const cancelados = pedidos.filter((p: any) => p.status === 'canceled');
-    const em_andamento = pedidos.filter((p: any) => !['canceled', 'delivered'].includes(p.status));
+    const em_andamento = pedidos.filter((p: any) => !['canceled', 'delivered', 'paga'].includes(p.status));
     const nao_cancelados = pedidos.filter((p: any) => p.status !== 'canceled');
     const total_vendas = entregues.reduce((s: number, p: any) => s + (p.total ?? 0), 0);
     const por_pagamento = nao_cancelados.reduce((acc: any, p: any) => {
