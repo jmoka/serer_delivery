@@ -237,7 +237,18 @@ export class SalaoService {
       .order('criado_em', { ascending: true });
     const saldo = await this.saldoDevedor(comandaId);
 
-    return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo };
+    // Sugestão de gorjeta exibida pro garçom/cliente antes do fechamento — informativa,
+    // o valor de fato lançado é o que o caixa confirma no PDV (pode ajustar).
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('gorjeta_percentual')
+      .eq('id', comanda.restaurant_id)
+      .maybeSingle();
+    const percentual = restaurante?.gorjeta_percentual ?? 0;
+    const subtotalItens = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+    const gorjeta_sugestao = { percentual, valor_sugerido: parseFloat(((subtotalItens * percentual) / 100).toFixed(2)) };
+
+    return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo, gorjeta_sugestao };
   }
 
   async adicionarItens(comandaId: number, garcomId: number, itens: ItemComandaBody[]) {
