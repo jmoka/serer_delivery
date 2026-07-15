@@ -34,6 +34,90 @@ export class SalaoPdvService {
     return (mesas ?? []).map((m: any) => ({ ...m, comanda: comandaPorMesa.get(m.id) ?? null }));
   }
 
+  // Bloqueia uma mesa livre (reserva, manutenção...) — fica indisponível pro garçom
+  // até ser desbloqueada, sem precisar de comanda aberta nela.
+  async bloquearMesa(mesaId: number, restaurantId: number) {
+    const { data: mesa } = await this.supabase.client
+      .from('mesas').select('id, status').eq('id', mesaId).eq('restaurant_id', restaurantId).maybeSingle();
+    if (!mesa) throw new NotFoundException('Mesa não encontrada');
+    if (mesa.status !== 'livre') throw new BadRequestException('Só é possível bloquear uma mesa livre');
+
+    const { error } = await this.supabase.client.from('mesas').update({ status: 'bloqueada' }).eq('id', mesaId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  async desbloquearMesa(mesaId: number, restaurantId: number) {
+    const { data: mesa } = await this.supabase.client
+      .from('mesas').select('id, status').eq('id', mesaId).eq('restaurant_id', restaurantId).maybeSingle();
+    if (!mesa) throw new NotFoundException('Mesa não encontrada');
+    if (mesa.status !== 'bloqueada') throw new BadRequestException('Mesa não está bloqueada');
+
+    const { error } = await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', mesaId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Estabelecimento abre mesa/comanda direto (sem garçom envolvido) — mesma regra de
+  // salao_modo e obrigatoriedade de nome/telefone do cliente do lado do garçom.
+  async abrirComanda(restaurantId: number, body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string }) {
+    if (!body.cliente_nome || !body.cliente_telefone) {
+      throw new BadRequestException('Nome e telefone do cliente são obrigatórios');
+    }
+
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants').select('salao_modo').eq('id', restaurantId).maybeSingle();
+    const salaoModo = (restaurante as any)?.salao_modo ?? 'ambos';
+    if (salaoModo === 'mesas' && !body.mesa_id) {
+      throw new BadRequestException('Este restaurante só trabalha com mesas — selecione uma mesa');
+    }
+    if (salaoModo === 'comandas' && body.mesa_id) {
+      throw new BadRequestException('Este restaurante só trabalha com comandas avulsas — não vincule a uma mesa');
+    }
+
+    let mesa: { id: number } | null = null;
+    if (body.mesa_id) {
+      const { data } = await this.supabase.client
+        .from('mesas').select('id, status').eq('id', body.mesa_id).eq('restaurant_id', restaurantId).maybeSingle();
+      if (!data) throw new NotFoundException('Mesa não encontrada');
+      if (data.status !== 'livre') throw new BadRequestException('Mesa não está livre');
+      mesa = data;
+    }
+
+    const { data: caixaAberto } = await this.supabase.client
+      .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+
+    const inicioDoDia = new Date();
+    inicioDoDia.setHours(0, 0, 0, 0);
+    const { count } = await this.supabase.client
+      .from('orders').select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId).eq('canal', 'presencial').gte('created_at', inicioDoDia.toISOString());
+    const numeroComanda = (count ?? 0) + 1;
+
+    const { data: comanda, error } = await this.supabase.client
+      .from('orders')
+      .insert({
+        restaurant_id: restaurantId,
+        canal: 'presencial',
+        status: 'aberta',
+        mesa_id: mesa?.id ?? null,
+        cliente_mesa_nome: body.cliente_nome,
+        cliente_mesa_telefone: body.cliente_telefone,
+        total: 0,
+        caixa_id: caixaAberto?.id ?? null,
+        numero_comanda: numeroComanda,
+      })
+      .select('id')
+      .single();
+    if (error) throw error;
+
+    if (mesa) {
+      await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', mesa.id);
+    }
+
+    return this.comandaDetalhe(comanda.id, restaurantId);
+  }
+
   async comandasAbertas(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('orders')
@@ -272,6 +356,35 @@ export class SalaoPdvService {
 
   // Estabelecimento pode remover qualquer item (pendente ou já enviado) — diferente do
   // garçom, que só mexe em item ainda não enviado (ver salao.service.ts).
+  // Estabelecimento pode editar qualquer item (pendente ou já enviado) — diferente do
+  // garçom, que só mexe em item ainda não enviado (ver salao.service.ts).
+  async editarItem(comandaId: number, restaurantId: number, itemId: number, body: { quantity?: number; observacao?: string }) {
+    const comanda = await this.buscarComanda(comandaId, restaurantId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+
+    const { data: item } = await this.supabase.client
+      .from('order_items').select('id').eq('id', itemId).eq('order_id', comandaId).maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+
+    const update: Record<string, unknown> = {};
+    if (body.quantity !== undefined) {
+      if (body.quantity < 1) throw new BadRequestException('Quantidade mínima é 1');
+      update.quantity = body.quantity;
+    }
+    if (body.observacao !== undefined) update.observacao = body.observacao?.trim() || null;
+
+    const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
+    if (error) throw error;
+
+    const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
+    const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+    await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', comandaId);
+
+    return this.comandaDetalhe(comandaId, restaurantId);
+  }
+
   async removerItem(comandaId: number, restaurantId: number, itemId: number) {
     const comanda = await this.buscarComanda(comandaId, restaurantId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {

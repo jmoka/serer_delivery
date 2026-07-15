@@ -22,9 +22,27 @@ export class RestauranteSalaoController {
     return this.service.mesas(req.restaurantId);
   }
 
+  @Patch('mesas/:id/bloquear')
+  bloquearMesa(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.bloquearMesa(id, req.restaurantId);
+  }
+
+  @Patch('mesas/:id/desbloquear')
+  desbloquearMesa(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.desbloquearMesa(id, req.restaurantId);
+  }
+
   @Get('comandas')
   comandas(@Req() req: any) {
     return this.service.comandasAbertas(req.restaurantId);
+  }
+
+  @Post('comandas/abrir')
+  abrirComanda(
+    @Body() body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string },
+    @Req() req: any,
+  ) {
+    return this.service.abrirComanda(req.restaurantId, body);
   }
 
   @Post('venda-direta')
@@ -43,6 +61,16 @@ export class RestauranteSalaoController {
   @Post('comandas/:id/itens')
   adicionarItens(@Param('id', ParseIntPipe) id: number, @Body() body: { itens: ItemComandaBody[] }, @Req() req: any) {
     return this.service.adicionarItens(id, req.restaurantId, body.itens);
+  }
+
+  @Patch('comandas/:id/itens/:itemId')
+  editarItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Body() body: { quantity?: number; observacao?: string },
+    @Req() req: any,
+  ) {
+    return this.service.editarItem(id, req.restaurantId, itemId, body);
   }
 
   @Post('comandas/:id/pagamento')
