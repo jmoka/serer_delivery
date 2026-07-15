@@ -77,7 +77,7 @@ export class SalaoService {
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
     const { data } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, mesa_id, garcom_id, numero_comanda, cliente_mesa_nome, cliente_mesa_telefone, mesas(numero, nome), garcons(nome)')
+      .select('id, status, restaurant_id, mesa_id, garcom_id, numero_comanda, cliente_mesa_nome, cliente_mesa_telefone, tracking_token, mesas(numero, nome), garcons(nome)')
       .eq('id', comandaId)
       .eq('canal', 'presencial')
       .maybeSingle();
