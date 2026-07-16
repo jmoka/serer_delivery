@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
+import { SalaoService } from '../salao/salao.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
@@ -11,7 +12,64 @@ export class PedidosService {
   constructor(
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
+    private salaoService: SalaoService,
   ) {}
+
+  // Roteia os itens do pedido delivery pro mesmo mecanismo de KDS por setor que o
+  // módulo Salão já usa: copia impressora_id do produto pro item, marca status
+  // "enviado" (aparece em Produção/Bar/Cozinha filtrado por setor) e gera job de
+  // impressão por setor pras impressoras com agente local pareado. Idempotente —
+  // só processa item que ainda não foi enviado (enviado_em null), então pode chamar
+  // de novo sem duplicar (ex: pedido volta de "confirmed" -> "pending" -> "confirmed").
+  private async rotearItensParaSetor(pedidoId: number, restauranteId: number) {
+    const { data: pendentes, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, quantity, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema))')
+      .eq('order_id', pedidoId)
+      .is('enviado_em', null);
+    if (error) throw error;
+    if (!pendentes?.length) return;
+
+    const agora = new Date().toISOString();
+    await this.supabase.client
+      .from('order_items')
+      .update({ status: 'enviado', enviado_em: agora })
+      .in('id', pendentes.map((p: any) => p.id));
+
+    for (const item of pendentes as any[]) {
+      const impressoraId = item.products?.impressora_id ?? null;
+      if (impressoraId) {
+        await this.supabase.client.from('order_items').update({ impressora_id: impressoraId }).eq('id', item.id);
+      }
+    }
+
+    const grupos = new Map<string, { setor: string; impressora_id: number; nome_sistema: string | null; itens: any[] }>();
+    for (const item of pendentes as any[]) {
+      const impressora = item.products?.impressoras;
+      if (!impressora?.id) continue; // produto sem impressora configurada — não gera job
+      const chave = String(impressora.id);
+      if (!grupos.has(chave)) {
+        grupos.set(chave, { setor: impressora.setor, impressora_id: impressora.id, nome_sistema: impressora.nome_sistema ?? null, itens: [] });
+      }
+      grupos.get(chave)!.itens.push({
+        product_name: item.products?.name,
+        description: item.products?.description,
+        quantity: item.quantity,
+      });
+    }
+
+    const comandaLike = { cliente_mesa_nome: `Pedido delivery #${pedidoId}` };
+    for (const grupo of grupos.values()) {
+      if (!grupo.nome_sistema) continue; // sem agente local pareado — sem job, staff reimprime pela tela do setor
+      const conteudo = this.salaoService.formatarTicketTexto(grupo.setor, comandaLike, grupo.itens);
+      const { error: errJob } = await this.supabase.client.from('impressao_jobs').insert({
+        restaurant_id: restauranteId,
+        impressora_id: grupo.impressora_id,
+        conteudo,
+      });
+      if (errJob) throw errJob;
+    }
+  }
 
   private async geocodificarEnderecoCliente(customerId: number) {
     const { data: customer } = await this.supabase.client
@@ -243,6 +301,10 @@ export class PedidosService {
 
     if (error) throw error;
     if (!data) throw new NotFoundException(`Pedido ${id} não encontrado`);
+
+    if (status === 'confirmed') {
+      await this.rotearItensParaSetor(id, data.restaurant_id);
+    }
 
     // Comissão registrada automaticamente via trigger on_order_delivered quando status = 'delivered'
     return data;
