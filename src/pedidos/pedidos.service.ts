@@ -310,6 +310,39 @@ export class PedidosService {
     return data;
   }
 
+  // Motoboy registra ocorrência (entrega deu errado) via portal — admin revisa aqui:
+  // volta o pedido pra "pending" e limpa a ocorrência/motoboy, como se fosse recomeçar
+  // o despacho do zero (reatribuir motoboy, ou o próprio confirmar de novo).
+  async revisarOcorrencia(id: number) {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('id, delivery_occurrence')
+      .eq('id', id)
+      .maybeSingle();
+    if (!pedido) throw new NotFoundException(`Pedido ${id} não encontrado`);
+    if (!pedido.delivery_occurrence) {
+      throw new BadRequestException('Pedido não tem ocorrência pendente de revisão');
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('orders')
+      .update({
+        status: 'pending',
+        delivery_occurrence: null,
+        delivery_notes: null,
+        motoboy_id: null,
+        motoboy_lat: null,
+        motoboy_lng: null,
+        motoboy_location_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select('id, status, total, restaurant_id, updated_at')
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
   async cancelar(id: number) {
     return this.atualizarStatus(id, 'canceled');
   }

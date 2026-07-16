@@ -102,6 +102,19 @@ export class RestauranteService {
     return this.pedidos.atualizarStatus(pedidoId, status as any);
   }
 
+  async revisarOcorrenciaPedido(pedidoId: number, restaurantId: number) {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('id')
+      .eq('id', pedidoId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+
+    if (!pedido) throw new NotFoundException('Pedido não encontrado neste restaurante');
+
+    return this.pedidos.revisarOcorrencia(pedidoId);
+  }
+
   // Painel de controle de entregas: tudo que está "em voo" agora (pronto aguardando
   // atribuição, indo buscar, ou já saiu pra entrega), com dados de quem está entregando.
   async listarEntregas(restaurantId: number) {
@@ -696,7 +709,7 @@ export class RestauranteService {
   async getKdsSetor(restaurantId: number, impressoraId: number) {
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .in('status', ['enviado', 'preparando'])
       .order('enviado_em', { ascending: true });
@@ -730,6 +743,12 @@ export class RestauranteService {
           mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
           cliente: i.orders?.cliente_mesa_nome ?? (i.orders?.customer_id ? customerMap[i.orders.customer_id] ?? null : null),
           garcom: i.orders?.garcons?.nome ?? null,
+          // Status de entrega do pedido (delivery) — usado no Bar pra alerta de motoboy
+          // (em trânsito/entregue/ocorrência) e botão de localizar no mapa.
+          pedido_status: i.orders?.status ?? null,
+          motoboy_lat: i.orders?.motoboy_lat ?? null,
+          motoboy_lng: i.orders?.motoboy_lng ?? null,
+          delivery_occurrence: i.orders?.delivery_occurrence ?? null,
         };
       }),
     };
