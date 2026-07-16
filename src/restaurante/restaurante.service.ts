@@ -164,13 +164,16 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, created_at')
+      .select('id, name, description, price, preco_promo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, created_at, categories(name)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
 
     if (error) throw error;
-    return { produtos: data ?? [] };
+    // category_name direto no produto (igual ao endpoint do garçom) pra telas com
+    // filtro por categoria não precisarem buscar/montar o map à parte.
+    const produtos = (data ?? []).map((p: any) => ({ ...p, category_name: p.categories?.name ?? 'Outros' }));
+    return { produtos };
   }
 
   async criarProduto(
