@@ -686,7 +686,7 @@ export class RestauranteService {
   async getKdsSetor(restaurantId: number, impressoraId: number) {
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .in('status', ['enviado', 'preparando'])
       .order('enviado_em', { ascending: true });
@@ -694,20 +694,34 @@ export class RestauranteService {
 
     const itensValidos = (itens as any[]).filter((i) => i.orders?.restaurant_id === restaurantId);
 
+    // Um item roteado pra uma impressora/setor pode vir tanto de comanda do salão
+    // (mesa_id/garcom_id preenchidos) quanto de pedido de delivery (produto com a
+    // mesma impressora configurada) — resolve nome do cliente de delivery à parte
+    // pra tela poder filtrar e exibir por canal.
+    const customerIds = [...new Set(itensValidos.map((i) => i.orders?.customer_id).filter(Boolean))];
+    const { data: customers } = customerIds.length
+      ? await this.supabase.client.from('customers').select('id, name').in('id', customerIds)
+      : { data: [] as any[] };
+    const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c.name]));
+
     return {
-      itens: itensValidos.map((i) => ({
-        id: i.id,
-        order_id: i.order_id,
-        product_name: i.products?.name,
-        quantity: i.quantity,
-        observacao: i.observacao,
-        status: i.status,
-        enviado_em: i.enviado_em,
-        preparando_em: i.preparando_em,
-        mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
-        cliente: i.orders?.cliente_mesa_nome ?? null,
-        garcom: i.orders?.garcons?.nome ?? null,
-      })),
+      itens: itensValidos.map((i) => {
+        const ehSalao = !!(i.orders?.mesa_id || i.orders?.garcom_id || i.orders?.cliente_mesa_nome);
+        return {
+          id: i.id,
+          order_id: i.order_id,
+          product_name: i.products?.name,
+          quantity: i.quantity,
+          observacao: i.observacao,
+          status: i.status,
+          enviado_em: i.enviado_em,
+          preparando_em: i.preparando_em,
+          tipo: ehSalao ? 'salao' : 'delivery',
+          mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+          cliente: i.orders?.cliente_mesa_nome ?? (i.orders?.customer_id ? customerMap[i.orders.customer_id] ?? null : null),
+          garcom: i.orders?.garcons?.nome ?? null,
+        };
+      }),
     };
   }
 
