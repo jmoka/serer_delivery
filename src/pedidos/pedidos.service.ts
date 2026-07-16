@@ -77,7 +77,7 @@ export class PedidosService {
     const [{ data: itensRaw }, { data: cliente }, { data: empresa }, { data: motoboy }, { data: pagamento }] = await Promise.all([
       this.supabase.client
         .from('order_items')
-        .select('id, quantity, unit_price, product_id')
+        .select('id, quantity, unit_price, product_id, status, enviado_em, preparando_em')
         .eq('order_id', id),
       pedido.customer_id
         ? this.supabase.client.from('customers').select('id, name, email, phone_e164, address_json').eq('id', pedido.customer_id).maybeSingle()

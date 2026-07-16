@@ -52,14 +52,20 @@ export class SalaoService {
 
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('quantity, status, products(name)')
+      .select('quantity, status, enviado_em, preparando_em, products(name)')
       .eq('order_id', comanda.id);
 
     return {
       restaurante: (comanda as any).restaurants?.name,
       mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : null,
       status: comanda.status,
-      itens: (itens ?? []).map((i: any) => ({ quantity: i.quantity, status: i.status, product_name: i.products?.name })),
+      itens: (itens ?? []).map((i: any) => ({
+        quantity: i.quantity,
+        status: i.status,
+        enviado_em: i.enviado_em,
+        preparando_em: i.preparando_em,
+        product_name: i.products?.name,
+      })),
     };
   }
 
