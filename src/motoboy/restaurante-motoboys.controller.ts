@@ -32,6 +32,11 @@ export class RestauranteMotoboysController {
     return this.service.recusarSolicitacao(id, req.restaurantId, body?.motivo);
   }
 
+  @Patch('solicitacoes/:id/revisar')
+  revisar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.revisarSolicitacao(id, req.restaurantId);
+  }
+
   @Patch(':motoboyId/remover')
   remover(@Param('motoboyId', ParseIntPipe) motoboyId: number, @Req() req: any) {
     return this.service.removerAfiliacao(motoboyId, req.restaurantId);

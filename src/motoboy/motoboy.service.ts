@@ -150,6 +150,27 @@ export class MotoboyService {
     return data;
   }
 
+  // Restaurante muda de ideia sobre uma solicitação recusada — volta pra "pendente"
+  // pra reavaliar (limpa motivo/data da recusa anterior).
+  async revisarSolicitacao(id: number, restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .update({
+        status: 'pendente',
+        motivo_recusa: null,
+        respondido_em: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'recusado')
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Solicitação recusada não encontrada');
+    return data;
+  }
+
   async removerAfiliacao(motoboyId: number, restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')

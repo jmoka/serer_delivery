@@ -102,19 +102,6 @@ export class RestauranteService {
     return this.pedidos.atualizarStatus(pedidoId, status as any);
   }
 
-  async revisarOcorrenciaPedido(pedidoId: number, restaurantId: number) {
-    const { data: pedido } = await this.supabase.client
-      .from('orders')
-      .select('id')
-      .eq('id', pedidoId)
-      .eq('restaurant_id', restaurantId)
-      .maybeSingle();
-
-    if (!pedido) throw new NotFoundException('Pedido não encontrado neste restaurante');
-
-    return this.pedidos.revisarOcorrencia(pedidoId);
-  }
-
   // Painel de controle de entregas: tudo que está "em voo" agora (pronto aguardando
   // atribuição, indo buscar, ou já saiu pra entrega), com dados de quem está entregando.
   async listarEntregas(restaurantId: number) {

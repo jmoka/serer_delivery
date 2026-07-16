@@ -51,14 +51,6 @@ export class RestauranteController {
     return this.service.atualizarStatusPedido(id, req.restaurantId, body.status);
   }
 
-  @Patch('pedidos/:id/revisar-ocorrencia')
-  revisarOcorrencia(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() req: any,
-  ) {
-    return this.service.revisarOcorrenciaPedido(id, req.restaurantId);
-  }
-
   @Patch('pedidos/:id/entregar-proprio')
   entregarProprio(
     @Param('id', ParseIntPipe) id: number,
