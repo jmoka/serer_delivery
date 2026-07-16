@@ -681,67 +681,52 @@ export class RestauranteService {
   }
 
   // KDS por setor (módulo Salão): tela genérica reaproveitável por impressora/setor
-  // (cozinha, bar, salgados...) — dois estágios como o delivery: "enviado" (aguardando
-  // preparo) e "preparando" (já iniciado), até virar "pronto" (sai da lista).
+  // (cozinha, bar, salgados...) — lista PLANA de itens (não agrupa por mesa/comanda,
+  // cada item tem sua própria ação de preparo/impressão), ordenada por chegada.
   async getKdsSetor(restaurantId: number, impressoraId: number) {
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, order_id, products(name), orders(id, mesa_id, cliente_mesa_nome, garcom_id, mesas(numero, nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .in('status', ['enviado', 'preparando'])
       .order('enviado_em', { ascending: true });
     if (error) throw error;
 
-    // orders() acima não traz restaurant_id selecionado — confirma posse via join explícito abaixo.
-    const comandaIds = [...new Set((itens ?? []).map((i: any) => i.order_id))];
-    if (comandaIds.length === 0) return { grupos: [] };
+    const itensValidos = (itens as any[]).filter((i) => i.orders?.restaurant_id === restaurantId);
 
-    const { data: comandasDoRestaurante } = await this.supabase.client
-      .from('orders')
-      .select('id')
-      .in('id', comandaIds)
-      .eq('restaurant_id', restaurantId);
-    const idsValidos = new Set((comandasDoRestaurante ?? []).map((o: any) => o.id));
-
-    const grupos = new Map<number, { order_id: number; mesa: string | null; cliente: string | null; status: string; itens: any[] }>();
-    for (const item of itens as any[]) {
-      if (!idsValidos.has(item.order_id)) continue;
-      if (!grupos.has(item.order_id)) {
-        const mesa = item.orders?.mesas ? `Mesa ${item.orders.mesas.numero}${item.orders.mesas.nome ? ' - ' + item.orders.mesas.nome : ''}` : null;
-        grupos.set(item.order_id, { order_id: item.order_id, mesa, cliente: item.orders?.cliente_mesa_nome ?? null, status: 'preparando', itens: [] });
-      }
-      const grupo = grupos.get(item.order_id)!;
-      // Grupo só vira "preparando" quando NENHUM item dele ainda estiver "enviado"
-      // (aguardando) — se tiver item novo chegando no meio, volta pra fila de espera.
-      if (item.status === 'enviado') grupo.status = 'aguardando';
-      grupo.itens.push({
-        id: item.id,
-        product_name: item.products?.name,
-        quantity: item.quantity,
-        observacao: item.observacao,
-        status: item.status,
-        enviado_em: item.enviado_em,
-      });
-    }
-
-    return { grupos: Array.from(grupos.values()) };
+    return {
+      itens: itensValidos.map((i) => ({
+        id: i.id,
+        order_id: i.order_id,
+        product_name: i.products?.name,
+        quantity: i.quantity,
+        observacao: i.observacao,
+        status: i.status,
+        enviado_em: i.enviado_em,
+        preparando_em: i.preparando_em,
+        mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+        cliente: i.orders?.cliente_mesa_nome ?? null,
+        garcom: i.orders?.garcons?.nome ?? null,
+      })),
+    };
   }
 
-  // Move todo o grupo (comanda + impressora) de "aguardando" pra "preparando" numa
-  // ação só — mesmo padrão do delivery (ação por pedido, não por item).
-  async iniciarPreparoGrupo(orderId: number, impressoraId: number, restaurantId: number) {
-    const { data: comanda } = await this.supabase.client
-      .from('orders').select('id, restaurant_id').eq('id', orderId).maybeSingle();
-    if (!comanda || (comanda as any).restaurant_id !== restaurantId) {
-      throw new NotFoundException('Comanda não encontrada');
+  // Move só esse item de "aguardando" (enviado) pra "preparando" — ação por item, não
+  // por comanda inteira (cada prato tem seu próprio ritmo de preparo).
+  async iniciarPreparoItem(itemId: number, restaurantId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, order_id, orders(restaurant_id)')
+      .eq('id', itemId)
+      .maybeSingle();
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
     }
 
     const { error } = await this.supabase.client
       .from('order_items')
-      .update({ status: 'preparando' })
-      .eq('order_id', orderId)
-      .eq('impressora_id', impressoraId)
-      .eq('status', 'enviado');
+      .update({ status: 'preparando', preparando_em: new Date().toISOString() })
+      .eq('id', itemId);
     if (error) throw error;
 
     return { ok: true };
@@ -758,7 +743,7 @@ export class RestauranteService {
       throw new NotFoundException('Item não encontrado');
     }
 
-    const { error } = await this.supabase.client.from('order_items').update({ status: 'pronto' }).eq('id', itemId);
+    const { error } = await this.supabase.client.from('order_items').update({ status: 'pronto', pronto_em: new Date().toISOString() }).eq('id', itemId);
     if (error) throw error;
     return { ok: true };
   }

@@ -32,21 +32,13 @@ export class KdsPortalController {
     return this.service.marcarItemPronto(id, req.cozinhaRestaurantId);
   }
 
-  @Patch('comandas/:orderId/iniciar-preparo')
-  iniciarPreparo(
-    @Param('orderId', ParseIntPipe) orderId: number,
-    @Query('impressora_id', ParseIntPipe) impressoraId: number,
-    @Req() req: any,
-  ) {
-    return this.service.iniciarPreparoGrupo(orderId, impressoraId, req.cozinhaRestaurantId);
+  @Patch('itens/:id/iniciar-preparo')
+  iniciarPreparo(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.iniciarPreparoItem(id, req.cozinhaRestaurantId);
   }
 
-  @Post('comandas/:orderId/reimprimir')
-  reimprimir(
-    @Param('orderId', ParseIntPipe) orderId: number,
-    @Query('impressora_id', ParseIntPipe) impressoraId: number,
-    @Req() req: any,
-  ) {
-    return this.salaoService.reimprimirGrupo(orderId, impressoraId, req.cozinhaRestaurantId);
+  @Post('itens/:id/reimprimir')
+  reimprimir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.salaoService.reimprimirItem(id, req.cozinhaRestaurantId);
   }
 }

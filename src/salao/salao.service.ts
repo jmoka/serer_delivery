@@ -648,44 +648,39 @@ export class SalaoService {
   // Reimpressão manual pedida na tela de KDS por setor — regera o ticket do grupo
   // (comanda + itens já enviados pra essa impressora) e reenvia pro mesmo destino
   // de sempre (fila do agente local ou fallback pro navegador).
-  async reimprimirGrupo(orderId: number, impressoraId: number, restaurantId: number) {
-    const { data: comanda } = await this.supabase.client
-      .from('orders')
-      .select('id, restaurant_id, mesas(numero, nome), cliente_mesa_nome, cliente_mesa_telefone, garcons(nome)')
-      .eq('id', orderId)
+  // Reimpressão por item (não por comanda inteira) — pedido explícito: cada prato tem
+  // seu próprio ticket, imprimir de novo não deve reimprimir os outros itens da mesa junto.
+  async reimprimirItem(itemId: number, restaurantId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, quantity, observacao, impressora_id, order_id, products(name, description), orders(id, restaurant_id, mesas(numero, nome), cliente_mesa_nome, cliente_mesa_telefone, garcons(nome))')
+      .eq('id', itemId)
       .maybeSingle();
-    if (!comanda || (comanda as any).restaurant_id !== restaurantId) {
-      throw new NotFoundException('Comanda não encontrada');
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
     }
+    if (!item.impressora_id) throw new BadRequestException('Item sem impressora associada');
 
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
       .select('id, nome, setor, nome_sistema')
-      .eq('id', impressoraId)
+      .eq('id', item.impressora_id)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
     if (!impressora) throw new NotFoundException('Impressora não encontrada');
 
-    const { data: itens } = await this.supabase.client
-      .from('order_items')
-      .select('quantity, observacao, products(name, description)')
-      .eq('order_id', orderId)
-      .eq('impressora_id', impressoraId)
-      .eq('status', 'enviado');
-    if (!itens?.length) throw new BadRequestException('Nenhum item pendente desse setor pra reimprimir');
-
-    const itensFormatados = itens.map((i: any) => ({
-      product_name: i.products?.name,
-      description: i.products?.description,
-      quantity: i.quantity,
-      observacao: i.observacao,
-    }));
-    const conteudo = this.formatarTicketTexto((impressora as any).setor, comanda as any, itensFormatados);
+    const itensFormatados = [{
+      product_name: (item as any).products?.name,
+      description: (item as any).products?.description,
+      quantity: item.quantity,
+      observacao: item.observacao,
+    }];
+    const conteudo = this.formatarTicketTexto((impressora as any).setor, (item as any).orders, itensFormatados);
 
     if ((impressora as any).nome_sistema) {
       const { error } = await this.supabase.client.from('impressao_jobs').insert({
         restaurant_id: restaurantId,
-        impressora_id: impressoraId,
+        impressora_id: item.impressora_id,
         conteudo,
       });
       if (error) throw error;
