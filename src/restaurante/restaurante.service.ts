@@ -20,7 +20,7 @@ export class RestauranteService {
   async minhaEmpresa(userId: string) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, slug, business_hours, payment_config, comissao_pct, type_id, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, business_hours, payment_config, comissao_pct, type_id, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -471,17 +471,24 @@ export class RestauranteService {
     return data;
   }
 
-  async updateEmpresa(restaurantId: number, body: { name?: string; address?: string; logo_url?: string }) {
+  async updateEmpresa(
+    restaurantId: number,
+    body: { name?: string; address?: string; state?: string; city?: string; neighborhood?: string; cep?: string; logo_url?: string },
+  ) {
     const campos: Record<string, any> = { updated_at: new Date().toISOString() };
     if (body.name !== undefined) campos.name = body.name;
     if (body.address !== undefined) campos.address = body.address;
+    if (body.state !== undefined) campos.state = body.state;
+    if (body.city !== undefined) campos.city = body.city;
+    if (body.neighborhood !== undefined) campos.neighborhood = body.neighborhood;
+    if (body.cep !== undefined) campos.cep = body.cep ? body.cep.replace(/\D/g, '') : null;
     if (body.logo_url !== undefined) campos.logo_url = body.logo_url;
 
     const { data, error } = await this.supabase.client
       .from('restaurants')
       .update(campos)
       .eq('id', restaurantId)
-      .select('id, name, address, logo_url, slug')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug')
       .maybeSingle();
 
     if (error) throw error;

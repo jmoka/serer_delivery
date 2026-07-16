@@ -15,6 +15,10 @@ export class OnboardingController {
     body: {
       name: string;
       address?: string;
+      state?: string;
+      city?: string;
+      neighborhood?: string;
+      cep?: string;
       business_hours?: object;
       type_id?: number;
     },
@@ -38,6 +42,10 @@ export class OnboardingController {
       .insert({
         name: body.name,
         address: body.address ?? null,
+        state: body.state ?? null,
+        city: body.city ?? null,
+        neighborhood: body.neighborhood ?? null,
+        cep: body.cep ? body.cep.replace(/\D/g, '') : null,
         business_hours: body.business_hours ?? {},
         type_id: body.type_id ?? null,
         user_id: userId,

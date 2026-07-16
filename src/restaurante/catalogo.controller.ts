@@ -1,5 +1,6 @@
-import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { haversineKm } from '../common/geo.util';
 import * as os from 'os';
 
 const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active';
@@ -41,16 +42,77 @@ export class CatalogoController {
   }
 
   @Get()
-  async listarRestaurantes() {
+  async listarRestaurantes(
+    @Query()
+    query: {
+      state?: string;
+      city?: string;
+      neighborhood?: string;
+      cep?: string;
+      lat?: string;
+      lng?: string;
+      raio_km?: string;
+    },
+  ) {
+    let q = this.supabase.client
+      .from('restaurants')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, aparencia, frete_motoboy, lat, lng')
+      .not('slug', 'is', null)
+      .eq('bloqueado', false);
+
+    if (query.state) q = q.ilike('state', query.state);
+    if (query.city) q = q.ilike('city', query.city);
+    if (query.neighborhood) q = q.ilike('neighborhood', query.neighborhood);
+    if (query.cep) q = q.ilike('cep', `${query.cep.replace(/\D/g, '').slice(0, 5)}%`);
+
+    const { data, error } = await q.order('name');
+    if (error) throw error;
+
+    let restaurantes = data ?? [];
+
+    // Filtro/ordenação por proximidade — só entra em ação se o cliente mandou lat/lng
+    // (geolocalização do navegador). raio_km filtra; sem raio, só ordena por distância.
+    const lat = query.lat ? parseFloat(query.lat) : null;
+    const lng = query.lng ? parseFloat(query.lng) : null;
+    if (lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng)) {
+      const raioKm = query.raio_km ? parseFloat(query.raio_km) : null;
+      restaurantes = restaurantes
+        .map((r) => ({
+          ...r,
+          distancia_km:
+            r.lat != null && r.lng != null
+              ? Math.round(haversineKm({ lat, lng }, { lat: r.lat, lng: r.lng }) * 10) / 10
+              : null,
+        }))
+        .filter((r) => raioKm == null || (r.distancia_km != null && r.distancia_km <= raioKm))
+        .sort((a, b) => (a.distancia_km ?? Infinity) - (b.distancia_km ?? Infinity));
+    }
+
+    return { restaurantes };
+  }
+
+  // Valores distintos de estado/cidade/bairro entre restaurantes ativos — alimenta os
+  // dropdowns em cascata do filtro geográfico na home pública (evita carregar tudo só
+  // pra montar as opções). Precisa vir ANTES de @Get(':slug') na ordem das rotas.
+  @Get('filtros')
+  async filtrosGeograficos() {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, slug, aparencia, frete_motoboy')
+      .select('state, city, neighborhood')
       .not('slug', 'is', null)
-      .eq('bloqueado', false)
-      .order('name');
-
+      .eq('bloqueado', false);
     if (error) throw error;
-    return { restaurantes: data ?? [] };
+
+    const vistos = new Set<string>();
+    const locais: { state: string | null; city: string | null; neighborhood: string | null }[] = [];
+    for (const r of data ?? []) {
+      if (!r.state && !r.city && !r.neighborhood) continue;
+      const key = `${r.state ?? ''}|${r.city ?? ''}|${r.neighborhood ?? ''}`;
+      if (vistos.has(key)) continue;
+      vistos.add(key);
+      locais.push({ state: r.state, city: r.city, neighborhood: r.neighborhood });
+    }
+    return { locais };
   }
 
   @Get('produtos')
