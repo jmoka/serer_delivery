@@ -1,5 +1,4 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
-import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { SalaoService } from '../salao/salao.service';
@@ -77,21 +76,17 @@ export class PedidosService {
       .select('address_json, address_geocode_hash')
       .eq('id', customerId)
       .maybeSingle();
-    if (!customer?.address_json) return;
+    if (!customer) return;
 
-    const hash = crypto.createHash('md5').update(JSON.stringify(customer.address_json)).digest('hex');
-    if (hash === customer.address_geocode_hash) return; // endereço não mudou desde a última geocodificação
-
-    const { logradouro, numero, bairro, cidade, estado, cep } = customer.address_json as Record<string, string>;
-    const texto = [logradouro, numero, bairro, cidade, estado, cep].filter(Boolean).join(', ');
-    const coords = await this.geocoding.geocodeEndereco(texto);
+    const resultado = await this.geocoding.geocodificarSeNecessario(customer.address_json, customer.address_geocode_hash);
+    if (!resultado) return;
 
     await this.supabase.client
       .from('customers')
       .update({
-        lat: coords?.lat ?? null,
-        lng: coords?.lng ?? null,
-        address_geocode_hash: hash,
+        lat: resultado.lat,
+        lng: resultado.lng,
+        address_geocode_hash: resultado.hash,
         address_geocoded_at: new Date().toISOString(),
       })
       .eq('id', customerId);

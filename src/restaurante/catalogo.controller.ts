@@ -1,13 +1,18 @@
-import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
+import { Controller, Get, Headers, NotFoundException, Param, Query } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SupabaseJwtService } from '../auth/supabase-jwt.service';
 import { haversineKm } from '../common/geo.util';
 import * as os from 'os';
 
 const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active';
+const RAIO_KM_PADRAO = 15;
 
 @Controller('r')
 export class CatalogoController {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private supabaseJwt: SupabaseJwtService,
+  ) {}
 
   @Get('acesso')
   async getAcesso() {
@@ -53,6 +58,7 @@ export class CatalogoController {
       lng?: string;
       raio_km?: string;
     },
+    @Headers('authorization') authorization?: string,
   ) {
     let q = this.supabase.client
       .from('restaurants')
@@ -70,12 +76,34 @@ export class CatalogoController {
 
     let restaurantes = data ?? [];
 
-    // Filtro/ordenação por proximidade — só entra em ação se o cliente mandou lat/lng
-    // (geolocalização do navegador). raio_km filtra; sem raio, só ordena por distância.
-    const lat = query.lat ? parseFloat(query.lat) : null;
-    const lng = query.lng ? parseFloat(query.lng) : null;
+    // Filtro/ordenação por proximidade — normalmente vem de lat/lng do navegador
+    // (geolocalização). Quando o cliente não mandou nenhum (GPS negado/indisponível) mas
+    // está logado, cai pro endereço salvo e já geocodificado no perfil (ver PerfilService)
+    // — nunca confia numa coordenada de "fallback" vinda do próprio client, só usa o que
+    // está salvo no banco pro dono do token.
+    let lat = query.lat ? parseFloat(query.lat) : null;
+    let lng = query.lng ? parseFloat(query.lng) : null;
+    let usandoEnderecoSalvo = false;
+
+    if (lat == null && lng == null && authorization?.startsWith('Bearer ')) {
+      const token = authorization.slice('Bearer '.length);
+      const payload = await this.supabaseJwt.verificar(token);
+      if (payload?.sub) {
+        const { data: customer } = await this.supabase.client
+          .from('customers')
+          .select('lat, lng')
+          .eq('user_id', payload.sub)
+          .maybeSingle();
+        if (customer?.lat != null && customer?.lng != null) {
+          lat = customer.lat;
+          lng = customer.lng;
+          usandoEnderecoSalvo = true;
+        }
+      }
+    }
+
     if (lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng)) {
-      const raioKm = query.raio_km ? parseFloat(query.raio_km) : null;
+      const raioKm = query.raio_km ? parseFloat(query.raio_km) : (usandoEnderecoSalvo ? RAIO_KM_PADRAO : null);
       restaurantes = restaurantes
         .map((r) => ({
           ...r,
