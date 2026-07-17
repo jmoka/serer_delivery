@@ -76,11 +76,11 @@ export class CatalogoController {
 
     let restaurantes = data ?? [];
 
-    // Filtro/ordenação por proximidade — normalmente vem de lat/lng do navegador
-    // (geolocalização). Quando o cliente não mandou nenhum (GPS negado/indisponível) mas
-    // está logado, cai pro endereço salvo e já geocodificado no perfil (ver PerfilService)
-    // — nunca confia numa coordenada de "fallback" vinda do próprio client, só usa o que
-    // está salvo no banco pro dono do token.
+    // Filtro/ordenação por proximidade — GPS ao vivo do navegador é a fonte principal
+    // (comportamento esperado: cliente abre o site, mostra estabelecimentos perto de onde
+    // ele está agora). Só cai pro endereço salvo/geocodificado do perfil (ver PerfilService)
+    // quando o navegador não mandou lat/lng (GPS negado/indisponível) e o cliente tem token
+    // válido — nunca confia numa coordenada de "fallback" vinda do próprio client.
     let lat = query.lat ? parseFloat(query.lat) : null;
     let lng = query.lng ? parseFloat(query.lng) : null;
     let usandoEnderecoSalvo = false;

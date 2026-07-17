@@ -1,10 +1,14 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtGuard } from '../auth/jwt.guard';
 import { SupabaseService } from '../supabase/supabase.service';
+import { GeocodingService } from '../motoboy/geocoding.service';
 
 @Controller('restaurante')
 export class OnboardingController {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private geocoding: GeocodingService,
+  ) {}
 
   // Endpoint acessível por qualquer usuário logado — cria restaurante e eleva role
   @Post('registrar')
@@ -56,6 +60,20 @@ export class OnboardingController {
       .single();
 
     if (error) throw error;
+
+    // Geocodifica em background (best-effort) — sem isso o restaurante nunca aparece no
+    // filtro por raio/km da home até o dono re-salvar o endereço em Config manualmente.
+    if (restaurant.address || restaurant.cep) {
+      const texto = [restaurant.address, restaurant.neighborhood, restaurant.city, restaurant.state, restaurant.cep]
+        .filter(Boolean).join(', ');
+      this.geocoding.geocodeEndereco(texto).then((coords) => {
+        if (!coords) return;
+        return this.supabase.client
+          .from('restaurants')
+          .update({ lat: coords.lat, lng: coords.lng, geocoded_at: new Date().toISOString(), geocode_falhou: false })
+          .eq('id', restaurant.id);
+      }).catch(() => {});
+    }
 
     // Eleva role para restaurant_owner (service_role bypassa RLS)
     await this.supabase.client

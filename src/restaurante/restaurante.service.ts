@@ -493,17 +493,30 @@ export class RestauranteService {
 
     if (error) throw error;
 
-    // Geocodifica o endereço em background (best-effort) pro cálculo de comissão por km —
-    // nunca falha a request de salvar o endereço por causa disso.
-    if (body.address !== undefined) {
-      this.geocodificarEndereco(restaurantId, body.address).catch(() => {});
+    // Geocodifica em background (best-effort) sempre que algum campo de endereço mudou —
+    // usa o endereço completo (rua + bairro + cidade + estado + cep), não só o campo livre
+    // "address" sozinho, que sem cidade/estado o Nominatim geocodificava impreciso/errado
+    // (ex: rua comum sem contexto de cidade cai em outro município, filtro por raio nunca
+    // encontrava o próprio restaurante). Nunca falha o save do endereço por causa disso.
+    if (body.address !== undefined || body.state !== undefined || body.city !== undefined || body.neighborhood !== undefined || body.cep !== undefined) {
+      this.geocodificarEndereco(restaurantId, {
+        address: data?.address ?? null,
+        neighborhood: data?.neighborhood ?? null,
+        city: data?.city ?? null,
+        state: data?.state ?? null,
+        cep: data?.cep ?? null,
+      }).catch(() => {});
     }
 
     return data;
   }
 
-  private async geocodificarEndereco(restaurantId: number, endereco: string) {
-    const coords = await this.geocoding.geocodeEndereco(endereco);
+  private async geocodificarEndereco(
+    restaurantId: number,
+    partes: { address: string | null; neighborhood: string | null; city: string | null; state: string | null; cep: string | null },
+  ) {
+    const texto = [partes.address, partes.neighborhood, partes.city, partes.state, partes.cep].filter(Boolean).join(', ');
+    const coords = await this.geocoding.geocodeEndereco(texto);
     await this.supabase.client
       .from('restaurants')
       .update({
