@@ -164,7 +164,7 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, created_at, categories(name)')
+      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, created_at, categories(name)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
@@ -181,7 +181,7 @@ export class RestauranteService {
     body: {
       name: string; description?: string; price: number; image_url?: string;
       category_id: number; tags?: string[]; preco_promo?: number; destaque?: boolean;
-      impressora_id?: number; quantidade_estoque?: number;
+      impressora_id?: number; quantidade_estoque?: number; preco_custo?: number; quantidade_minima?: number;
     },
   ) {
     // Valida se a categoria é do restaurante ou global (restaurant_id IS NULL)
@@ -205,6 +205,8 @@ export class RestauranteService {
         destaque: body.destaque ?? false,
         impressora_id: body.impressora_id ?? null,
         quantidade_estoque: body.quantidade_estoque ?? 0,
+        preco_custo: body.preco_custo ?? 0,
+        quantidade_minima: body.quantidade_minima ?? 0,
         is_active: true,
       })
       .select()
@@ -227,6 +229,8 @@ export class RestauranteService {
     if (body.destaque !== undefined) update.destaque = body.destaque;
     if (body.impressora_id !== undefined) update.impressora_id = body.impressora_id ?? null;
     if (body.quantidade_estoque !== undefined) update.quantidade_estoque = body.quantidade_estoque;
+    if (body.preco_custo !== undefined) update.preco_custo = body.preco_custo;
+    if (body.quantidade_minima !== undefined) update.quantidade_minima = body.quantidade_minima;
     if (body.category_id !== undefined) {
       const { data: cat } = await this.supabase.client
         .from('categories').select('id, restaurant_id').eq('id', body.category_id).maybeSingle();
@@ -1531,7 +1535,7 @@ export class RestauranteService {
   async getRelatorioProdutos(restaurantId: number, de: string, ate: string) {
     const { data: produtosData } = await this.supabase.client
       .from('products')
-      .select('id, name, price, is_active, quantidade_estoque, category_id, categories(name)')
+      .select('id, name, price, preco_custo, is_active, quantidade_estoque, quantidade_minima, category_id, categories(name)')
       .eq('restaurant_id', restaurantId)
       .order('name');
 
@@ -1561,20 +1565,34 @@ export class RestauranteService {
     }
 
     const vendas = produtos
-      .map((p: any) => ({
-        product_id: p.id,
-        name: p.name,
-        quantidade_vendida: vendasPorProduto.get(p.id)?.quantidade ?? 0,
-        receita: vendasPorProduto.get(p.id)?.receita ?? 0,
-      }))
+      .map((p: any) => {
+        const quantidade_vendida = vendasPorProduto.get(p.id)?.quantidade ?? 0;
+        const receita = vendasPorProduto.get(p.id)?.receita ?? 0;
+        const custo_total = quantidade_vendida * (p.preco_custo ?? 0);
+        return {
+          product_id: p.id,
+          name: p.name,
+          quantidade_vendida,
+          receita,
+          custo_total,
+          lucro: receita - custo_total,
+        };
+      })
       .sort((a: any, b: any) => b.receita - a.receita);
+
+    const lucro_total = vendas.reduce((acc: number, v: any) => acc + v.lucro, 0);
+    const receita_total = vendas.reduce((acc: number, v: any) => acc + v.receita, 0);
 
     return {
       produtos,
       sem_estoque: produtos.filter((p: any) => (p.quantidade_estoque ?? 0) <= 0),
+      reposicao: produtos.filter((p: any) => (p.quantidade_estoque ?? 0) <= (p.quantidade_minima ?? 0)),
+      sem_giro: vendas.filter((v: any) => v.quantidade_vendida === 0),
       ativos: produtos.filter((p: any) => p.is_active),
       bloqueados: produtos.filter((p: any) => !p.is_active),
       vendas,
+      lucro_total,
+      receita_total,
     };
   }
 
