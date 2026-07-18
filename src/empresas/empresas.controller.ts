@@ -49,6 +49,11 @@ export class EmpresasController {
     return this.service.remover(id);
   }
 
+  @Patch(':id/dominio/atender')
+  atenderSolicitacaoDominio(@Param('id', ParseIntPipe) id: number) {
+    return this.service.atenderSolicitacaoDominio(id);
+  }
+
   @Get(':id/config')
   getConfig(@Param('id', ParseIntPipe) id: number) {
     return this.service.getConfig(id);
