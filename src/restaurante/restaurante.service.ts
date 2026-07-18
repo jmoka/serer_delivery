@@ -164,7 +164,7 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, created_at, categories(name)')
+      .select('id, name, description, price, preco_promo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, created_at, categories(name)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
@@ -181,7 +181,7 @@ export class RestauranteService {
     body: {
       name: string; description?: string; price: number; image_url?: string;
       category_id: number; tags?: string[]; preco_promo?: number; destaque?: boolean;
-      impressora_id?: number;
+      impressora_id?: number; quantidade_estoque?: number;
     },
   ) {
     // Valida se a categoria é do restaurante ou global (restaurant_id IS NULL)
@@ -204,6 +204,7 @@ export class RestauranteService {
         tags: body.tags ?? [],
         destaque: body.destaque ?? false,
         impressora_id: body.impressora_id ?? null,
+        quantidade_estoque: body.quantidade_estoque ?? 0,
         is_active: true,
       })
       .select()
@@ -225,6 +226,7 @@ export class RestauranteService {
     if (body.tags !== undefined) update.tags = body.tags;
     if (body.destaque !== undefined) update.destaque = body.destaque;
     if (body.impressora_id !== undefined) update.impressora_id = body.impressora_id ?? null;
+    if (body.quantidade_estoque !== undefined) update.quantidade_estoque = body.quantidade_estoque;
     if (body.category_id !== undefined) {
       const { data: cat } = await this.supabase.client
         .from('categories').select('id, restaurant_id').eq('id', body.category_id).maybeSingle();
@@ -802,19 +804,19 @@ export class RestauranteService {
   // resto pelo caixa) — orders.payment_method só guarda a última forma usada no
   // fechamento, então pra decompor certo o "por forma de pagamento" precisa ir direto
   // no ledger de comanda_pagamentos. Delivery continua com pagamento único (sem mudança).
-  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { valor: number; forma_pagamento: string }[]>> {
+  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string }[]>> {
     const idsComanda = pedidos.filter((p: any) => p.canal === 'presencial').map((p: any) => p.id);
-    const mapa = new Map<number, { valor: number; forma_pagamento: string }[]>();
+    const mapa = new Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string }[]>();
     if (!idsComanda.length) return mapa;
 
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('order_id, valor, forma_pagamento')
+      .select('order_id, valor, forma_pagamento, origem, troco, criado_em')
       .in('order_id', idsComanda);
 
     for (const p of (data ?? []) as any[]) {
       if (!mapa.has(p.order_id)) mapa.set(p.order_id, []);
-      mapa.get(p.order_id)!.push({ valor: p.valor, forma_pagamento: p.forma_pagamento });
+      mapa.get(p.order_id)!.push({ order_id: p.order_id, valor: p.valor, forma_pagamento: p.forma_pagamento, origem: p.origem, troco: p.troco ?? 0, criado_em: p.criado_em });
     }
     return mapa;
   }
@@ -1337,7 +1339,8 @@ export class RestauranteService {
       return {
         pedidos: [],
         saidas: saidasVazio,
-        resumo: { total_pedidos: 0, entregues: 0, cancelados: 0, em_andamento: 0, total_vendas: 0, ticket_medio: 0, por_pagamento: {}, total_saidas: totalSaidasVazio, saldo_liquido: -totalSaidasVazio },
+        fluxo_caixa: [],
+        resumo: { total_pedidos: 0, entregues: 0, cancelados: 0, em_andamento: 0, total_vendas: 0, ticket_medio: 0, por_pagamento: {}, total_saidas: totalSaidasVazio, total_comissao: 0, total_gorjeta: 0, total_troco: 0, saldo_liquido: -totalSaidasVazio },
       };
     }
 
@@ -1403,9 +1406,38 @@ export class RestauranteService {
     }
     const total_saidas = saidas.reduce((sum, s) => sum + (s.valor ?? 0), 0);
 
+    // Comissão paga aos garçons no período (lançada no fechamento de cada comanda).
+    const { data: comissoesPeriodo } = orderIds.length
+      ? await this.supabase.client
+          .from('garcom_comissoes_lancamentos')
+          .select('valor_calculado')
+          .in('order_id', orderIds)
+      : { data: [] as any[] };
+    const total_comissao = (comissoesPeriodo ?? []).reduce((s: number, c: any) => s + (c.valor_calculado ?? 0), 0);
+
+    const total_gorjeta = entregues.reduce((s: number, p: any) => s + (p.gorjeta_valor ?? 0), 0);
+
+    // Fluxo de caixa detalhado: cada pagamento individual, discriminado por forma e origem
+    // (garçom/estabelecimento pra comanda, delivery pra pedido de entrega).
+    const fluxo_caixa: any[] = [];
+    let total_troco = 0;
+    for (const p of nao_cancelados) {
+      const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComandaRelatorio.get(p.id) : undefined;
+      if (pagamentosComanda?.length) {
+        for (const pag of pagamentosComanda) {
+          fluxo_caixa.push({ order_id: p.id, forma_pagamento: pag.forma_pagamento, origem: pag.origem, valor: pag.valor, troco: pag.troco, criado_em: pag.criado_em });
+          total_troco += pag.troco ?? 0;
+        }
+      } else {
+        fluxo_caixa.push({ order_id: p.id, forma_pagamento: p.payment_method ?? 'unknown', origem: 'delivery', valor: p.total ?? 0, troco: 0, criado_em: p.created_at });
+      }
+    }
+    fluxo_caixa.sort((a, b) => new Date(a.criado_em).getTime() - new Date(b.criado_em).getTime());
+
     return {
       pedidos,
       saidas,
+      fluxo_caixa,
       resumo: {
         total_pedidos: pedidos.length,
         entregues: entregues.length,
@@ -1415,8 +1447,134 @@ export class RestauranteService {
         ticket_medio: entregues.length > 0 ? total_vendas / entregues.length : 0,
         por_pagamento,
         total_saidas,
+        total_comissao,
+        total_gorjeta,
+        total_troco,
         saldo_liquido: total_vendas - total_saidas,
       },
+    };
+  }
+
+  // Relatório Garçom: total vendido/comissão/gorjeta são recortados pelo período (de/ate);
+  // comandas abertas/pendentes são estado atual (live), não faz sentido filtrar por data
+  // já que uma comanda aberta hoje pode ter sido criada ontem.
+  async getRelatorioGarcom(restaurantId: number, de: string, ate: string) {
+    const { data: garcons } = await this.supabase.client
+      .from('garcons')
+      .select('id, nome')
+      .eq('restaurant_id', restaurantId);
+
+    const { data: pedidos } = await this.supabase.client
+      .from('orders')
+      .select('id, total, status, garcom_id, gorjeta_valor, created_at')
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .not('garcom_id', 'is', null)
+      .gte('created_at', de)
+      .lte('created_at', ate);
+
+    const orderIds = (pedidos ?? []).map((p: any) => p.id);
+    const { data: comissoes } = orderIds.length
+      ? await this.supabase.client
+          .from('garcom_comissoes_lancamentos')
+          .select('garcom_id, order_id, valor_calculado')
+          .in('order_id', orderIds)
+      : { data: [] as any[] };
+
+    const { data: comandasAtuais } = await this.supabase.client
+      .from('orders')
+      .select('id, garcom_id, status')
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .not('garcom_id', 'is', null)
+      .in('status', this.COMANDA_STATUS_ABERTOS);
+
+    const porGarcom = new Map<number, any>();
+    for (const g of (garcons ?? []) as any[]) {
+      porGarcom.set(g.id, {
+        garcom_id: g.id,
+        nome: g.nome,
+        total_vendido: 0,
+        total_comissao: 0,
+        total_gorjeta: 0,
+        comandas_abertas: 0,
+        comandas_pendentes: 0,
+      });
+    }
+
+    for (const p of (pedidos ?? []) as any[]) {
+      if (p.status !== 'paga') continue;
+      const row = porGarcom.get(p.garcom_id);
+      if (!row) continue;
+      row.total_vendido += p.total ?? 0;
+      row.total_gorjeta += p.gorjeta_valor ?? 0;
+    }
+
+    for (const c of (comissoes ?? []) as any[]) {
+      const row = porGarcom.get(c.garcom_id);
+      if (!row) continue;
+      row.total_comissao += c.valor_calculado ?? 0;
+    }
+
+    for (const c of (comandasAtuais ?? []) as any[]) {
+      const row = porGarcom.get(c.garcom_id);
+      if (!row) continue;
+      if (c.status === 'aberta') row.comandas_abertas++;
+      if (c.status === 'fechada_garcom') row.comandas_pendentes++;
+    }
+
+    return { garcons: Array.from(porGarcom.values()) };
+  }
+
+  // Relatório Produtos: lista/sem-estoque/ativos-bloqueados são estado atual (não filtrados
+  // por período); vendas (quantidade/receita por produto) são recortadas pelo período de/ate.
+  async getRelatorioProdutos(restaurantId: number, de: string, ate: string) {
+    const { data: produtosData } = await this.supabase.client
+      .from('products')
+      .select('id, name, price, is_active, quantidade_estoque, category_id, categories(name)')
+      .eq('restaurant_id', restaurantId)
+      .order('name');
+
+    const produtos = (produtosData ?? []).map((p: any) => ({ ...p, category_name: p.categories?.name ?? 'Outros' }));
+
+    const { data: orders } = await this.supabase.client
+      .from('orders')
+      .select('id')
+      .eq('restaurant_id', restaurantId)
+      .gte('created_at', de)
+      .lte('created_at', ate)
+      .in('status', this.STATUS_VENDA_FINALIZADA);
+
+    const orderIds = (orders ?? []).map((o: any) => o.id);
+    const vendasPorProduto = new Map<number, { quantidade: number; receita: number }>();
+    if (orderIds.length) {
+      const { data: items } = await this.supabase.client
+        .from('order_items')
+        .select('product_id, quantity, unit_price')
+        .in('order_id', orderIds);
+      for (const i of (items ?? []) as any[]) {
+        if (!vendasPorProduto.has(i.product_id)) vendasPorProduto.set(i.product_id, { quantidade: 0, receita: 0 });
+        const row = vendasPorProduto.get(i.product_id)!;
+        row.quantidade += i.quantity ?? 0;
+        row.receita += (i.quantity ?? 0) * (i.unit_price ?? 0);
+      }
+    }
+
+    const vendas = produtos
+      .map((p: any) => ({
+        product_id: p.id,
+        name: p.name,
+        quantidade_vendida: vendasPorProduto.get(p.id)?.quantidade ?? 0,
+        receita: vendasPorProduto.get(p.id)?.receita ?? 0,
+      }))
+      .sort((a: any, b: any) => b.receita - a.receita);
+
+    return {
+      produtos,
+      sem_estoque: produtos.filter((p: any) => (p.quantidade_estoque ?? 0) <= 0),
+      ativos: produtos.filter((p: any) => p.is_active),
+      bloqueados: produtos.filter((p: any) => !p.is_active),
+      vendas,
     };
   }
 
