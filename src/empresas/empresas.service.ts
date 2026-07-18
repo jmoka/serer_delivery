@@ -12,7 +12,7 @@ export class EmpresasService {
   async listar(apenasAtivo?: boolean) {
     let query = this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, created_at')
+      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, created_at')
       .order('name');
 
     const { data, error } = await query;
@@ -112,9 +112,30 @@ export class EmpresasService {
   async atenderSolicitacaoDominio(id: number) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .update({ custom_domain_status: null, updated_at: new Date().toISOString() })
+      .update({
+        custom_domain_status: null,
+        custom_domain_motivo_recusa: null,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', id)
       .select('id, name, custom_domain, custom_domain_status')
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) throw new NotFoundException(`Empresa ${id} não encontrada`);
+    return data;
+  }
+
+  async recusarSolicitacaoDominio(id: number, motivo: string) {
+    const { data, error } = await this.supabase.client
+      .from('restaurants')
+      .update({
+        custom_domain_status: 'recusado',
+        custom_domain_motivo_recusa: motivo || 'Não especificado',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select('id, name, custom_domain, custom_domain_status, custom_domain_motivo_recusa')
       .maybeSingle();
 
     if (error) throw error;

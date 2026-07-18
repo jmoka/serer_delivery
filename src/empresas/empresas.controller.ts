@@ -54,6 +54,11 @@ export class EmpresasController {
     return this.service.atenderSolicitacaoDominio(id);
   }
 
+  @Patch(':id/dominio/recusar')
+  recusarSolicitacaoDominio(@Param('id', ParseIntPipe) id: number, @Body() body: { motivo?: string }) {
+    return this.service.recusarSolicitacaoDominio(id, body.motivo ?? '');
+  }
+
   @Get(':id/config')
   getConfig(@Param('id', ParseIntPipe) id: number) {
     return this.service.getConfig(id);
