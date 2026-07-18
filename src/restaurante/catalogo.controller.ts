@@ -2,6 +2,7 @@ import { Controller, Get, Headers, NotFoundException, Param, Query } from '@nest
 import { SupabaseService } from '../supabase/supabase.service';
 import { SupabaseJwtService } from '../auth/supabase-jwt.service';
 import { haversineKm } from '../common/geo.util';
+import { normalizarDominio } from '../common/dominio.util';
 import * as os from 'os';
 
 const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active';
@@ -175,6 +176,21 @@ export class CatalogoController {
     };
   }
 
+  // Resolução de domínio customizado — precisa vir ANTES de @Get(':slug') na
+  // ordem das rotas (mesma regra de 'filtros'/'produtos' acima).
+  @Get('by-domain/:host')
+  async cardapioPorDominio(@Param('host') host: string) {
+    const dominio = normalizarDominio(host);
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy')
+      .eq('custom_domain', dominio)
+      .maybeSingle();
+
+    if (!restaurante) throw new NotFoundException('Domínio não configurado');
+    return this.montarCardapio(restaurante);
+  }
+
   @Get(':slug')
   async cardapio(@Param('slug') slug: string) {
     const { data: restaurante } = await this.supabase.client
@@ -184,7 +200,10 @@ export class CatalogoController {
       .maybeSingle();
 
     if (!restaurante) throw new NotFoundException('Restaurante não encontrado');
+    return this.montarCardapio(restaurante);
+  }
 
+  private async montarCardapio(restaurante: any) {
     // Categorias do restaurante (próprias + globais para exibição)
     const { data: categorias } = await this.supabase.client
       .from('categories')
@@ -200,8 +219,6 @@ export class CatalogoController {
       .eq('restaurant_id', restaurante.id)
       .order('destaque', { ascending: false })
       .order('name');
-
-    const catSet = new Set((categorias ?? []).map((c) => c.id));
 
     const cardapio = (categorias ?? []).map((cat) => ({
       ...cat,

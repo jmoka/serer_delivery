@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { normalizarDominio, validarFormatoDominio, isDominioReservado } from '../common/dominio.util';
 import { CategoriasService } from '../categorias/categorias.service';
 import { ProdutosService } from '../produtos/produtos.service';
 import { PedidosService } from '../pedidos/pedidos.service';
@@ -20,7 +21,7 @@ export class RestauranteService {
   async minhaEmpresa(userId: string) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, business_hours, payment_config, comissao_pct, type_id, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, custom_domain, business_hours, payment_config, comissao_pct, type_id, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -512,6 +513,36 @@ export class RestauranteService {
         state: data?.state ?? null,
         cep: data?.cep ?? null,
       }).catch(() => {});
+    }
+
+    return data;
+  }
+
+  async atualizarDominio(restaurantId: number, customDomain: string | null | undefined) {
+    let valor: string | null = null;
+
+    if (customDomain != null && customDomain.trim() !== '') {
+      valor = normalizarDominio(customDomain);
+      if (!validarFormatoDominio(valor)) {
+        throw new BadRequestException('Domínio inválido. Use o formato "seusite.com", sem http:// ou barras.');
+      }
+      if (isDominioReservado(valor)) {
+        throw new BadRequestException('Esse domínio é reservado da plataforma e não pode ser usado.');
+      }
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('restaurants')
+      .update({ custom_domain: valor, updated_at: new Date().toISOString() })
+      .eq('id', restaurantId)
+      .select('id, custom_domain')
+      .maybeSingle();
+
+    if (error) {
+      if ((error as any).code === '23505') {
+        throw new ConflictException('Este domínio já está em uso por outro estabelecimento.');
+      }
+      throw error;
     }
 
     return data;
