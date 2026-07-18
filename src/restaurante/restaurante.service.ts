@@ -21,7 +21,7 @@ export class RestauranteService {
   async minhaEmpresa(userId: string) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, custom_domain, business_hours, payment_config, comissao_pct, type_id, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, custom_domain, custom_domain_status, business_hours, payment_config, comissao_pct, type_id, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -545,6 +545,32 @@ export class RestauranteService {
       throw error;
     }
 
+    return data;
+  }
+
+  async solicitarRevisaoDominio(restaurantId: number) {
+    const { data: atual } = await this.supabase.client
+      .from('restaurants')
+      .select('custom_domain')
+      .eq('id', restaurantId)
+      .maybeSingle();
+
+    if (!atual?.custom_domain) {
+      throw new BadRequestException('Salve um domínio antes de enviar a solicitação.');
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('restaurants')
+      .update({
+        custom_domain_status: 'pendente',
+        custom_domain_solicitado_em: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', restaurantId)
+      .select('id, custom_domain, custom_domain_status')
+      .maybeSingle();
+
+    if (error) throw error;
     return data;
   }
 
