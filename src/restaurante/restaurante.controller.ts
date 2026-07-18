@@ -301,6 +301,24 @@ export class RestauranteController {
     return this.service.relatorioFretes(req.restaurantId, periodo as any);
   }
 
+  @Get('relatorio/garcom')
+  relatorioGarcom(
+    @Req() req: any,
+    @Query('de') de: string,
+    @Query('ate') ate: string,
+  ) {
+    return this.service.getRelatorioGarcom(req.restaurantId, de, ate);
+  }
+
+  @Get('relatorio/produtos')
+  relatorioProdutos(
+    @Req() req: any,
+    @Query('de') de: string,
+    @Query('ate') ate: string,
+  ) {
+    return this.service.getRelatorioProdutos(req.restaurantId, de, ate);
+  }
+
   // ── Combos ──────────────────────────────────────────────────────────────────
 
   @Get('combos')
