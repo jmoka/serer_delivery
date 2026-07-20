@@ -42,7 +42,7 @@ export class RestauranteSalaoController {
     @Body() body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string },
     @Req() req: any,
   ) {
-    return this.service.abrirComanda(req.restaurantId, body);
+    return this.service.abrirComanda(req.restaurantId, req.userId, body);
   }
 
   @Post('venda-direta')
