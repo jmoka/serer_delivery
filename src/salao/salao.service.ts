@@ -560,9 +560,13 @@ export class SalaoService {
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
     linhas.push(new Date().toLocaleString('pt-BR'));
     linhas.push('--------------------------------');
+    const LARGURA_LINHA = 32;
     for (const item of itens) {
-      linhas.push(this.removerAcentos(`${item.quantity}x ${item.product_name ?? 'Produto'}`));
-      linhas.push(`R$ ${fmt((item.quantity ?? 0) * (item.unit_price ?? 0))}`);
+      const qtd = `${item.quantity}x`.padEnd(4);
+      const valorTxt = `R$ ${fmt((item.quantity ?? 0) * (item.unit_price ?? 0))}`;
+      const espacoDesc = Math.max(LARGURA_LINHA - qtd.length - valorTxt.length, 1);
+      const desc = this.removerAcentos(item.product_name ?? 'Produto').slice(0, espacoDesc).padEnd(espacoDesc);
+      linhas.push(`${qtd}${desc}${valorTxt}`);
     }
     linhas.push('--------------------------------');
     linhas.push(`Subtotal: R$ ${fmt(valores.subtotal)}`);
