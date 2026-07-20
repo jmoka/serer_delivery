@@ -23,7 +23,7 @@ export class SalaoPdvService {
 
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, total, status, numero_comanda, cliente_mesa_nome, garcons(nome)')
+      .select('id, mesa_id, garcom_id, total, status, numero_comanda, cliente_mesa_nome, garcons(nome), aberto_por_nome')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -60,7 +60,9 @@ export class SalaoPdvService {
 
   // Estabelecimento abre mesa/comanda direto (sem garçom envolvido) — mesma regra de
   // salao_modo e obrigatoriedade de nome/telefone do cliente do lado do garçom.
-  async abrirComanda(restaurantId: number, body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string }) {
+  // Guarda o primeiro nome de quem tava logado (aberto_por_nome) pro card da mesa
+  // mostrar "Caixa: nome" pro garçom e pro próprio estabelecimento.
+  async abrirComanda(restaurantId: number, userId: string, body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string }) {
     if (!body.cliente_nome || !body.cliente_telefone) {
       throw new BadRequestException('Nome e telefone do cliente são obrigatórios');
     }
@@ -87,6 +89,10 @@ export class SalaoPdvService {
     const { data: caixaAberto } = await this.supabase.client
       .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
 
+    const { data: userData } = await this.supabase.client.auth.admin.getUserById(userId);
+    const nomeCompleto = userData?.user?.user_metadata?.name as string | undefined;
+    const abertoPorNome = nomeCompleto?.trim().split(' ')[0] || null;
+
     const inicioDoDia = new Date();
     inicioDoDia.setHours(0, 0, 0, 0);
     const { count } = await this.supabase.client
@@ -106,6 +112,7 @@ export class SalaoPdvService {
         total: 0,
         caixa_id: caixaAberto?.id ?? null,
         numero_comanda: numeroComanda,
+        aberto_por_nome: abertoPorNome,
       })
       .select('id')
       .single();
@@ -121,7 +128,7 @@ export class SalaoPdvService {
   async comandasAbertas(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, status, payment_method, numero_comanda, created_at, mesas(numero, nome), garcons(nome)')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, status, payment_method, numero_comanda, created_at, mesas(numero, nome), garcons(nome), aberto_por_nome')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])

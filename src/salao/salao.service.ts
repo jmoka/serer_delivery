@@ -29,7 +29,7 @@ export class SalaoService {
     // clicar/entrar se a comanda for dele (ver garcom-portal, grid de mesas).
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, garcom_id, cliente_mesa_nome, total')
+      .select('id, mesa_id, garcom_id, cliente_mesa_nome, total, garcons(nome), aberto_por_nome')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
