@@ -417,6 +417,49 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
+  // Corrige nome/telefone do cliente digitados errado na abertura — o garçom só corrige
+  // enquanto a comanda ainda tá com ele (não faz sentido depois de paga/cancelada).
+  async editarClienteMesa(comandaId: number, garcomId: number, body: { cliente_nome: string; cliente_telefone: string }) {
+    const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Só é possível editar comandas abertas ou aguardando pagamento');
+    }
+    if (!body.cliente_nome?.trim() || !body.cliente_telefone?.trim()) {
+      throw new BadRequestException('Nome e telefone do cliente são obrigatórios');
+    }
+
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({ cliente_mesa_nome: body.cliente_nome.trim(), cliente_mesa_telefone: body.cliente_telefone.trim() })
+      .eq('id', comandaId);
+    if (error) throw error;
+
+    return this.obterComanda(comandaId, garcomId);
+  }
+
+  // Garçom só exclui a própria comanda antes de mandar qualquer item pra cozinha — depois
+  // disso é o estabelecimento que decide (cancelar via PDV), pra não sumir pedido em preparo.
+  async excluirComanda(comandaId: number, garcomId: number) {
+    const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+
+    const { data: itens } = await this.supabase.client
+      .from('order_items').select('id, status').eq('order_id', comandaId);
+    if ((itens ?? []).some((i: any) => i.status !== 'pendente')) {
+      throw new BadRequestException('Só é possível excluir a comanda antes de enviar algum item pra cozinha');
+    }
+
+    const { error } = await this.supabase.client.from('orders').update({ status: 'canceled' }).eq('id', comandaId);
+    if (error) throw error;
+
+    if (comanda.mesa_id) {
+      await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);
+    }
+    return { ok: true };
+  }
+
   // Marcador seguro pra "negrito desligado" — o comando ESC/POS real (ESC E 0x00) tem um
   // byte NUL, que o Postgres TEXT não aceita (quebra o insert). Guardamos esse marcador no
   // banco e só trocamos pelo byte real em printers.py, na hora de mandar pra impressora.
@@ -571,6 +614,84 @@ export class SalaoService {
       conteudo,
     });
     return { via: 'agente' };
+  }
+
+  // Ticket de conferência (ideia: cliente confere pedido antes de chamar o garçom pra
+  // fechar) — pedido pelo próprio cliente via QR (mesa-acompanhar), sem login. Só sai se
+  // o restaurante tem impressora do recibo pareada com agente local; celular do cliente
+  // não tem impressora térmica, então não existe fallback de navegador aqui.
+  formatarConferenciaTexto(
+    restauranteNome: string,
+    comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null },
+    itens: { product_name?: string; quantity: number; unit_price?: number }[],
+  ): string {
+    const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
+    const NEGRITO_ON = '\x1b\x45\x01';
+    const NEGRITO_OFF = SalaoService.MARCADOR_NEGRITO_OFF;
+
+    const linhas: string[] = [];
+    linhas.push('\x1b\x40');
+    linhas.push(this.removerAcentos(restauranteNome ?? 'RESTAURANTE'));
+    linhas.push('CONFERENCIA - NAO E RECIBO FISCAL');
+    if (comanda.mesas) {
+      linhas.push(this.removerAcentos(`Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}`));
+    }
+    if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
+    linhas.push(new Date().toLocaleString('pt-BR'));
+    linhas.push('--------------------------------');
+    let subtotal = 0;
+    for (const item of itens) {
+      const totalItem = (item.quantity ?? 0) * (item.unit_price ?? 0);
+      subtotal += totalItem;
+      linhas.push(this.removerAcentos(`${item.quantity}x ${item.product_name ?? 'Produto'}`));
+      linhas.push(`R$ ${fmt(totalItem)}`);
+    }
+    linhas.push('--------------------------------');
+    linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(subtotal)}${NEGRITO_OFF}`);
+    linhas.push('--------------------------------');
+    linhas.push('Peca ao garcom pra fechar a conta');
+    return linhas.join('\n');
+  }
+
+  async imprimirConferencia(token: string): Promise<{ ok: true; via: 'agente' } | { ok: false; motivo: 'sem_impressora' | 'nao_encontrada' }> {
+    const { data: comanda } = await this.supabase.client
+      .from('orders')
+      .select('id, restaurant_id, mesas(numero, nome), cliente_mesa_nome, restaurants(name, recibo_impressora_id)')
+      .eq('tracking_token', token)
+      .eq('canal', 'presencial')
+      .maybeSingle();
+    if (!comanda) return { ok: false, motivo: 'nao_encontrada' };
+
+    const impressoraId = (comanda as any).restaurants?.recibo_impressora_id;
+    if (!impressoraId) return { ok: false, motivo: 'sem_impressora' };
+
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, nome_sistema')
+      .eq('id', impressoraId)
+      .eq('restaurant_id', comanda.restaurant_id)
+      .maybeSingle();
+    if (!impressora?.nome_sistema) return { ok: false, motivo: 'sem_impressora' };
+
+    const { data: itens } = await this.supabase.client
+      .from('order_items')
+      .select('quantity, products(name, price)')
+      .eq('order_id', comanda.id);
+
+    const itensFormatados = (itens ?? []).map((i: any) => ({
+      product_name: i.products?.name,
+      quantity: i.quantity,
+      unit_price: i.products?.price,
+    }));
+
+    const conteudo = this.formatarConferenciaTexto((comanda as any).restaurants?.name, comanda as any, itensFormatados);
+    const { error } = await this.supabase.client.from('impressao_jobs').insert({
+      restaurant_id: comanda.restaurant_id,
+      impressora_id: impressoraId,
+      conteudo,
+    });
+    if (error) throw error;
+    return { ok: true, via: 'agente' };
   }
 
   async enviarItens(comandaId: number, garcomId: number) {

@@ -69,6 +69,20 @@ export class SalaoController {
     return this.service.removerItem(id, req.garcomId, itemId);
   }
 
+  @Patch('comandas/:id/cliente')
+  editarCliente(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { cliente_nome: string; cliente_telefone: string },
+    @Req() req: any,
+  ) {
+    return this.service.editarClienteMesa(id, req.garcomId, body);
+  }
+
+  @Delete('comandas/:id')
+  excluirComanda(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.excluirComanda(id, req.garcomId);
+  }
+
   @Post('comandas/:id/pagamento')
   registrarPagamento(
     @Param('id', ParseIntPipe) id: number,
