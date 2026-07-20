@@ -143,6 +143,7 @@ export class SalaoService {
     restaurantId: number,
     valorRecebido?: number,
     identificador?: string,
+    taxaCartaoValor?: number,
   ) {
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
@@ -155,7 +156,10 @@ export class SalaoService {
 
     const { error } = await this.supabase.client
       .from('comanda_pagamentos')
-      .insert({ order_id: comandaId, valor, forma_pagamento: formaPagamento, origem, valor_recebido: valorRecebido ?? null, troco });
+      .insert({
+        order_id: comandaId, valor, forma_pagamento: formaPagamento, origem,
+        valor_recebido: valorRecebido ?? null, troco, taxa_cartao_valor: taxaCartaoValor || null,
+      });
     if (error) throw error;
 
     if (troco && troco > 0) {
@@ -536,6 +540,7 @@ export class SalaoService {
       desconto?: number;
       acrescimo?: number;
       gorjeta?: number;
+      taxaCartao?: number;
       total: number;
       formaPagamento: string;
       trocoDado?: number;
@@ -564,6 +569,7 @@ export class SalaoService {
     if (valores.desconto) linhas.push(`Desconto: - R$ ${fmt(valores.desconto)}`);
     if (valores.acrescimo) linhas.push(`Acrescimo: + R$ ${fmt(valores.acrescimo)}`);
     if (valores.gorjeta) linhas.push(`Gorjeta: R$ ${fmt(valores.gorjeta)}`);
+    if (valores.taxaCartao) linhas.push(`Taxa cartao: + R$ ${fmt(valores.taxaCartao)}`);
     linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(valores.total)}${NEGRITO_OFF}`);
     if (pagamentos?.length) {
       linhas.push('--------------------------------');
@@ -588,7 +594,7 @@ export class SalaoService {
     restaurantId: number,
     comanda: any,
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
-    valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; total: number; formaPagamento: string; trocoDado?: number },
+    valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; total: number; formaPagamento: string; trocoDado?: number },
     pagamentos?: { valor: number; forma_pagamento: string; origem: string }[],
   ): Promise<{ via: 'agente' } | { via: 'navegador' }> {
     const { data: restaurante } = await this.supabase.client

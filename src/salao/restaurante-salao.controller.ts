@@ -37,6 +37,11 @@ export class RestauranteSalaoController {
     return this.service.comandasAbertas(req.restaurantId);
   }
 
+  @Get('comandas/fechadas-hoje')
+  comandasFechadasHoje(@Req() req: any) {
+    return this.service.comandasFechadasHoje(req.restaurantId);
+  }
+
   @Post('comandas/abrir')
   abrirComanda(
     @Body() body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string },
@@ -143,6 +148,16 @@ export class RestauranteSalaoController {
   @Post('comandas/:id/reabrir')
   reabrir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.reabrir(id, req.restaurantId);
+  }
+
+  @Post('comandas/:id/imprimir-conferencia')
+  imprimirConferencia(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.imprimirConferencia(id, req.restaurantId);
+  }
+
+  @Post('comandas/:id/reimprimir-recibo')
+  reimprimirRecibo(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.reimprimirRecibo(id, req.restaurantId);
   }
 
   @Post('comandas/:id/pagar')

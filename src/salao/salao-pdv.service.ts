@@ -137,6 +137,24 @@ export class SalaoPdvService {
     return data;
   }
 
+  // Cliente às vezes pede a comanda de novo pra conferência depois de já ter pago —
+  // lista só as fechadas hoje (paga), pra abrir no modal em modo leitura e reimprimir.
+  async comandasFechadasHoje(restaurantId: number) {
+    const inicioDoDia = new Date();
+    inicioDoDia.setHours(0, 0, 0, 0);
+    const { data, error } = await this.supabase.client
+      .from('orders')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, status, payment_method, numero_comanda, created_at, mesas(numero, nome), garcons(nome), aberto_por_nome')
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .eq('status', 'paga')
+      .gte('created_at', inicioDoDia.toISOString())
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return data;
+  }
+
   private async buscarComanda(id: number, restaurantId: number) {
     const { data } = await this.supabase.client
       .from('orders')
@@ -158,7 +176,7 @@ export class SalaoPdvService {
       .order('id', { ascending: true });
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, valor, forma_pagamento, origem, criado_em')
+      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
     const saldo = await this.salaoService.saldoDevedor(id);
@@ -172,7 +190,8 @@ export class SalaoPdvService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
     const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
-    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador);
+    const taxaCartaoValor = await this.calcularTaxaCartao(restaurantId, valor, formaPagamento);
+    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador, taxaCartaoValor);
   }
 
   private async buscarPagamento(comandaId: number, pagamentoId: number) {
@@ -197,9 +216,10 @@ export class SalaoPdvService {
 
     await this.buscarPagamento(comandaId, pagamentoId);
 
+    const taxaCartaoValor = await this.calcularTaxaCartao(restaurantId, valor, formaPagamento);
     const { error } = await this.supabase.client
       .from('comanda_pagamentos')
-      .update({ valor, forma_pagamento: formaPagamento })
+      .update({ valor, forma_pagamento: formaPagamento, taxa_cartao_valor: taxaCartaoValor || null })
       .eq('id', pagamentoId);
     if (error) throw error;
 
@@ -526,6 +546,49 @@ export class SalaoPdvService {
     return { ok: true };
   }
 
+  // Caixa pede a conferência antes de fechar — mesma lógica de impressão do QR do cliente
+  // (mesa-acompanhar), mas autenticada pelo dono e sem depender do tracking_token.
+  async imprimirConferencia(id: number, restaurantId: number): Promise<{ ok: true; via: 'agente' | 'navegador' }> {
+    const comanda = await this.buscarComanda(id, restaurantId);
+
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('name, recibo_impressora_id')
+      .eq('id', restaurantId)
+      .maybeSingle();
+
+    const impressoraId = restaurante?.recibo_impressora_id;
+    if (!impressoraId) return { ok: true, via: 'navegador' };
+
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, nome_sistema')
+      .eq('id', impressoraId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!impressora?.nome_sistema) return { ok: true, via: 'navegador' };
+
+    const { data: itens } = await this.supabase.client
+      .from('order_items')
+      .select('quantity, products(name, price)')
+      .eq('order_id', id);
+
+    const itensFormatados = (itens ?? []).map((i: any) => ({
+      product_name: i.products?.name,
+      quantity: i.quantity,
+      unit_price: i.products?.price,
+    }));
+
+    const conteudo = this.salaoService.formatarConferenciaTexto(restaurante?.name, comanda, itensFormatados);
+    const { error } = await this.supabase.client.from('impressao_jobs').insert({
+      restaurant_id: restaurantId,
+      impressora_id: impressoraId,
+      conteudo,
+    });
+    if (error) throw error;
+    return { ok: true, via: 'agente' };
+  }
+
   // Cliente pediu pra continuar consumindo depois de já ter fechado a conta —
   // volta a comanda pro garçom (status aberta) e destrava a mesa pra atendimento normal.
   async reabrir(id: number, restaurantId: number) {
@@ -583,6 +646,20 @@ export class SalaoPdvService {
     return { percentual, valor_sugerido: parseFloat(((subtotal * percentual) / 100).toFixed(2)) };
   }
 
+  // Débito/crédito acrescentam a taxa configurada em Config > "Taxa do cartão" — o valor
+  // cobrado do cliente aumenta, PIX e dinheiro não são afetados.
+  private async calcularTaxaCartao(restaurantId: number, valor: number, formaPagamento: string): Promise<number> {
+    if (formaPagamento !== 'credit_card' && formaPagamento !== 'debit_card') return 0;
+    if (!(valor > 0)) return 0;
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('taxa_cartao_percentual')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    const percentual = restaurante?.taxa_cartao_percentual ?? 0;
+    return parseFloat(((valor * percentual) / 100).toFixed(2));
+  }
+
   async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number) {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
@@ -599,8 +676,10 @@ export class SalaoPdvService {
     // o ledger de comanda_pagamentos fica completo pra conferência.
     const { saldo } = await this.salaoService.saldoDevedor(id);
     const gorjeta = gorjetaValor ?? 0;
+    const valorACobrarBase = parseFloat((saldo + gorjeta).toFixed(2));
+    const taxaCartaoValor = await this.calcularTaxaCartao(restaurantId, valorACobrarBase, formaPagamento);
     // Em dinheiro, o cliente entrega pro que falta da comanda + gorjeta juntos nesse momento.
-    const valorACobrar = parseFloat((saldo + gorjeta).toFixed(2));
+    const valorACobrar = parseFloat((valorACobrarBase + taxaCartaoValor).toFixed(2));
     let troco: number | null = null;
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valorACobrar) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
@@ -608,7 +687,7 @@ export class SalaoPdvService {
     }
 
     if (saldo > 0.01) {
-      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento, restaurantId);
+      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento, restaurantId, undefined, undefined, taxaCartaoValor);
     }
 
     if (formaPagamento === 'cash') {
@@ -660,6 +739,7 @@ export class SalaoPdvService {
         desconto: comanda.desconto_valor ?? 0,
         acrescimo: comanda.acrescimo_valor ?? 0,
         gorjeta,
+        taxaCartao: taxaCartaoValor,
         total: parseFloat(totalFinal.toFixed(2)),
         formaPagamento,
         trocoDado: troco && troco > 0 ? troco : 0,
@@ -667,6 +747,47 @@ export class SalaoPdvService {
       pagamentos ?? [],
     );
 
-    return { ok: true, total: parseFloat(totalFinal.toFixed(2)), troco, recibo, pagamentos: pagamentos ?? [] };
+    return {
+      ok: true, total: parseFloat(totalFinal.toFixed(2)),
+      taxa_cartao_valor: taxaCartaoValor, valor_cobrado: valorACobrar,
+      troco, recibo, pagamentos: pagamentos ?? [],
+    };
+  }
+
+  // Cliente pede a comanda de novo pra conferência mesmo já tendo pago — reimprime o
+  // mesmo recibo (mesma lógica de agente/navegador do pagamento original).
+  async reimprimirRecibo(id: number, restaurantId: number) {
+    const comanda = await this.buscarComanda(id, restaurantId);
+    if (comanda.status !== 'paga') throw new BadRequestException('Só é possível reimprimir recibo de comanda já paga');
+
+    const { data: itens } = await this.supabase.client
+      .from('order_items').select('quantity, unit_price, products(name)').eq('order_id', id);
+    const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor')
+      .eq('order_id', id)
+      .order('criado_em', { ascending: true });
+
+    const taxaCartaoValor = (pagamentos ?? []).reduce((acc: number, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
+
+    const recibo = await this.salaoService.imprimirReciboSeConfigurado(
+      restaurantId, comanda,
+      (itens ?? []).map((i: any) => ({ product_name: i.products?.name, quantity: i.quantity, unit_price: i.unit_price })),
+      {
+        subtotal,
+        desconto: comanda.desconto_valor ?? 0,
+        acrescimo: comanda.acrescimo_valor ?? 0,
+        gorjeta: comanda.gorjeta_valor ?? 0,
+        taxaCartao: taxaCartaoValor,
+        total: comanda.total,
+        formaPagamento: comanda.payment_method,
+        trocoDado: 0,
+      },
+      pagamentos ?? [],
+    );
+
+    return { ok: true, recibo, subtotal, taxa_cartao_valor: taxaCartaoValor, pagamentos: pagamentos ?? [] };
   }
 }
