@@ -140,6 +140,11 @@ export class RestauranteSalaoController {
     return this.service.cancelar(id, req.restaurantId);
   }
 
+  @Post('comandas/:id/reabrir')
+  reabrir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.reabrir(id, req.restaurantId);
+  }
+
   @Post('comandas/:id/pagar')
   pagar(
     @Param('id', ParseIntPipe) id: number,

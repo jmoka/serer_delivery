@@ -526,6 +526,23 @@ export class SalaoPdvService {
     return { ok: true };
   }
 
+  // Cliente pediu pra continuar consumindo depois de já ter fechado a conta —
+  // volta a comanda pro garçom (status aberta) e destrava a mesa pra atendimento normal.
+  async reabrir(id: number, restaurantId: number) {
+    const comanda = await this.buscarComanda(id, restaurantId);
+    if (comanda.status !== 'fechada_garcom') {
+      throw new BadRequestException('Só é possível reabrir comandas aguardando pagamento');
+    }
+
+    const { error } = await this.supabase.client.from('orders').update({ status: 'aberta' }).eq('id', id);
+    if (error) throw error;
+
+    if (comanda.mesa_id) {
+      await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', comanda.mesa_id);
+    }
+    return { ok: true };
+  }
+
   private async lancarComissoes(comanda: any, subtotal: number, totalFinal: number) {
     if (!comanda.garcom_id) return;
 
