@@ -275,6 +275,11 @@ export class RestauranteController {
     return this.service.iniciarPreparoItem(id, req.restaurantId);
   }
 
+  @Patch('kds/itens/:id/voltar')
+  kdsVoltar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.voltarStatusItem(id, req.restaurantId);
+  }
+
   @Post('kds/itens/:id/reimprimir')
   kdsReimprimir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.salaoService.reimprimirItem(id, req.restaurantId);

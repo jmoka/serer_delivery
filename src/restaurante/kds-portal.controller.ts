@@ -37,6 +37,11 @@ export class KdsPortalController {
     return this.service.iniciarPreparoItem(id, req.cozinhaRestaurantId);
   }
 
+  @Patch('itens/:id/voltar')
+  voltar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.voltarStatusItem(id, req.cozinhaRestaurantId);
+  }
+
   @Post('itens/:id/reimprimir')
   reimprimir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.salaoService.reimprimirItem(id, req.cozinhaRestaurantId);

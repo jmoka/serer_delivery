@@ -774,11 +774,14 @@ export class RestauranteService {
   // (cozinha, bar, salgados...) — lista PLANA de itens (não agrupa por mesa/comanda,
   // cada item tem sua própria ação de preparo/impressão), ordenada por chegada.
   async getKdsSetor(restaurantId: number, impressoraId: number) {
+    // Itens "pronto" recentes (últimos 10min) também entram — sem isso, um clique errado
+    // em "Entregue"/"Pronto" faz o item sumir da tela sem chance de desfazer.
+    const limiteProntos = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
-      .in('status', ['enviado', 'preparando'])
+      .or(`status.in.(enviado,preparando),and(status.eq.pronto,pronto_em.gte.${limiteProntos})`)
       .order('enviado_em', { ascending: true });
     if (error) throw error;
 
@@ -806,6 +809,7 @@ export class RestauranteService {
           status: i.status,
           enviado_em: i.enviado_em,
           preparando_em: i.preparando_em,
+          pronto_em: i.pronto_em,
           tipo: ehSalao ? 'salao' : 'delivery',
           mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
           cliente: i.orders?.cliente_mesa_nome ?? (i.orders?.customer_id ? customerMap[i.orders.customer_id] ?? null : null),
@@ -856,6 +860,40 @@ export class RestauranteService {
     const { error } = await this.supabase.client.from('order_items').update({ status: 'pronto', pronto_em: new Date().toISOString() }).eq('id', itemId);
     if (error) throw error;
     return { ok: true };
+  }
+
+  // Desfaz clique errado na Cozinha/Bar — volta um passo (pronto -> preparando ->
+  // enviado/aguardando). "Enviado" já é o início da fila do KDS, não dá pra voltar mais.
+  async voltarStatusItem(itemId: number, restaurantId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, order_id, orders(restaurant_id)')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
+    }
+
+    if (item.status === 'pronto') {
+      const { error } = await this.supabase.client
+        .from('order_items')
+        .update({ status: 'preparando', pronto_em: null })
+        .eq('id', itemId);
+      if (error) throw error;
+      return { ok: true, status: 'preparando' };
+    }
+
+    if (item.status === 'preparando') {
+      const { error } = await this.supabase.client
+        .from('order_items')
+        .update({ status: 'enviado', preparando_em: null })
+        .eq('id', itemId);
+      if (error) throw error;
+      return { ok: true, status: 'enviado' };
+    }
+
+    throw new BadRequestException('Item já está aguardando — não dá pra voltar mais');
   }
 
   private readonly STATUS_ABERTOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery'];
@@ -970,14 +1008,6 @@ export class RestauranteService {
       const { data: expirado } = await this.supabase.client
         .from('caixas').select('*').eq('restaurant_id', restaurantId).eq('status', 'expirado').maybeSingle();
       return { status_restaurante, aberto: false, expirado: !!expirado, caixa_expirado: expirado ?? null, pedidos: [], resumo: null, saldo_caixa, saldo_fechados_pendente };
-    }
-
-    // Auto-expirar após 8h
-    const aberto_em = new Date(caixa.aberto_em);
-    const oitoHoras = 8 * 60 * 60 * 1000;
-    if (Date.now() - aberto_em.getTime() > oitoHoras) {
-      await this.supabase.client.from('caixas').update({ status: 'expirado' }).eq('id', caixa.id);
-      return { status_restaurante, aberto: false, expirado: true, caixa_expirado: { ...caixa, status: 'expirado' }, pedidos: [], resumo: null, saldo_caixa, saldo_fechados_pendente };
     }
 
     const { data: ordersData } = await this.supabase.client
