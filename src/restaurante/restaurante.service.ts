@@ -1071,7 +1071,7 @@ export class RestauranteService {
     return this.getCaixa(restaurantId);
   }
 
-  async fecharCaixa(restaurantId: number, body?: { dinheiro_contado?: number }) {
+  async fecharCaixa(restaurantId: number, body?: { dinheiro_contado?: number; permitir_pendencias?: boolean }) {
     const { data: caixa } = await this.supabase.client
       .from('caixas').select('*').eq('restaurant_id', restaurantId)
       .in('status', ['aberto', 'expirado']).maybeSingle();
@@ -1096,7 +1096,9 @@ export class RestauranteService {
       .eq('restaurant_id', restaurantId)
       .neq('status', 'livre');
 
-    if ((pedidosAbertos ?? []).length > 0 || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0) {
+    const temPendencias = (pedidosAbertos ?? []).length > 0 || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0;
+
+    if (temPendencias && !body?.permitir_pendencias) {
       throw new ConflictException({
         message: 'Existem pendências em aberto: feche os pedidos, comandas e mesas antes de fechar o caixa',
         pedidos_abertos: pedidosAbertos?.length ?? 0,
@@ -1130,7 +1132,13 @@ export class RestauranteService {
     };
 
     await this.supabase.client.from('caixas')
-      .update({ status: 'fechado', fechado_em, resumo, destinacao_fechamento })
+      .update({
+        status: 'fechado', fechado_em, resumo, destinacao_fechamento,
+        fechado_com_pendencias: temPendencias,
+        pendencias_fechamento: temPendencias
+          ? { pedidos: pedidosAbertos ?? [], comandas: comandasAbertas ?? [], mesas: mesasAbertas ?? [] }
+          : null,
+      })
       .eq('id', caixa.id);
 
     // Sem caixa aberto não há como aceitar pedidos/comandas — fecha o restaurante junto
@@ -1140,7 +1148,13 @@ export class RestauranteService {
     await this.supabase.client.from('restaurants')
       .update({ saldo_caixa: Math.max(0, dinheiro_contado) }).eq('id', restaurantId);
 
-    return { fechamento: { id: caixa.id, aberto_em: caixa.aberto_em, fechado_em, nome_operador: caixa.nome_operador, valor_inicial: caixa.valor_inicial, saidas, resumo, destinacao_fechamento } };
+    return {
+      fechamento: {
+        id: caixa.id, aberto_em: caixa.aberto_em, fechado_em, nome_operador: caixa.nome_operador,
+        valor_inicial: caixa.valor_inicial, saidas, resumo, destinacao_fechamento,
+        fechado_com_pendencias: temPendencias,
+      },
+    };
   }
 
   async aprovarConferencia(restaurantId: number, caixaId: number) {

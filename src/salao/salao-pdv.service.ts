@@ -704,7 +704,14 @@ export class SalaoPdvService {
       if (troco && troco > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
     }
 
+    // Se a comanda ficou pendente (fiado) num caixa que já fechou, realoca pro caixa
+    // que estiver aberto agora, no momento do pagamento — não fica presa a um caixa fechado.
     let caixaId = comanda.caixa_id;
+    if (caixaId) {
+      const { data: caixaAtual } = await this.supabase.client
+        .from('caixas').select('status').eq('id', caixaId).maybeSingle();
+      if (caixaAtual?.status !== 'aberto') caixaId = null;
+    }
     if (!caixaId) {
       const { data: caixaAberto } = await this.supabase.client
         .from('caixas')
