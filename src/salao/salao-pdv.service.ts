@@ -548,7 +548,11 @@ export class SalaoPdvService {
 
   // Caixa pede a conferência antes de fechar — mesma lógica de impressão do QR do cliente
   // (mesa-acompanhar), mas autenticada pelo dono e sem depender do tracking_token.
-  async imprimirConferencia(id: number, restaurantId: number): Promise<{ ok: true; via: 'agente' | 'navegador' }> {
+  async imprimirConferencia(
+    id: number,
+    restaurantId: number,
+    valores?: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
+  ): Promise<{ ok: true; via: 'agente' | 'navegador' }> {
     const comanda = await this.buscarComanda(id, restaurantId);
 
     const { data: restaurante } = await this.supabase.client
@@ -579,7 +583,7 @@ export class SalaoPdvService {
       unit_price: i.products?.price,
     }));
 
-    const conteudo = this.salaoService.formatarConferenciaTexto(restaurante?.name, comanda, itensFormatados);
+    const conteudo = this.salaoService.formatarConferenciaTexto(restaurante?.name, comanda, itensFormatados, valores);
     const { error } = await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,

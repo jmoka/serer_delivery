@@ -626,18 +626,21 @@ export class SalaoService {
     return { via: 'agente' };
   }
 
-  // Ticket de conferência (ideia: cliente confere pedido antes de chamar o garçom pra
-  // fechar) — pedido pelo próprio cliente via QR (mesa-acompanhar), sem login. Só sai se
-  // o restaurante tem impressora do recibo pareada com agente local; celular do cliente
-  // não tem impressora térmica, então não existe fallback de navegador aqui.
+  // Ticket de conferência. Dois usos:
+  // 1) pedido pelo caixa/garçom já logado, antes de fechar a conta — aí `valores` vem
+  //    preenchido com o que está na tela (desconto/acréscimo/gorjeta/taxa/forma).
+  // 2) pedido pelo próprio cliente via QR (mesa-acompanhar), sem login — cliente ainda
+  //    não escolheu forma de pagamento nem gorjeta, então `valores` fica de fora.
   formatarConferenciaTexto(
     restauranteNome: string,
     comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null },
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
+    valores?: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
   ): string {
     const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
     const NEGRITO_ON = '\x1b\x45\x01';
     const NEGRITO_OFF = SalaoService.MARCADOR_NEGRITO_OFF;
+    const PAGAMENTO_LABEL: Record<string, string> = { pix: 'PIX', credit_card: 'Cartao', debit_card: 'Debito', cash: 'Dinheiro' };
 
     const linhas: string[] = [];
     linhas.push('\x1b\x40');
@@ -657,7 +660,19 @@ export class SalaoService {
       linhas.push(`R$ ${fmt(totalItem)}`);
     }
     linhas.push('--------------------------------');
-    linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(subtotal)}${NEGRITO_OFF}`);
+    if (valores) {
+      const { desconto = 0, acrescimo = 0, gorjeta = 0, taxaCartao = 0, formaPagamento } = valores;
+      const total = subtotal - desconto + acrescimo + gorjeta + taxaCartao;
+      linhas.push(`Subtotal: R$ ${fmt(subtotal)}`);
+      if (desconto) linhas.push(`Desconto: - R$ ${fmt(desconto)}`);
+      if (acrescimo) linhas.push(`Acrescimo: + R$ ${fmt(acrescimo)}`);
+      if (gorjeta) linhas.push(`Gorjeta: + R$ ${fmt(gorjeta)}`);
+      if (taxaCartao) linhas.push(`Taxa cartao: + R$ ${fmt(taxaCartao)}`);
+      linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(total)}${NEGRITO_OFF}`);
+      if (formaPagamento) linhas.push(`Forma de pagamento: ${PAGAMENTO_LABEL[formaPagamento] ?? formaPagamento}`);
+    } else {
+      linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(subtotal)}${NEGRITO_OFF}`);
+    }
     linhas.push('--------------------------------');
     linhas.push('Peca ao garcom pra fechar a conta');
     return linhas.join('\n');
