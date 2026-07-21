@@ -151,8 +151,12 @@ export class RestauranteSalaoController {
   }
 
   @Post('comandas/:id/imprimir-conferencia')
-  imprimirConferencia(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.service.imprimirConferencia(id, req.restaurantId);
+  imprimirConferencia(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
+    @Req() req: any,
+  ) {
+    return this.service.imprimirConferencia(id, req.restaurantId, body);
   }
 
   @Post('comandas/:id/reimprimir-recibo')
