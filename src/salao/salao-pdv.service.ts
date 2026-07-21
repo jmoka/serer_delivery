@@ -551,9 +551,13 @@ export class SalaoPdvService {
   async imprimirConferencia(
     id: number,
     restaurantId: number,
-    valores?: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
+    valores: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string } = {},
   ): Promise<{ ok: true; via: 'agente' | 'navegador' }> {
     const comanda = await this.buscarComanda(id, restaurantId);
+
+    // Caixa atendeu a conferência agora — limpa o pedido do cliente (se houver) pra
+    // sumir o aviso na tela do garçom/mesas.
+    await this.supabase.client.from('orders').update({ conferencia_solicitada_em: null }).eq('id', id);
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')

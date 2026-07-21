@@ -11,8 +11,8 @@ export class MesaAcompanharController {
     return this.service.acompanharPorToken(token);
   }
 
-  @Post(':token/imprimir-conferencia')
-  imprimirConferencia(@Param('token') token: string) {
-    return this.service.imprimirConferencia(token);
+  @Post(':token/solicitar-conferencia')
+  solicitarConferencia(@Param('token') token: string) {
+    return this.service.solicitarConferencia(token);
   }
 }

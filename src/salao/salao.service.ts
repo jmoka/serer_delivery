@@ -29,7 +29,7 @@ export class SalaoService {
     // clicar/entrar se a comanda for dele (ver garcom-portal, grid de mesas).
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, garcom_id, cliente_mesa_nome, total, garcons(nome), aberto_por_nome')
+      .select('id, mesa_id, garcom_id, cliente_mesa_nome, total, garcons(nome), aberto_por_nome, conferencia_solicitada_em')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -44,7 +44,7 @@ export class SalaoService {
   async acompanharPorToken(token: string) {
     const { data: comanda } = await this.supabase.client
       .from('orders')
-      .select('id, status, mesas(numero, nome), restaurants(name)')
+      .select('id, status, conferencia_solicitada_em, mesas(numero, nome), restaurants(name)')
       .eq('tracking_token', token)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -59,6 +59,7 @@ export class SalaoService {
       restaurante: (comanda as any).restaurants?.name,
       mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : null,
       status: comanda.status,
+      conferencia_solicitada_em: (comanda as any).conferencia_solicitada_em,
       itens: (itens ?? []).map((i: any) => ({
         quantity: i.quantity,
         status: i.status,
@@ -268,7 +269,7 @@ export class SalaoService {
   async minhasComandas(garcomId: number) {
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at, conferencia_solicitada_em')
       .eq('garcom_id', garcomId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -626,16 +627,14 @@ export class SalaoService {
     return { via: 'agente' };
   }
 
-  // Ticket de conferência. Dois usos:
-  // 1) pedido pelo caixa/garçom já logado, antes de fechar a conta — aí `valores` vem
-  //    preenchido com o que está na tela (desconto/acréscimo/gorjeta/taxa/forma).
-  // 2) pedido pelo próprio cliente via QR (mesa-acompanhar), sem login — cliente ainda
-  //    não escolheu forma de pagamento nem gorjeta, então `valores` fica de fora.
+  // Ticket de conferência pedido pelo caixa antes de fechar a conta — `valores` vem
+  // preenchido com o que está na tela (desconto/acréscimo/gorjeta/taxa/forma). O
+  // cliente (QR, sem login) só pode solicitar conferência, nunca gerar isso direto.
   formatarConferenciaTexto(
     restauranteNome: string,
     comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null },
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
-    valores?: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
+    valores: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
   ): string {
     const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
     const NEGRITO_ON = '\x1b\x45\x01';
@@ -660,63 +659,40 @@ export class SalaoService {
       linhas.push(`R$ ${fmt(totalItem)}`);
     }
     linhas.push('--------------------------------');
-    if (valores) {
-      const { desconto = 0, acrescimo = 0, gorjeta = 0, taxaCartao = 0, formaPagamento } = valores;
-      const total = subtotal - desconto + acrescimo + gorjeta + taxaCartao;
-      linhas.push(`Subtotal: R$ ${fmt(subtotal)}`);
-      if (desconto) linhas.push(`Desconto: - R$ ${fmt(desconto)}`);
-      if (acrescimo) linhas.push(`Acrescimo: + R$ ${fmt(acrescimo)}`);
-      if (gorjeta) linhas.push(`Gorjeta: + R$ ${fmt(gorjeta)}`);
-      if (taxaCartao) linhas.push(`Taxa cartao: + R$ ${fmt(taxaCartao)}`);
-      linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(total)}${NEGRITO_OFF}`);
-      if (formaPagamento) linhas.push(`Forma de pagamento: ${PAGAMENTO_LABEL[formaPagamento] ?? formaPagamento}`);
-    } else {
-      linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(subtotal)}${NEGRITO_OFF}`);
-    }
+    const { desconto = 0, acrescimo = 0, gorjeta = 0, taxaCartao = 0, formaPagamento } = valores;
+    const total = subtotal - desconto + acrescimo + gorjeta + taxaCartao;
+    linhas.push(`Subtotal: R$ ${fmt(subtotal)}`);
+    if (desconto) linhas.push(`Desconto: - R$ ${fmt(desconto)}`);
+    if (acrescimo) linhas.push(`Acrescimo: + R$ ${fmt(acrescimo)}`);
+    if (gorjeta) linhas.push(`Gorjeta: + R$ ${fmt(gorjeta)}`);
+    if (taxaCartao) linhas.push(`Taxa cartao: + R$ ${fmt(taxaCartao)}`);
+    linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(total)}${NEGRITO_OFF}`);
+    if (formaPagamento) linhas.push(`Forma de pagamento: ${PAGAMENTO_LABEL[formaPagamento] ?? formaPagamento}`);
     linhas.push('--------------------------------');
     linhas.push('Peca ao garcom pra fechar a conta');
     return linhas.join('\n');
   }
 
-  async imprimirConferencia(token: string): Promise<{ ok: true; via: 'agente' } | { ok: false; motivo: 'sem_impressora' | 'nao_encontrada' }> {
+  // Cliente só pode SOLICITAR conferência (sem login, tela pública) — nunca mandar
+  // nada pra impressão direto. Só marca o pedido; quem imprime de fato é o caixa,
+  // via imprimirConferencia do PDV (que também limpa esse campo ao atender).
+  async solicitarConferencia(token: string): Promise<{ ok: true } | { ok: false; motivo: 'nao_encontrada' }> {
     const { data: comanda } = await this.supabase.client
       .from('orders')
-      .select('id, restaurant_id, mesas(numero, nome), cliente_mesa_nome, restaurants(name, recibo_impressora_id)')
+      .select('id')
       .eq('tracking_token', token)
       .eq('canal', 'presencial')
+      .in('status', ['aberta', 'fechada_garcom'])
       .maybeSingle();
     if (!comanda) return { ok: false, motivo: 'nao_encontrada' };
 
-    const impressoraId = (comanda as any).restaurants?.recibo_impressora_id;
-    if (!impressoraId) return { ok: false, motivo: 'sem_impressora' };
-
-    const { data: impressora } = await this.supabase.client
-      .from('impressoras')
-      .select('id, nome_sistema')
-      .eq('id', impressoraId)
-      .eq('restaurant_id', comanda.restaurant_id)
-      .maybeSingle();
-    if (!impressora?.nome_sistema) return { ok: false, motivo: 'sem_impressora' };
-
-    const { data: itens } = await this.supabase.client
-      .from('order_items')
-      .select('quantity, products(name, price)')
-      .eq('order_id', comanda.id);
-
-    const itensFormatados = (itens ?? []).map((i: any) => ({
-      product_name: i.products?.name,
-      quantity: i.quantity,
-      unit_price: i.products?.price,
-    }));
-
-    const conteudo = this.formatarConferenciaTexto((comanda as any).restaurants?.name, comanda as any, itensFormatados);
-    const { error } = await this.supabase.client.from('impressao_jobs').insert({
-      restaurant_id: comanda.restaurant_id,
-      impressora_id: impressoraId,
-      conteudo,
-    });
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({ conferencia_solicitada_em: new Date().toISOString() })
+      .eq('id', comanda.id)
+      .is('conferencia_solicitada_em', null);
     if (error) throw error;
-    return { ok: true, via: 'agente' };
+    return { ok: true };
   }
 
   async enviarItens(comandaId: number, garcomId: number) {
