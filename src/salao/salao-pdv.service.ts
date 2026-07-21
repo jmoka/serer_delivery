@@ -138,18 +138,22 @@ export class SalaoPdvService {
   }
 
   // Cliente às vezes pede a comanda de novo pra conferência depois de já ter pago —
-  // lista só as fechadas hoje (paga), pra abrir no modal em modo leitura e reimprimir.
+  // lista as fechadas hoje (paga), pra abrir no modal em modo leitura e reimprimir.
+  // Filtra por pago_em (data real do pagamento), não created_at — uma comanda aberta
+  // ontem e paga hoje precisa aparecer aqui, senão some das duas listas (aberta já não
+  // é mais, fechada-hoje não entrava por causa da data de abertura).
   async comandasFechadasHoje(restaurantId: number) {
     const inicioDoDia = new Date();
     inicioDoDia.setHours(0, 0, 0, 0);
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, status, payment_method, numero_comanda, created_at, mesas(numero, nome), garcons(nome), aberto_por_nome')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, gorjeta_valor, status, payment_method, numero_comanda, created_at, pago_em, mesas(numero, nome), garcons(nome), aberto_por_nome')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .eq('status', 'paga')
-      .gte('created_at', inicioDoDia.toISOString())
-      .order('created_at', { ascending: false })
+      // Pedidos antigos (antes dessa coluna existir) não têm pago_em — cai no fallback por created_at.
+      .or(`pago_em.gte.${inicioDoDia.toISOString()},and(pago_em.is.null,created_at.gte.${inicioDoDia.toISOString()})`)
+      .order('pago_em', { ascending: false, nullsFirst: false })
       .limit(50);
     if (error) throw error;
     return data;
@@ -298,7 +302,7 @@ export class SalaoPdvService {
 
     const { error: errFechar } = await this.supabase.client
       .from('orders')
-      .update({ status: 'paga', payment_method: formaPagamento })
+      .update({ status: 'paga', payment_method: formaPagamento, pago_em: new Date().toISOString() })
       .eq('id', venda.id);
     if (errFechar) throw errFechar;
 
@@ -730,6 +734,7 @@ export class SalaoPdvService {
         total: parseFloat(totalFinal.toFixed(2)),
         gorjeta_valor: gorjetaValor ?? null,
         caixa_id: caixaId,
+        pago_em: new Date().toISOString(),
       })
       .eq('id', id);
     if (error) throw error;
