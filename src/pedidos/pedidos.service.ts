@@ -238,12 +238,14 @@ export class PedidosService {
       this.geocodificarEnderecoCliente(customerId).catch(() => {});
     }
 
-    // Busca caixa aberto para vincular o pedido
+    // Busca o caixa principal aberto pra vincular o pedido — pedido de delivery não tem
+    // operador escolhendo caixa, sempre cai no principal (é o mesmo que já recebe entradas/saídas do motoboy).
     const { data: caixaAberto } = await this.supabase.client
       .from('caixas')
       .select('id')
       .eq('restaurant_id', body.restaurant_id)
       .eq('status', 'aberto')
+      .eq('is_principal', true)
       .maybeSingle();
 
     // Cria pedido

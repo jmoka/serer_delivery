@@ -5,6 +5,7 @@ export interface AbrirComandaBody {
   mesa_id?: number;
   cliente_nome: string;
   cliente_telefone: string;
+  caixa_id?: number;
 }
 
 export interface ItemComandaBody {
@@ -94,6 +95,15 @@ export class SalaoService {
   }
 
   // Saldo devedor considerando pagamentos parciais já registrados (garçom ou caixa).
+  // Lista enxuta (id + nome) dos caixas abertos — usada pra garçom/operador escolher
+  // em qual caixa lançar, sem expor dado financeiro (resumo/saidas/entradas).
+  async caixasAbertosResumido(restaurantId: number) {
+    const { data } = await this.supabase.client
+      .from('caixas').select('id, nome, is_principal').eq('restaurant_id', restaurantId).eq('status', 'aberto')
+      .order('aberto_em', { ascending: true });
+    return data ?? [];
+  }
+
   async saldoDevedor(comandaId: number) {
     const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
     const { data: comanda } = await this.supabase.client
@@ -117,14 +127,11 @@ export class SalaoService {
 
   // Lança uma saída automática no caixa aberto do restaurante — usado pra registrar troco
   // dado e gorjeta paga em dinheiro, sem o caixa precisar lançar isso manualmente depois.
-  async registrarSaidaCaixa(restaurantId: number, descricao: string, valor: number, tipo: 'troco' | 'gorjeta') {
+  async registrarSaidaCaixa(restaurantId: number, descricao: string, valor: number, tipo: 'troco' | 'gorjeta', caixaId?: number | null) {
     if (!(valor > 0)) return;
-    const { data: caixa } = await this.supabase.client
-      .from('caixas')
-      .select('id, saidas')
-      .eq('restaurant_id', restaurantId)
-      .eq('status', 'aberto')
-      .maybeSingle();
+    let query = this.supabase.client.from('caixas').select('id, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto');
+    query = caixaId ? query.eq('id', caixaId) : query.eq('is_principal', true);
+    const { data: caixa } = await query.maybeSingle();
     if (!caixa) return; // sem caixa aberto: melhor não travar o pagamento por isso
 
     const saidas = (caixa.saidas ?? []) as any[];
@@ -145,6 +152,7 @@ export class SalaoService {
     valorRecebido?: number,
     identificador?: string,
     taxaCartaoValor?: number,
+    caixaId?: number | null,
   ) {
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
@@ -164,7 +172,7 @@ export class SalaoService {
     if (error) throw error;
 
     if (troco && troco > 0) {
-      await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco');
+      await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco', caixaId);
     }
 
     return this.saldoDevedor(comandaId);
@@ -222,12 +230,10 @@ export class SalaoService {
       mesa = data;
     }
 
-    const { data: caixaAberto } = await this.supabase.client
-      .from('caixas')
-      .select('id')
-      .eq('restaurant_id', restaurantId)
-      .eq('status', 'aberto')
-      .maybeSingle();
+    // Se o garçom escolheu um caixa (Bar/Salão) ao abrir o turno, usa ele — senão cai no principal.
+    let query = this.supabase.client.from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto');
+    query = body.caixa_id ? query.eq('id', body.caixa_id) : query.eq('is_principal', true);
+    const { data: caixaAberto } = await query.maybeSingle();
 
     // Numeração sequencial por dia — só pra identificação fácil ("comanda 3"), reinicia
     // a cada dia. Não precisa ser à prova de corrida (volume baixo de comandas simultâneas).
@@ -260,7 +266,7 @@ export class SalaoService {
     if (error) throw error;
 
     if (mesa) {
-      await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', mesa.id);
+      await this.supabase.client.from('mesas').update({ status: 'ocupada', caixa_id: caixaAberto?.id ?? null }).eq('id', mesa.id);
     }
 
     return comanda;

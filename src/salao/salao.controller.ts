@@ -24,6 +24,13 @@ export class SalaoController {
     return this.service.mesas(req.garcomRestaurantId);
   }
 
+  // Lista enxuta (sem dado financeiro) pro garçom escolher em qual caixa (Bar/Salão/
+  // Principal) vai lançar as comandas/vendas dele nesse turno.
+  @Get('caixas-abertos')
+  caixasAbertos(@Req() req: any) {
+    return this.service.caixasAbertosResumido(req.garcomRestaurantId);
+  }
+
   @Get('produtos')
   produtos(@Req() req: any) {
     return this.service.produtos(req.garcomRestaurantId);

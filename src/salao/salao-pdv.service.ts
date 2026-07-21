@@ -62,7 +62,7 @@ export class SalaoPdvService {
   // salao_modo e obrigatoriedade de nome/telefone do cliente do lado do garçom.
   // Guarda o primeiro nome de quem tava logado (aberto_por_nome) pro card da mesa
   // mostrar "Caixa: nome" pro garçom e pro próprio estabelecimento.
-  async abrirComanda(restaurantId: number, userId: string, body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string }) {
+  async abrirComanda(restaurantId: number, userId: string, body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string; caixa_id?: number }) {
     if (!body.cliente_nome || !body.cliente_telefone) {
       throw new BadRequestException('Nome e telefone do cliente são obrigatórios');
     }
@@ -86,8 +86,9 @@ export class SalaoPdvService {
       mesa = data;
     }
 
-    const { data: caixaAberto } = await this.supabase.client
-      .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    let queryCaixa = this.supabase.client.from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto');
+    queryCaixa = body.caixa_id ? queryCaixa.eq('id', body.caixa_id) : queryCaixa.eq('is_principal', true);
+    const { data: caixaAberto } = await queryCaixa.maybeSingle();
 
     const { data: userData } = await this.supabase.client.auth.admin.getUserById(userId);
     const nomeCompleto = userData?.user?.user_metadata?.name as string | undefined;
@@ -119,7 +120,7 @@ export class SalaoPdvService {
     if (error) throw error;
 
     if (mesa) {
-      await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', mesa.id);
+      await this.supabase.client.from('mesas').update({ status: 'ocupada', caixa_id: caixaAberto?.id ?? null }).eq('id', mesa.id);
     }
 
     return this.comandaDetalhe(comanda.id, restaurantId);
@@ -243,7 +244,7 @@ export class SalaoPdvService {
   // Venda direta no balcão: operador escolhe produtos, paga na hora, sem mesa/garçom/
   // cliente prévios. Itens ainda passam pela fila de preparo normal (cozinha/bar) —
   // só o fluxo de venda/pagamento é imediato, não o preparo.
-  async vendaDireta(restaurantId: number, itens: ItemComandaBody[], formaPagamento: string, valorRecebido?: number) {
+  async vendaDireta(restaurantId: number, itens: ItemComandaBody[], formaPagamento: string, valorRecebido?: number, caixaId?: number) {
     if (!itens?.length) throw new BadRequestException('Informe ao menos 1 item');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
@@ -260,8 +261,9 @@ export class SalaoPdvService {
     }
     const total = itens.reduce((acc, i) => acc + i.quantity * prodMap[i.product_id].price, 0);
 
-    const { data: caixaAberto } = await this.supabase.client
-      .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    let queryCaixa = this.supabase.client.from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto');
+    queryCaixa = caixaId ? queryCaixa.eq('id', caixaId) : queryCaixa.eq('is_principal', true);
+    const { data: caixaAberto } = await queryCaixa.maybeSingle();
     if (!caixaAberto) throw new BadRequestException('Abra o caixa antes de vender');
 
     const { data: venda, error } = await this.supabase.client
@@ -294,7 +296,7 @@ export class SalaoPdvService {
     await this.salaoService.enviarItensComoRestaurante(venda.id, venda);
 
     // Paga na hora — origem 'estabelecimento' cobre troco/gorjeta automaticamente
-    await this.salaoService.registrarPagamento(venda.id, 'estabelecimento', total, formaPagamento, restaurantId, valorRecebido, 'Venda balcão');
+    await this.salaoService.registrarPagamento(venda.id, 'estabelecimento', total, formaPagamento, restaurantId, valorRecebido, 'Venda balcão', undefined, caixaAberto.id);
 
     const { error: errFechar } = await this.supabase.client
       .from('orders')
@@ -694,16 +696,6 @@ export class SalaoPdvService {
       troco = parseFloat((valorRecebido - valorACobrar).toFixed(2));
     }
 
-    if (saldo > 0.01) {
-      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento, restaurantId, undefined, undefined, taxaCartaoValor);
-    }
-
-    if (formaPagamento === 'cash') {
-      const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
-      if (gorjeta > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Gorjeta - ${identificador}`, gorjeta, 'gorjeta');
-      if (troco && troco > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
-    }
-
     // Se a comanda ficou pendente (fiado) num caixa que já fechou, realoca pro caixa
     // que estiver aberto agora, no momento do pagamento — não fica presa a um caixa fechado.
     let caixaId = comanda.caixa_id;
@@ -718,8 +710,19 @@ export class SalaoPdvService {
         .select('id')
         .eq('restaurant_id', restaurantId)
         .eq('status', 'aberto')
+        .eq('is_principal', true)
         .maybeSingle();
       caixaId = caixaAberto?.id ?? null;
+    }
+
+    if (saldo > 0.01) {
+      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento, restaurantId, undefined, undefined, taxaCartaoValor, caixaId);
+    }
+
+    if (formaPagamento === 'cash') {
+      const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
+      if (gorjeta > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Gorjeta - ${identificador}`, gorjeta, 'gorjeta', caixaId);
+      if (troco && troco > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco', caixaId);
     }
 
     const { error } = await this.supabase.client

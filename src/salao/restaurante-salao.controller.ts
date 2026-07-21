@@ -44,7 +44,7 @@ export class RestauranteSalaoController {
 
   @Post('comandas/abrir')
   abrirComanda(
-    @Body() body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string },
+    @Body() body: { mesa_id?: number; cliente_nome: string; cliente_telefone: string; caixa_id?: number },
     @Req() req: any,
   ) {
     return this.service.abrirComanda(req.restaurantId, req.userId, body);
@@ -52,10 +52,10 @@ export class RestauranteSalaoController {
 
   @Post('venda-direta')
   vendaDireta(
-    @Body() body: { itens: ItemComandaBody[]; forma_pagamento: string; valor_recebido?: number },
+    @Body() body: { itens: ItemComandaBody[]; forma_pagamento: string; valor_recebido?: number; caixa_id?: number },
     @Req() req: any,
   ) {
-    return this.service.vendaDireta(req.restaurantId, body.itens, body.forma_pagamento, body.valor_recebido);
+    return this.service.vendaDireta(req.restaurantId, body.itens, body.forma_pagamento, body.valor_recebido, body.caixa_id);
   }
 
   @Get('comandas/:id')

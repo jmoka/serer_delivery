@@ -366,6 +366,7 @@ export class MotoboyService {
         .select('id, entradas')
         .eq('restaurant_id', pedido.restaurant_id)
         .eq('status', 'aberto')
+        .eq('is_principal', true)
         .maybeSingle();
 
       if (caixa) {
@@ -438,6 +439,7 @@ export class MotoboyService {
         .select('id, entradas')
         .eq('restaurant_id', restaurantId)
         .eq('status', 'aberto')
+        .eq('is_principal', true)
         .maybeSingle();
 
       if (caixa) {
@@ -614,6 +616,7 @@ export class MotoboyService {
         .select('id, saidas')
         .eq('restaurant_id', pedido.restaurant_id)
         .eq('status', 'aberto')
+        .eq('is_principal', true)
         .maybeSingle();
       if (caixa) {
         const saidas = (caixa.saidas ?? []) as any[];

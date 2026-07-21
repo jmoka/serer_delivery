@@ -203,13 +203,20 @@ export class RestauranteController {
     return this.service.getCaixa(req.restaurantId);
   }
 
+  // Todos os caixas abertos no momento (Principal, Bar, Salão...) — usado quando
+  // há mais de um ponto de venda funcionando ao mesmo tempo.
+  @Get('caixa/abertos')
+  getCaixasAbertos(@Req() req: any) {
+    return this.service.getCaixasAbertos(req.restaurantId);
+  }
+
   @Post('caixa/abrir')
-  abrirCaixa(@Req() req: any, @Body() body: { nome_operador: string; valor_inicial?: number }) {
+  abrirCaixa(@Req() req: any, @Body() body: { nome_operador: string; valor_inicial?: number; nome?: string; is_principal?: boolean }) {
     return this.service.abrirCaixa(req.restaurantId, body);
   }
 
   @Post('caixa/fechar')
-  fecharCaixa(@Req() req: any, @Body() body: { dinheiro_contado?: number }) {
+  fecharCaixa(@Req() req: any, @Body() body: { dinheiro_contado?: number; permitir_pendencias?: boolean; caixa_id?: number }) {
     return this.service.fecharCaixa(req.restaurantId, body);
   }
 
@@ -219,7 +226,7 @@ export class RestauranteController {
   }
 
   @Post('caixa/fechar-e-transferir')
-  fecharComTransferencia(@Req() req: any, @Body() body: { nome_operador: string; valor_inicial?: number }) {
+  fecharComTransferencia(@Req() req: any, @Body() body: { nome_operador: string; valor_inicial?: number; caixa_id?: number }) {
     return this.service.fecharComTransferencia(req.restaurantId, body);
   }
 
@@ -234,12 +241,12 @@ export class RestauranteController {
   }
 
   @Post('caixa/saida')
-  adicionarSaida(@Req() req: any, @Body() body: { descricao: string; valor: number; meio?: string }) {
+  adicionarSaida(@Req() req: any, @Body() body: { descricao: string; valor: number; meio?: string; caixa_id?: number }) {
     return this.service.adicionarSaida(req.restaurantId, body);
   }
 
   @Post('caixa/entrada')
-  adicionarEntrada(@Req() req: any, @Body() body: { descricao: string; valor: number; meio?: string }) {
+  adicionarEntrada(@Req() req: any, @Body() body: { descricao: string; valor: number; meio?: string; caixa_id?: number }) {
     return this.service.adicionarEntrada(req.restaurantId, body);
   }
 
