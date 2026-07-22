@@ -208,17 +208,48 @@ export class SalaoPdvService {
     if (!data) throw new NotFoundException('Pagamento não encontrado');
   }
 
+  // Comanda já paga só pode ter a forma de pagamento corrigida (não valor) enquanto o
+  // caixa dela ainda está aberto — o resumo do caixa é recalculado do zero a cada
+  // fechamento (ver calcularResumo em restaurante.service.ts), então a correção reflete
+  // automaticamente. Se o caixa já fechou, o resumo daquele fechamento já foi gravado e
+  // congelado — corrigir aqui não atualizaria retroativamente, então bloqueia.
+  private async garantirCaixaAbertoDaComanda(comanda: any) {
+    if (!comanda.caixa_id) return;
+    const { data: caixa } = await this.supabase.client
+      .from('caixas').select('status').eq('id', comanda.caixa_id).maybeSingle();
+    if (caixa && caixa.status !== 'aberto') {
+      throw new BadRequestException('O caixa desta comanda já foi fechado — não é possível corrigir o pagamento automaticamente. Ajuste manualmente o fechamento desse caixa se necessário.');
+    }
+  }
+
   // Caixa edita/remove qualquer pagamento da comanda (origem garçom ou estabelecimento).
   // O garçom também pode editar/remover, mas só o que ele mesmo lançou — ver
   // editarPagamentoComoGarcom/removerPagamentoComoGarcom em salao.service.ts.
+  // Comanda paga: só a forma de pagamento pode mudar (ex: confirmou PIX por engano, era
+  // dinheiro) — valor fica travado pra não reabrir saldo devedor de uma venda já fechada.
   async editarPagamentoParcial(comandaId: number, restaurantId: number, pagamentoId: number, valor: number, formaPagamento: string) {
     const comanda = await this.buscarComanda(comandaId, restaurantId);
-    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
-      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    if (!['aberta', 'fechada_garcom', 'paga'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda cancelada — não é possível editar o pagamento');
     }
-    if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
+    if (comanda.status === 'paga') {
+      await this.garantirCaixaAbertoDaComanda(comanda);
+      await this.buscarPagamento(comandaId, pagamentoId);
+      const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
+      const { error } = await this.supabase.client
+        .from('comanda_pagamentos')
+        .update({ forma_pagamento: formaPagamento, taxa_cartao_valor: taxaCartaoValor || null })
+        .eq('id', pagamentoId);
+      if (error) throw error;
+      // orders.payment_method só é usado como resumo de exibição quando não há
+      // comanda_pagamentos — mantém em sincronia mesmo assim, evita confusão no recibo.
+      await this.supabase.client.from('orders').update({ payment_method: formaPagamento }).eq('id', comandaId);
+      return this.comandaDetalhe(comandaId, restaurantId);
+    }
+
+    if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     await this.buscarPagamento(comandaId, pagamentoId);
 
     const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
