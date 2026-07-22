@@ -94,6 +94,29 @@ export class SalaoController {
     );
   }
 
+  @Patch('comandas/:id/pagamentos/:pagamentoId')
+  editarPagamento(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('pagamentoId', ParseIntPipe) pagamentoId: number,
+    @Body() body: { valor: number; forma_pagamento: string },
+    @Req() req: any,
+  ) {
+    return this.service.editarPagamentoComoGarcom(
+      id, req.garcomId, pagamentoId, body.valor, body.forma_pagamento, req.garcomPermissoes?.pagamento_parcial !== false,
+    );
+  }
+
+  @Delete('comandas/:id/pagamentos/:pagamentoId')
+  removerPagamento(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('pagamentoId', ParseIntPipe) pagamentoId: number,
+    @Req() req: any,
+  ) {
+    return this.service.removerPagamentoComoGarcom(
+      id, req.garcomId, pagamentoId, req.garcomPermissoes?.pagamento_parcial !== false,
+    );
+  }
+
   @Post('comandas/:id/enviar')
   enviar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.enviarItens(id, req.garcomId);

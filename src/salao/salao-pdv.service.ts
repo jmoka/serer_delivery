@@ -208,8 +208,9 @@ export class SalaoPdvService {
     if (!data) throw new NotFoundException('Pagamento não encontrado');
   }
 
-  // Editar/remover pagamento parcial é exclusivo do estabelecimento — o garçom só lança
-  // (ver salao.service.ts/salao.controller.ts, que não expõem essas rotas).
+  // Caixa edita/remove qualquer pagamento da comanda (origem garçom ou estabelecimento).
+  // O garçom também pode editar/remover, mas só o que ele mesmo lançou — ver
+  // editarPagamentoComoGarcom/removerPagamentoComoGarcom em salao.service.ts.
   async editarPagamentoParcial(comandaId: number, restaurantId: number, pagamentoId: number, valor: number, formaPagamento: string) {
     const comanda = await this.buscarComanda(comandaId, restaurantId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {

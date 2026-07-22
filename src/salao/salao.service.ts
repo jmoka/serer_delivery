@@ -202,6 +202,56 @@ export class SalaoService {
     return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador, taxaCartaoValor);
   }
 
+  private async buscarPagamentoDoGarcom(comandaId: number, pagamentoId: number) {
+    const { data } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('id, origem')
+      .eq('id', pagamentoId)
+      .eq('order_id', comandaId)
+      .maybeSingle();
+    if (!data) throw new NotFoundException('Pagamento não encontrado');
+    // Garçom só edita/remove o que ele mesmo lançou — pagamento do caixa é exclusivo do PDV.
+    if (data.origem !== 'garcom') throw new ForbiddenException('Só é possível editar/remover pagamentos lançados por você');
+  }
+
+  async editarPagamentoComoGarcom(
+    comandaId: number, garcomId: number, pagamentoId: number, valor: number, formaPagamento: string, podePagamentoParcial = true,
+  ) {
+    if (!podePagamentoParcial) throw new ForbiddenException('Você não tem permissão para registrar pagamento parcial');
+    const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+    if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
+    if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
+
+    await this.buscarPagamentoDoGarcom(comandaId, pagamentoId);
+
+    const taxaCartaoValor = await this.calcularTaxaCartao(comanda.restaurant_id, valor, formaPagamento);
+    const { error } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .update({ valor, forma_pagamento: formaPagamento, taxa_cartao_valor: taxaCartaoValor || null })
+      .eq('id', pagamentoId);
+    if (error) throw error;
+
+    return this.obterComanda(comandaId, garcomId);
+  }
+
+  async removerPagamentoComoGarcom(comandaId: number, garcomId: number, pagamentoId: number, podePagamentoParcial = true) {
+    if (!podePagamentoParcial) throw new ForbiddenException('Você não tem permissão para registrar pagamento parcial');
+    const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
+    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+      throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+
+    await this.buscarPagamentoDoGarcom(comandaId, pagamentoId);
+
+    const { error } = await this.supabase.client.from('comanda_pagamentos').delete().eq('id', pagamentoId);
+    if (error) throw error;
+
+    return this.obterComanda(comandaId, garcomId);
+  }
+
   private async recalcularTotal(comandaId: number) {
     const { data: itens } = await this.supabase.client
       .from('order_items')
