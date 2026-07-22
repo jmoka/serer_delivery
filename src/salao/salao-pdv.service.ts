@@ -194,7 +194,7 @@ export class SalaoPdvService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
     const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
-    const taxaCartaoValor = await this.calcularTaxaCartao(restaurantId, valor, formaPagamento);
+    const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
     return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador, taxaCartaoValor);
   }
 
@@ -220,7 +220,7 @@ export class SalaoPdvService {
 
     await this.buscarPagamento(comandaId, pagamentoId);
 
-    const taxaCartaoValor = await this.calcularTaxaCartao(restaurantId, valor, formaPagamento);
+    const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
     const { error } = await this.supabase.client
       .from('comanda_pagamentos')
       .update({ valor, forma_pagamento: formaPagamento, taxa_cartao_valor: taxaCartaoValor || null })
@@ -658,20 +658,6 @@ export class SalaoPdvService {
     return { percentual, valor_sugerido: parseFloat(((subtotal * percentual) / 100).toFixed(2)) };
   }
 
-  // Débito/crédito acrescentam a taxa configurada em Config > "Taxa do cartão" — o valor
-  // cobrado do cliente aumenta, PIX e dinheiro não são afetados.
-  private async calcularTaxaCartao(restaurantId: number, valor: number, formaPagamento: string): Promise<number> {
-    if (formaPagamento !== 'credit_card' && formaPagamento !== 'debit_card') return 0;
-    if (!(valor > 0)) return 0;
-    const { data: restaurante } = await this.supabase.client
-      .from('restaurants')
-      .select('taxa_cartao_percentual')
-      .eq('id', restaurantId)
-      .maybeSingle();
-    const percentual = restaurante?.taxa_cartao_percentual ?? 0;
-    return parseFloat(((valor * percentual) / 100).toFixed(2));
-  }
-
   async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number) {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
@@ -689,7 +675,7 @@ export class SalaoPdvService {
     const { saldo } = await this.salaoService.saldoDevedor(id);
     const gorjeta = gorjetaValor ?? 0;
     const valorACobrarBase = parseFloat((saldo + gorjeta).toFixed(2));
-    const taxaCartaoValor = await this.calcularTaxaCartao(restaurantId, valorACobrarBase, formaPagamento);
+    const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valorACobrarBase, formaPagamento);
     // Em dinheiro, o cliente entrega pro que falta da comanda + gorjeta juntos nesse momento.
     const valorACobrar = parseFloat((valorACobrarBase + taxaCartaoValor).toFixed(2));
     let troco: number | null = null;

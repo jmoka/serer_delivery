@@ -84,7 +84,7 @@ export class SalaoService {
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
     const { data } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, mesa_id, garcom_id, numero_comanda, cliente_mesa_nome, cliente_mesa_telefone, tracking_token, mesas(numero, nome), garcons(nome)')
+      .select('id, status, restaurant_id, mesa_id, garcom_id, numero_comanda, cliente_mesa_nome, cliente_mesa_telefone, tracking_token, desconto_valor, acrescimo_valor, gorjeta_valor, mesas(numero, nome), garcons(nome)')
       .eq('id', comandaId)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -93,18 +93,37 @@ export class SalaoService {
     return data;
   }
 
+  // Débito/crédito acrescentam a taxa configurada em Config > "Taxa do cartão" — o valor
+  // cobrado do cliente aumenta, PIX e dinheiro não são afetados. Compartilhado entre o
+  // fechamento do caixa (SalaoPdvService) e o pagamento parcial feito pelo garçom.
+  async calcularTaxaCartao(restaurantId: number, valor: number, formaPagamento: string): Promise<number> {
+    if (formaPagamento !== 'credit_card' && formaPagamento !== 'debit_card') return 0;
+    if (!(valor > 0)) return 0;
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('taxa_cartao_percentual')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    const percentual = restaurante?.taxa_cartao_percentual ?? 0;
+    return parseFloat(((valor * percentual) / 100).toFixed(2));
+  }
+
   // Saldo devedor considerando pagamentos parciais já registrados (garçom ou caixa).
+  // Total = produtos - desconto + acréscimo manual + gorjeta + taxa de cartão já
+  // aplicada nos pagamentos feitos — pra "falta pagar" bater com a conta real, não
+  // só o valor dos produtos (gorjeta/taxa de cartão eram ignoradas antes).
   async saldoDevedor(comandaId: number) {
     const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
     const { data: comanda } = await this.supabase.client
       .from('orders')
-      .select('desconto_valor, acrescimo_valor')
+      .select('desconto_valor, acrescimo_valor, gorjeta_valor')
       .eq('id', comandaId)
       .maybeSingle();
-    const { data: pagamentos } = await this.supabase.client.from('comanda_pagamentos').select('valor').eq('order_id', comandaId);
+    const { data: pagamentos } = await this.supabase.client.from('comanda_pagamentos').select('valor, taxa_cartao_valor').eq('order_id', comandaId);
 
     const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
-    const totalFinal = subtotal - (comanda?.desconto_valor ?? 0) + (comanda?.acrescimo_valor ?? 0);
+    const totalTaxaCartao = (pagamentos ?? []).reduce((acc: number, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
+    const totalFinal = subtotal - (comanda?.desconto_valor ?? 0) + (comanda?.acrescimo_valor ?? 0) + (comanda?.gorjeta_valor ?? 0) + totalTaxaCartao;
     const totalPago = (pagamentos ?? []).reduce((acc: number, p: any) => acc + p.valor, 0);
 
     return {
@@ -179,7 +198,8 @@ export class SalaoService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
     const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
-    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador);
+    const taxaCartaoValor = await this.calcularTaxaCartao(comanda.restaurant_id, valor, formaPagamento);
+    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador, taxaCartaoValor);
   }
 
   private async recalcularTotal(comandaId: number) {
@@ -324,7 +344,7 @@ export class SalaoService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, valor, forma_pagamento, origem, criado_em')
+      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor')
       .eq('order_id', comandaId)
       .order('criado_em', { ascending: true });
     const saldo = await this.saldoDevedor(comandaId);
