@@ -936,8 +936,9 @@ export class RestauranteService {
     const total_entradas = entradas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
 
     // orders.total (comanda do salão) guarda só subtotal-desconto+acréscimo — a taxa de
-    // cartão cobrada do cliente fica em comanda_pagamentos.taxa_cartao_valor e precisa
-    // somar aqui, senão "Cartão Crédito" e "Total faturamento" saem sem ela no fechamento.
+    // cartão cobrada do cliente fica em comanda_pagamentos.taxa_cartao_valor. Entra num
+    // bucket "taxa_cartao" à parte (não somado dentro de Cartão Crédito/Débito) pra
+    // aparecer explícito na conferência de fechamento, sem esconder dentro da forma.
     let total_vendas = 0;
     const por_pagamento: Record<string, number> = {};
     for (const p of entregues) {
@@ -945,9 +946,10 @@ export class RestauranteService {
       if (pagamentosComanda?.length) {
         for (const pag of pagamentosComanda) {
           const m = pag.forma_pagamento ?? 'outro';
-          const valorComTaxa = (pag.valor ?? 0) + (pag.taxa_cartao_valor ?? 0);
-          por_pagamento[m] = (por_pagamento[m] ?? 0) + valorComTaxa;
-          total_vendas += valorComTaxa;
+          const taxa = pag.taxa_cartao_valor ?? 0;
+          por_pagamento[m] = (por_pagamento[m] ?? 0) + (pag.valor ?? 0);
+          if (taxa > 0) por_pagamento['taxa_cartao'] = (por_pagamento['taxa_cartao'] ?? 0) + taxa;
+          total_vendas += (pag.valor ?? 0) + taxa;
         }
       } else {
         const m = p.payment_method ?? 'outro';
@@ -1491,7 +1493,13 @@ export class RestauranteService {
           const m = pag.forma_pagamento ?? 'unknown';
           if (!acc[m]) acc[m] = { count: 0, total: 0 };
           acc[m].count++;
-          acc[m].total += (pag.valor ?? 0) + (pag.taxa_cartao_valor ?? 0);
+          acc[m].total += pag.valor ?? 0;
+          const taxa = pag.taxa_cartao_valor ?? 0;
+          if (taxa > 0) {
+            if (!acc['taxa_cartao']) acc['taxa_cartao'] = { count: 0, total: 0 };
+            acc['taxa_cartao'].count++;
+            acc['taxa_cartao'].total += taxa;
+          }
         }
         return acc;
       }
