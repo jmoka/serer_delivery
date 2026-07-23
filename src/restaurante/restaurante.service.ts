@@ -907,19 +907,19 @@ export class RestauranteService {
   // resto pelo caixa) — orders.payment_method só guarda a última forma usada no
   // fechamento, então pra decompor certo o "por forma de pagamento" precisa ir direto
   // no ledger de comanda_pagamentos. Delivery continua com pagamento único (sem mudança).
-  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string }[]>> {
+  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>> {
     const idsComanda = pedidos.filter((p: any) => p.canal === 'presencial').map((p: any) => p.id);
-    const mapa = new Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string }[]>();
+    const mapa = new Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>();
     if (!idsComanda.length) return mapa;
 
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('order_id, valor, forma_pagamento, origem, troco, criado_em')
+      .select('order_id, valor, forma_pagamento, origem, troco, criado_em, taxa_cartao_valor')
       .in('order_id', idsComanda);
 
     for (const p of (data ?? []) as any[]) {
       if (!mapa.has(p.order_id)) mapa.set(p.order_id, []);
-      mapa.get(p.order_id)!.push({ order_id: p.order_id, valor: p.valor, forma_pagamento: p.forma_pagamento, origem: p.origem, troco: p.troco ?? 0, criado_em: p.criado_em });
+      mapa.get(p.order_id)!.push({ order_id: p.order_id, valor: p.valor, forma_pagamento: p.forma_pagamento, origem: p.origem, troco: p.troco ?? 0, criado_em: p.criado_em, taxa_cartao_valor: p.taxa_cartao_valor ?? 0 });
     }
     return mapa;
   }
@@ -929,24 +929,30 @@ export class RestauranteService {
     saidas: any[],
     valor_inicial: number,
     entradas: any[] = [],
-    pagamentosPorComanda?: Map<number, { valor: number; forma_pagamento: string }[]>,
+    pagamentosPorComanda?: Map<number, { valor: number; forma_pagamento: string; taxa_cartao_valor?: number }[]>,
   ) {
     const entregues = pedidos.filter((p) => this.STATUS_VENDA_FINALIZADA.includes(p.status));
-    const total_vendas = entregues.reduce((s: number, p: any) => s + (p.total ?? 0), 0);
     const total_saidas = saidas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
     const total_entradas = entradas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
 
+    // orders.total (comanda do salão) guarda só subtotal-desconto+acréscimo — a taxa de
+    // cartão cobrada do cliente fica em comanda_pagamentos.taxa_cartao_valor e precisa
+    // somar aqui, senão "Cartão Crédito" e "Total faturamento" saem sem ela no fechamento.
+    let total_vendas = 0;
     const por_pagamento: Record<string, number> = {};
     for (const p of entregues) {
       const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComanda?.get(p.id) : undefined;
       if (pagamentosComanda?.length) {
         for (const pag of pagamentosComanda) {
           const m = pag.forma_pagamento ?? 'outro';
-          por_pagamento[m] = (por_pagamento[m] ?? 0) + (pag.valor ?? 0);
+          const valorComTaxa = (pag.valor ?? 0) + (pag.taxa_cartao_valor ?? 0);
+          por_pagamento[m] = (por_pagamento[m] ?? 0) + valorComTaxa;
+          total_vendas += valorComTaxa;
         }
       } else {
         const m = p.payment_method ?? 'outro';
         por_pagamento[m] = (por_pagamento[m] ?? 0) + (p.total ?? 0);
+        total_vendas += p.total ?? 0;
       }
     }
 
@@ -1485,7 +1491,7 @@ export class RestauranteService {
           const m = pag.forma_pagamento ?? 'unknown';
           if (!acc[m]) acc[m] = { count: 0, total: 0 };
           acc[m].count++;
-          acc[m].total += pag.valor ?? 0;
+          acc[m].total += (pag.valor ?? 0) + (pag.taxa_cartao_valor ?? 0);
         }
         return acc;
       }
