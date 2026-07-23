@@ -276,26 +276,11 @@ export class SalaoPdvService {
     return this.comandaDetalhe(comandaId, restaurantId);
   }
 
-  // Venda direta no balcão: operador escolhe produtos, paga na hora, sem mesa/garçom/
-  // cliente prévios. Itens ainda passam pela fila de preparo normal (cozinha/bar) —
-  // só o fluxo de venda/pagamento é imediato, não o preparo.
-  async vendaDireta(restaurantId: number, itens: ItemComandaBody[], formaPagamento: string, valorRecebido?: number) {
-    if (!itens?.length) throw new BadRequestException('Informe ao menos 1 item');
-    if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
-
-    const prodIds = itens.map((i) => i.product_id);
-    const { data: produtos, error: errProd } = await this.supabase.client
-      .from('products').select('id, name, price, is_active').in('id', prodIds);
-    if (errProd) throw errProd;
-
-    const prodMap = Object.fromEntries((produtos ?? []).map((p: any) => [p.id, p]));
-    for (const item of itens) {
-      const prod = prodMap[item.product_id];
-      if (!prod) throw new BadRequestException(`Produto ${item.product_id} não encontrado`);
-      if (!prod.is_active) throw new BadRequestException(`Produto ${item.product_id} inativo`);
-    }
-    const total = itens.reduce((acc, i) => acc + i.quantity * prodMap[i.product_id].price, 0);
-
+  // Venda balcão: comanda avulsa (sem mesa) aberta pelo próprio operador, sem exigir
+  // nome/telefone de cliente. Daqui em diante usa os mesmos endpoints de comanda
+  // normal (itens, desconto/acréscimo, pagamento parcial multi-forma, pagar) — evita
+  // duplicar a lógica de pagamento/taxa de cartão que já existe pra mesa/comanda.
+  async abrirVendaBalcao(restaurantId: number) {
     const { data: caixaAberto } = await this.supabase.client
       .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
     if (!caixaAberto) throw new BadRequestException('Abra o caixa antes de vender');
@@ -307,46 +292,14 @@ export class SalaoPdvService {
         canal: 'presencial',
         status: 'aberta',
         cliente_mesa_nome: 'Venda balcão',
-        total: parseFloat(total.toFixed(2)),
+        total: 0,
         caixa_id: caixaAberto.id,
       })
-      .select('*, mesas(numero, nome), garcons(id, nome)')
+      .select('id')
       .single();
     if (error) throw error;
 
-    const { error: errItens } = await this.supabase.client.from('order_items').insert(
-      itens.map((i) => ({
-        order_id: venda.id,
-        product_id: i.product_id,
-        quantity: i.quantity,
-        unit_price: prodMap[i.product_id].price,
-        observacao: i.observacao?.trim() || null,
-        status: 'pendente',
-      })),
-    );
-    if (errItens) throw errItens;
-
-    // Manda pra fila de preparo (cozinha/bar), igual uma comanda normal
-    await this.salaoService.enviarItensComoRestaurante(venda.id, venda);
-
-    // Paga na hora — origem 'estabelecimento' cobre troco/gorjeta automaticamente
-    await this.salaoService.registrarPagamento(venda.id, 'estabelecimento', total, formaPagamento, restaurantId, valorRecebido, 'Venda balcão');
-
-    const { error: errFechar } = await this.supabase.client
-      .from('orders')
-      .update({ status: 'paga', payment_method: formaPagamento, pago_em: new Date().toISOString() })
-      .eq('id', venda.id);
-    if (errFechar) throw errFechar;
-
-    const trocoDado = formaPagamento === 'cash' && valorRecebido !== undefined ? Math.max(valorRecebido - total, 0) : 0;
-    const recibo = await this.salaoService.imprimirReciboSeConfigurado(
-      restaurantId, venda,
-      itens.map((i) => ({ product_name: prodMap[i.product_id]?.name, quantity: i.quantity, unit_price: prodMap[i.product_id]?.price })),
-      { subtotal: total, total, formaPagamento, trocoDado },
-    );
-
-    const detalhe = await this.comandaDetalhe(venda.id, restaurantId);
-    return { ...detalhe, recibo };
+    return this.comandaDetalhe(venda.id, restaurantId);
   }
 
   async aplicarDesconto(id: number, restaurantId: number, valor: number) {

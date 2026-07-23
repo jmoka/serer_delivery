@@ -50,12 +50,9 @@ export class RestauranteSalaoController {
     return this.service.abrirComanda(req.restaurantId, req.userId, body);
   }
 
-  @Post('venda-direta')
-  vendaDireta(
-    @Body() body: { itens: ItemComandaBody[]; forma_pagamento: string; valor_recebido?: number },
-    @Req() req: any,
-  ) {
-    return this.service.vendaDireta(req.restaurantId, body.itens, body.forma_pagamento, body.valor_recebido);
+  @Post('venda-balcao/abrir')
+  abrirVendaBalcao(@Req() req: any) {
+    return this.service.abrirVendaBalcao(req.restaurantId);
   }
 
   @Get('comandas/:id')
