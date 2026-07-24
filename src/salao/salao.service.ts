@@ -409,20 +409,22 @@ export class SalaoService {
       preparando_em: i.preparando_em,
     }));
 
+    // Tempo médio = espera total do cliente (desde que o pedido saiu pra cozinha até
+    // ficar pronto), não só o tempo ativo de preparo — é o que o cliente sente na pele.
     const inicioHoje = new Date();
     inicioHoje.setHours(0, 0, 0, 0);
     const { data: prontosHoje } = await this.supabase.client
       .from('order_items')
-      .select('preparando_em, pronto_em, orders!inner(restaurant_id, canal)')
+      .select('enviado_em, pronto_em, orders!inner(restaurant_id, canal)')
       .eq('orders.restaurant_id', restaurantId)
       .eq('orders.canal', 'presencial')
       .eq('status', 'pronto')
-      .not('preparando_em', 'is', null)
+      .not('enviado_em', 'is', null)
       .not('pronto_em', 'is', null)
       .gte('pronto_em', inicioHoje.toISOString());
 
     const duracoes = (prontosHoje ?? []).map(
-      (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.preparando_em).getTime()) / 1000,
+      (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.enviado_em).getTime()) / 1000,
     );
     const tempoMedioPreparoSegundos = duracoes.length
       ? Math.round(duracoes.reduce((soma, d) => soma + d, 0) / duracoes.length)
