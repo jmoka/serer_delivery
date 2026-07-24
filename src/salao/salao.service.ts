@@ -382,6 +382,55 @@ export class SalaoService {
     });
   }
 
+  // Fila de preparo do restaurante inteiro (não só as comandas do garçom logado) — o
+  // garçom usa isso pra responder ao cliente presencial "quantos faltam antes do meu"
+  // e "quanto tempo em média demora", sem precisar ir até a cozinha.
+  async filaCozinha(restaurantId: number) {
+    const { data: itensRaw, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, order_id, quantity, status, enviado_em, preparando_em, products(name), orders!inner(restaurant_id, canal, status, numero_comanda, cliente_mesa_nome, mesas(numero, nome))')
+      .eq('orders.restaurant_id', restaurantId)
+      .eq('orders.canal', 'presencial')
+      .in('orders.status', ['aberta', 'fechada_garcom'])
+      .in('status', ['enviado', 'preparando'])
+      .order('enviado_em', { ascending: true });
+    if (error) throw error;
+
+    const itens = (itensRaw ?? []).map((i: any) => ({
+      item_id: i.id,
+      order_id: i.order_id,
+      numero_comanda: i.orders?.numero_comanda ?? i.order_id,
+      mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+      cliente_mesa_nome: i.orders?.cliente_mesa_nome ?? null,
+      product_name: i.products?.name,
+      quantity: i.quantity,
+      status: i.status,
+      enviado_em: i.enviado_em,
+      preparando_em: i.preparando_em,
+    }));
+
+    const inicioHoje = new Date();
+    inicioHoje.setHours(0, 0, 0, 0);
+    const { data: prontosHoje } = await this.supabase.client
+      .from('order_items')
+      .select('preparando_em, pronto_em, orders!inner(restaurant_id, canal)')
+      .eq('orders.restaurant_id', restaurantId)
+      .eq('orders.canal', 'presencial')
+      .eq('status', 'pronto')
+      .not('preparando_em', 'is', null)
+      .not('pronto_em', 'is', null)
+      .gte('pronto_em', inicioHoje.toISOString());
+
+    const duracoes = (prontosHoje ?? []).map(
+      (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.preparando_em).getTime()) / 1000,
+    );
+    const tempoMedioPreparoSegundos = duracoes.length
+      ? Math.round(duracoes.reduce((soma, d) => soma + d, 0) / duracoes.length)
+      : null;
+
+    return { itens, tempoMedioPreparoSegundos, amostras: duracoes.length };
+  }
+
   async obterComanda(comandaId: number, garcomId: number) {
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
 
