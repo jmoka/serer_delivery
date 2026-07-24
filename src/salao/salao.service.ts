@@ -421,7 +421,10 @@ export class SalaoService {
       .eq('status', 'pronto')
       .not('enviado_em', 'is', null)
       .not('pronto_em', 'is', null)
-      .gte('pronto_em', inicioHoje.toISOString());
+      .gte('pronto_em', inicioHoje.toISOString())
+      // Pedido enviado em dia anterior (ficou preso/esquecido) e só marcado pronto hoje
+      // não é preparo "de hoje" — entraria como outlier gigante e mentiria a média.
+      .gte('enviado_em', inicioHoje.toISOString());
 
     const duracoes = (prontosHoje ?? []).map(
       (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.enviado_em).getTime()) / 1000,
