@@ -409,31 +409,45 @@ export class SalaoService {
       preparando_em: i.preparando_em,
     }));
 
-    // Tempo médio = espera total do cliente (desde que o pedido saiu pra cozinha até
-    // ficar pronto), não só o tempo ativo de preparo — é o que o cliente sente na pele.
+    // Três médias, sobre itens finalizados hoje: espera (na fila, antes do preparo
+    // começar), preparo (tempo ativo de cozinha) e geral (soma das duas, o que o
+    // cliente sente desde que pediu até ficar pronto).
     const inicioHoje = new Date();
     inicioHoje.setHours(0, 0, 0, 0);
     const { data: prontosHoje } = await this.supabase.client
       .from('order_items')
-      .select('enviado_em, pronto_em, orders!inner(restaurant_id, canal)')
+      .select('enviado_em, preparando_em, pronto_em, orders!inner(restaurant_id, canal)')
       .eq('orders.restaurant_id', restaurantId)
       .eq('orders.canal', 'presencial')
       .eq('status', 'pronto')
       .not('enviado_em', 'is', null)
+      .not('preparando_em', 'is', null)
       .not('pronto_em', 'is', null)
       .gte('pronto_em', inicioHoje.toISOString())
       // Pedido enviado em dia anterior (ficou preso/esquecido) e só marcado pronto hoje
       // não é preparo "de hoje" — entraria como outlier gigante e mentiria a média.
       .gte('enviado_em', inicioHoje.toISOString());
 
-    const duracoes = (prontosHoje ?? []).map(
+    const media = (segundos: number[]) =>
+      segundos.length ? Math.round(segundos.reduce((soma, s) => soma + s, 0) / segundos.length) : null;
+
+    const esperas = (prontosHoje ?? []).map(
+      (p: any) => (new Date(p.preparando_em).getTime() - new Date(p.enviado_em).getTime()) / 1000,
+    );
+    const preparos = (prontosHoje ?? []).map(
+      (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.preparando_em).getTime()) / 1000,
+    );
+    const gerais = (prontosHoje ?? []).map(
       (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.enviado_em).getTime()) / 1000,
     );
-    const tempoMedioPreparoSegundos = duracoes.length
-      ? Math.round(duracoes.reduce((soma, d) => soma + d, 0) / duracoes.length)
-      : null;
 
-    return { itens, tempoMedioPreparoSegundos, amostras: duracoes.length };
+    return {
+      itens,
+      tempoMedioEsperaSegundos: media(esperas),
+      tempoMedioPreparoSegundos: media(preparos),
+      tempoMedioGeralSegundos: media(gerais),
+      amostras: (prontosHoje ?? []).length,
+    };
   }
 
   async obterComanda(comandaId: number, garcomId: number) {
