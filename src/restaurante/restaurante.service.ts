@@ -1118,6 +1118,16 @@ export class RestauranteService {
       });
     }
 
+    // Mesa não pode ficar travada esperando o caixa reabrir — libera pro próximo
+    // cliente e a pendência (se houver comanda em aberto) segue como fiado,
+    // cobrada no caixa aberto quando o pagamento acontecer.
+    if ((mesasAbertas ?? []).length > 0) {
+      await this.supabase.client
+        .from('mesas')
+        .update({ status: 'livre' })
+        .in('id', (mesasAbertas ?? []).map((m) => m.id));
+    }
+
     const { data: todosPedidos } = await this.supabase.client
       .from('orders').select('id, total, status, payment_method, canal, created_at')
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`);
