@@ -44,7 +44,7 @@ export class SalaoService {
   async acompanharPorToken(token: string) {
     const { data: comanda } = await this.supabase.client
       .from('orders')
-      .select('id, status, conferencia_solicitada_em, mesas(numero, nome), restaurants(name)')
+      .select('id, restaurant_id, status, conferencia_solicitada_em, mesas(numero, nome), restaurants(name)')
       .eq('tracking_token', token)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -52,20 +52,33 @@ export class SalaoService {
 
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('quantity, status, enviado_em, preparando_em, products(name)')
+      .select('id, quantity, status, enviado_em, preparando_em, products(name)')
       .eq('order_id', comanda.id);
+
+    // Mesma fila e mesmas médias que o garçom vê — o cliente não precisa perguntar
+    // "quantos faltam antes do meu" ou "quanto tempo em média demora".
+    const fila = await this.filaCozinha((comanda as any).restaurant_id);
+    const aguardandoIds = fila.itens.filter((i) => i.status === 'enviado').map((i) => i.item_id);
+    const preparandoIds = fila.itens.filter((i) => i.status === 'preparando').map((i) => i.item_id);
 
     return {
       restaurante: (comanda as any).restaurants?.name,
       mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : null,
       status: comanda.status,
       conferencia_solicitada_em: (comanda as any).conferencia_solicitada_em,
+      tempoMedioEsperaSegundos: fila.tempoMedioEsperaSegundos,
+      tempoMedioPreparoSegundos: fila.tempoMedioPreparoSegundos,
+      tempoMedioGeralSegundos: fila.tempoMedioGeralSegundos,
       itens: (itens ?? []).map((i: any) => ({
         quantity: i.quantity,
         status: i.status,
         enviado_em: i.enviado_em,
         preparando_em: i.preparando_em,
         product_name: i.products?.name,
+        posicao_fila:
+          i.status === 'enviado' ? aguardandoIds.indexOf(i.id) + 1
+          : i.status === 'preparando' ? preparandoIds.indexOf(i.id) + 1
+          : null,
       })),
     };
   }
