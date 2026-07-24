@@ -44,7 +44,7 @@ export class SalaoService {
   async acompanharPorToken(token: string) {
     const { data: comanda } = await this.supabase.client
       .from('orders')
-      .select('id, restaurant_id, status, conferencia_solicitada_em, mesas(numero, nome), restaurants(name)')
+      .select('id, restaurant_id, status, numero_comanda, desconto_valor, acrescimo_valor, gorjeta_valor, conferencia_solicitada_em, mesas(numero, nome), restaurants(name, gorjeta_percentual)')
       .eq('tracking_token', token)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -52,8 +52,9 @@ export class SalaoService {
 
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, status, enviado_em, preparando_em, products(name)')
-      .eq('order_id', comanda.id);
+      .select('id, quantity, unit_price, status, enviado_em, preparando_em, products(name)')
+      .eq('order_id', comanda.id)
+      .order('id', { ascending: true });
 
     // Mesma fila e mesmas médias que o garçom vê — o cliente não precisa perguntar
     // "quantos faltam antes do meu" ou "quanto tempo em média demora".
@@ -61,16 +62,46 @@ export class SalaoService {
     const aguardandoIds = fila.itens.filter((i) => i.status === 'enviado').map((i) => i.item_id);
     const preparandoIds = fila.itens.filter((i) => i.status === 'preparando').map((i) => i.item_id);
 
+    // Conta pra conferência visual — mesmos números que o caixa usa pra fechar (ver
+    // saldoDevedor), o cliente confere sem precisar perguntar "quanto já deu".
+    const saldo = await this.saldoDevedor(comanda.id);
+    const percentualGorjeta = (comanda as any).restaurants?.gorjeta_percentual ?? 0;
+
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('valor, forma_pagamento, criado_em, taxa_cartao_valor')
+      .eq('order_id', comanda.id)
+      .order('criado_em', { ascending: true });
+    const taxaCartaoTotal = (pagamentos ?? []).reduce((acc: number, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
+
     return {
       restaurante: (comanda as any).restaurants?.name,
       mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : null,
+      numero_comanda: (comanda as any).numero_comanda,
       status: comanda.status,
       conferencia_solicitada_em: (comanda as any).conferencia_solicitada_em,
       tempoMedioEsperaSegundos: fila.tempoMedioEsperaSegundos,
       tempoMedioPreparoSegundos: fila.tempoMedioPreparoSegundos,
       tempoMedioGeralSegundos: fila.tempoMedioGeralSegundos,
+      subtotal: saldo.subtotal,
+      desconto: (comanda as any).desconto_valor ?? 0,
+      acrescimo: (comanda as any).acrescimo_valor ?? 0,
+      gorjeta_percentual: percentualGorjeta,
+      gorjeta: (comanda as any).gorjeta_valor ?? 0,
+      total: saldo.total,
+      total_pago: saldo.total_pago,
+      taxa_cartao_total: parseFloat(taxaCartaoTotal.toFixed(2)),
+      saldo: saldo.saldo,
+      pagamentos: (pagamentos ?? []).map((p: any) => ({
+        valor: p.valor,
+        forma_pagamento: p.forma_pagamento,
+        criado_em: p.criado_em,
+        taxa_cartao_valor: p.taxa_cartao_valor ?? 0,
+      })),
       itens: (itens ?? []).map((i: any) => ({
         quantity: i.quantity,
+        unit_price: i.unit_price,
+        subtotal: parseFloat((i.quantity * i.unit_price).toFixed(2)),
         status: i.status,
         enviado_em: i.enviado_em,
         preparando_em: i.preparando_em,
