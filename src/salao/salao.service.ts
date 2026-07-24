@@ -44,7 +44,7 @@ export class SalaoService {
   async acompanharPorToken(token: string) {
     const { data: comanda } = await this.supabase.client
       .from('orders')
-      .select('id, status, conferencia_solicitada_em, mesas(numero, nome), restaurants(name)')
+      .select('id, restaurant_id, status, numero_comanda, desconto_valor, acrescimo_valor, gorjeta_valor, conferencia_solicitada_em, mesas(numero, nome), restaurants(name, gorjeta_percentual)')
       .eq('tracking_token', token)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -52,20 +52,64 @@ export class SalaoService {
 
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('quantity, status, enviado_em, preparando_em, products(name)')
-      .eq('order_id', comanda.id);
+      .select('id, quantity, unit_price, status, enviado_em, preparando_em, products(name)')
+      .eq('order_id', comanda.id)
+      .order('id', { ascending: true });
+
+    // Mesma fila e mesmas médias que o garçom vê — o cliente não precisa perguntar
+    // "quantos faltam antes do meu" ou "quanto tempo em média demora".
+    const fila = await this.filaCozinha((comanda as any).restaurant_id);
+    const aguardandoIds = fila.itens.filter((i) => i.status === 'enviado').map((i) => i.item_id);
+    const preparandoIds = fila.itens.filter((i) => i.status === 'preparando').map((i) => i.item_id);
+
+    // Conta pra conferência visual — mesmos números que o caixa usa pra fechar (ver
+    // saldoDevedor), o cliente confere sem precisar perguntar "quanto já deu".
+    const saldo = await this.saldoDevedor(comanda.id);
+    const percentualGorjeta = (comanda as any).restaurants?.gorjeta_percentual ?? 0;
+
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('valor, forma_pagamento, criado_em, taxa_cartao_valor')
+      .eq('order_id', comanda.id)
+      .order('criado_em', { ascending: true });
+    const taxaCartaoTotal = (pagamentos ?? []).reduce((acc: number, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
 
     return {
       restaurante: (comanda as any).restaurants?.name,
       mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : null,
+      numero_comanda: (comanda as any).numero_comanda,
       status: comanda.status,
       conferencia_solicitada_em: (comanda as any).conferencia_solicitada_em,
+      tempoMedioEsperaSegundos: fila.tempoMedioEsperaSegundos,
+      tempoMedioPreparoSegundos: fila.tempoMedioPreparoSegundos,
+      tempoMedioGeralSegundos: fila.tempoMedioGeralSegundos,
+      subtotal: saldo.subtotal,
+      desconto: (comanda as any).desconto_valor ?? 0,
+      acrescimo: (comanda as any).acrescimo_valor ?? 0,
+      gorjeta_percentual: percentualGorjeta,
+      gorjeta: (comanda as any).gorjeta_valor ?? 0,
+      total: saldo.total,
+      total_pago: saldo.total_pago,
+      taxa_cartao_total: parseFloat(taxaCartaoTotal.toFixed(2)),
+      saldo: saldo.saldo,
+      pagamentos: (pagamentos ?? []).map((p: any) => ({
+        valor: p.valor,
+        forma_pagamento: p.forma_pagamento,
+        criado_em: p.criado_em,
+        taxa_cartao_valor: p.taxa_cartao_valor ?? 0,
+      })),
       itens: (itens ?? []).map((i: any) => ({
         quantity: i.quantity,
+        unit_price: i.unit_price,
+        subtotal: parseFloat((i.quantity * i.unit_price).toFixed(2)),
         status: i.status,
         enviado_em: i.enviado_em,
         preparando_em: i.preparando_em,
         product_name: i.products?.name,
+        posicao_fila:
+          i.status === 'enviado' ? aguardandoIds.indexOf(i.id) + 1
+          : i.status === 'preparando' ? preparandoIds.indexOf(i.id) + 1
+          : null,
       })),
     };
   }
@@ -380,6 +424,74 @@ export class SalaoService {
         quantity: i.quantity,
       };
     });
+  }
+
+  // Fila de preparo do restaurante inteiro (não só as comandas do garçom logado) — o
+  // garçom usa isso pra responder ao cliente presencial "quantos faltam antes do meu"
+  // e "quanto tempo em média demora", sem precisar ir até a cozinha.
+  async filaCozinha(restaurantId: number) {
+    const { data: itensRaw, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, order_id, quantity, status, enviado_em, preparando_em, products(name), orders!inner(restaurant_id, canal, status, numero_comanda, cliente_mesa_nome, mesas(numero, nome))')
+      .eq('orders.restaurant_id', restaurantId)
+      .eq('orders.canal', 'presencial')
+      .in('orders.status', ['aberta', 'fechada_garcom'])
+      .in('status', ['enviado', 'preparando'])
+      .order('enviado_em', { ascending: true });
+    if (error) throw error;
+
+    const itens = (itensRaw ?? []).map((i: any) => ({
+      item_id: i.id,
+      order_id: i.order_id,
+      numero_comanda: i.orders?.numero_comanda ?? i.order_id,
+      mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+      cliente_mesa_nome: i.orders?.cliente_mesa_nome ?? null,
+      product_name: i.products?.name,
+      quantity: i.quantity,
+      status: i.status,
+      enviado_em: i.enviado_em,
+      preparando_em: i.preparando_em,
+    }));
+
+    // Três médias, sobre itens finalizados hoje: espera (na fila, antes do preparo
+    // começar), preparo (tempo ativo de cozinha) e geral (soma das duas, o que o
+    // cliente sente desde que pediu até ficar pronto).
+    const inicioHoje = new Date();
+    inicioHoje.setHours(0, 0, 0, 0);
+    const { data: prontosHoje } = await this.supabase.client
+      .from('order_items')
+      .select('enviado_em, preparando_em, pronto_em, orders!inner(restaurant_id, canal)')
+      .eq('orders.restaurant_id', restaurantId)
+      .eq('orders.canal', 'presencial')
+      .eq('status', 'pronto')
+      .not('enviado_em', 'is', null)
+      .not('preparando_em', 'is', null)
+      .not('pronto_em', 'is', null)
+      .gte('pronto_em', inicioHoje.toISOString())
+      // Pedido enviado em dia anterior (ficou preso/esquecido) e só marcado pronto hoje
+      // não é preparo "de hoje" — entraria como outlier gigante e mentiria a média.
+      .gte('enviado_em', inicioHoje.toISOString());
+
+    const media = (segundos: number[]) =>
+      segundos.length ? Math.round(segundos.reduce((soma, s) => soma + s, 0) / segundos.length) : null;
+
+    const esperas = (prontosHoje ?? []).map(
+      (p: any) => (new Date(p.preparando_em).getTime() - new Date(p.enviado_em).getTime()) / 1000,
+    );
+    const preparos = (prontosHoje ?? []).map(
+      (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.preparando_em).getTime()) / 1000,
+    );
+    const gerais = (prontosHoje ?? []).map(
+      (p: any) => (new Date(p.pronto_em).getTime() - new Date(p.enviado_em).getTime()) / 1000,
+    );
+
+    return {
+      itens,
+      tempoMedioEsperaSegundos: media(esperas),
+      tempoMedioPreparoSegundos: media(preparos),
+      tempoMedioGeralSegundos: media(gerais),
+      amostras: (prontosHoje ?? []).length,
+    };
   }
 
   async obterComanda(comandaId: number, garcomId: number) {

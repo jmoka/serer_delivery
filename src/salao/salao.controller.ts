@@ -39,6 +39,11 @@ export class SalaoController {
     return this.service.itensProntos(req.garcomId);
   }
 
+  @Get('fila-cozinha')
+  filaCozinha(@Req() req: any) {
+    return this.service.filaCozinha(req.garcomRestaurantId);
+  }
+
   @Get('comandas/:id')
   obterComanda(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.obterComanda(id, req.garcomId);
