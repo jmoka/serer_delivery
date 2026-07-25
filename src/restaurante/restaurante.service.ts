@@ -480,7 +480,7 @@ export class RestauranteService {
 
   async updateEmpresa(
     restaurantId: number,
-    body: { name?: string; address?: string; state?: string; city?: string; neighborhood?: string; cep?: string; logo_url?: string },
+    body: { name?: string; address?: string; state?: string; city?: string; neighborhood?: string; cep?: string; logo_url?: string; slug?: string },
   ) {
     const campos: Record<string, any> = { updated_at: new Date().toISOString() };
     if (body.name !== undefined) campos.name = body.name;
@@ -490,6 +490,13 @@ export class RestauranteService {
     if (body.neighborhood !== undefined) campos.neighborhood = body.neighborhood;
     if (body.cep !== undefined) campos.cep = body.cep ? body.cep.replace(/\D/g, '') : null;
     if (body.logo_url !== undefined) campos.logo_url = body.logo_url;
+    if (body.slug !== undefined) {
+      const slug = body.slug.trim().toLowerCase();
+      if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug) || slug.length < 3 || slug.length > 60) {
+        throw new BadRequestException('Link inválido. Use só letras minúsculas, números e hífen (mín. 3 caracteres), sem começar/terminar com hífen.');
+      }
+      campos.slug = slug;
+    }
 
     const { data, error } = await this.supabase.client
       .from('restaurants')
@@ -498,7 +505,12 @@ export class RestauranteService {
       .select('id, name, address, state, city, neighborhood, cep, logo_url, slug')
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) {
+      if ((error as any).code === '23505') {
+        throw new ConflictException('Esse link já está em uso por outro estabelecimento.');
+      }
+      throw error;
+    }
 
     // Geocodifica em background (best-effort) sempre que algum campo de endereço mudou —
     // usa o endereço completo (rua + bairro + cidade + estado + cep), não só o campo livre
