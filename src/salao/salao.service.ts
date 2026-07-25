@@ -606,26 +606,34 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
-  // Garçom confirma que levou o item até a mesa — só depois que o Bar/Cozinha já marcou
-  // 'pronto' (ver marcarItemPronto em restaurante.service.ts). Fecha o ciclo iniciado em
-  // itensProntos (alarme sonoro "está pronto pra buscar"). Coluna própria, não mexe no
-  // status (compartilhado com delivery) — delivery não é afetado por isso.
+  // Garçom confirma que levou o item até a mesa — a partir do momento que o Bar/Cozinha
+  // já iniciou o preparo ('preparando' ou 'pronto', ver iniciarPreparoItem/marcarItemPronto
+  // em restaurante.service.ts). Também força status pra 'pronto' se ainda tava 'preparando'
+  // — garçom pode confirmar antes do Bar clicar o próprio "Entregue", e o item precisa sair
+  // da fila ativa do Painel do Bar (senão fica preso lá achando que falta ação do Bar).
+  // entregue_garcom é coluna própria, não mexe no status compartilhado com delivery.
   async confirmarEntregaItem(comandaId: number, garcomId: number, itemId: number) {
     await this.garantirComandaDoGarcom(comandaId, garcomId);
 
     const { data: item } = await this.supabase.client
       .from('order_items')
-      .select('id, status')
+      .select('id, status, pronto_em')
       .eq('id', itemId)
       .eq('order_id', comandaId)
       .maybeSingle();
     if (!item) throw new NotFoundException('Item não encontrado');
-    if (item.status !== 'pronto') throw new ForbiddenException('Item ainda não está pronto pra entrega');
+    if (item.status !== 'preparando' && item.status !== 'pronto') {
+      throw new ForbiddenException('Item ainda não está em preparo');
+    }
 
-    const { error } = await this.supabase.client
-      .from('order_items')
-      .update({ entregue_garcom: true, entregue_em: new Date().toISOString() })
-      .eq('id', itemId);
+    const agora = new Date().toISOString();
+    const update: Record<string, unknown> = { entregue_garcom: true, entregue_em: agora };
+    if (item.status === 'preparando') {
+      update.status = 'pronto';
+      update.pronto_em = item.pronto_em ?? agora;
+    }
+
+    const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
     if (error) throw error;
 
     return this.obterComanda(comandaId, garcomId);
