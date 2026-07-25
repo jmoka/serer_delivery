@@ -74,6 +74,11 @@ export class SalaoController {
     return this.service.removerItem(id, req.garcomId, itemId);
   }
 
+  @Patch('comandas/:id/itens/:itemId/entregar')
+  confirmarEntregaItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
+    return this.service.confirmarEntregaItem(id, req.garcomId, itemId);
+  }
+
   @Patch('comandas/:id/cliente')
   editarCliente(
     @Param('id', ParseIntPipe) id: number,

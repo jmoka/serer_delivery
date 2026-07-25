@@ -411,7 +411,8 @@ export class SalaoService {
       .from('order_items')
       .select('id, order_id, quantity, products(name)')
       .in('order_id', comandaIds)
-      .eq('status', 'pronto');
+      .eq('status', 'pronto')
+      .eq('entregue_garcom', false);
 
     return (itens ?? []).map((i: any) => {
       const comanda = comandaMap.get(i.order_id);
@@ -499,7 +500,7 @@ export class SalaoService {
 
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, products(name, image_url)')
+      .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, entregue_garcom, products(name, image_url)')
       .eq('order_id', comandaId)
       .order('id', { ascending: true });
     if (error) throw error;
@@ -602,6 +603,31 @@ export class SalaoService {
     if (error) throw error;
 
     await this.recalcularTotal(comandaId);
+    return this.obterComanda(comandaId, garcomId);
+  }
+
+  // Garçom confirma que levou o item até a mesa — só depois que o Bar/Cozinha já marcou
+  // 'pronto' (ver marcarItemPronto em restaurante.service.ts). Fecha o ciclo iniciado em
+  // itensProntos (alarme sonoro "está pronto pra buscar"). Coluna própria, não mexe no
+  // status (compartilhado com delivery) — delivery não é afetado por isso.
+  async confirmarEntregaItem(comandaId: number, garcomId: number, itemId: number) {
+    await this.garantirComandaDoGarcom(comandaId, garcomId);
+
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status')
+      .eq('id', itemId)
+      .eq('order_id', comandaId)
+      .maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (item.status !== 'pronto') throw new ForbiddenException('Item ainda não está pronto pra entrega');
+
+    const { error } = await this.supabase.client
+      .from('order_items')
+      .update({ entregue_garcom: true, entregue_em: new Date().toISOString() })
+      .eq('id', itemId);
+    if (error) throw error;
+
     return this.obterComanda(comandaId, garcomId);
   }
 
