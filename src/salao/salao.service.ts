@@ -515,14 +515,15 @@ export class SalaoService {
     // o valor de fato lançado é o que o caixa confirma no PDV (pode ajustar).
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('gorjeta_percentual')
+      .select('gorjeta_percentual, taxa_cartao_percentual')
       .eq('id', comanda.restaurant_id)
       .maybeSingle();
     const percentual = restaurante?.gorjeta_percentual ?? 0;
     const subtotalItens = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     const gorjeta_sugestao = { percentual, valor_sugerido: parseFloat(((subtotalItens * percentual) / 100).toFixed(2)) };
+    const taxa_cartao_percentual = restaurante?.taxa_cartao_percentual ?? 0;
 
-    return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo, gorjeta_sugestao };
+    return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo, gorjeta_sugestao, taxa_cartao_percentual };
   }
 
   async adicionarItens(comandaId: number, garcomId: number, itens: ItemComandaBody[]) {
