@@ -5,7 +5,7 @@ import { haversineKm } from '../common/geo.util';
 import { normalizarDominio } from '../common/dominio.util';
 import * as os from 'os';
 
-const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active';
+const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active, quantidade_estoque';
 const RAIO_KM_PADRAO = 15;
 
 @Controller('r')
@@ -162,6 +162,7 @@ export class CatalogoController {
       .from('products')
       .select(PRODUTO_FIELDS)
       .eq('is_active', true)
+      .gt('quantidade_estoque', 0)
       .in('restaurant_id', restIds)
       .order('name')
       .limit(200);
@@ -216,6 +217,7 @@ export class CatalogoController {
       .from('products')
       .select(PRODUTO_FIELDS)
       .eq('is_active', true)
+      .gt('quantidade_estoque', 0)
       .eq('restaurant_id', restaurante.id)
       .order('destaque', { ascending: false })
       .order('name');

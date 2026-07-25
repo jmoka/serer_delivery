@@ -120,6 +120,7 @@ export class SalaoService {
       .select('id, name, price, image_url, category_id, categories(name)')
       .eq('restaurant_id', restaurantId)
       .eq('is_active', true)
+      .gt('quantidade_estoque', 0)
       .order('name', { ascending: true });
     if (error) throw error;
     return (data ?? []).map((p: any) => ({ ...p, category_name: p.categories?.name ?? 'Outros' }));

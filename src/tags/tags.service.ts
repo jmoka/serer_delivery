@@ -77,7 +77,7 @@ export class TagsService {
         if (topIds.length > 0) {
           const { data } = await this.supabase.client
             .from('products').select('id, name, price, preco_promo, image_url, tags, destaque, is_active')
-            .in('id', topIds).eq('is_active', true);
+            .in('id', topIds).eq('is_active', true).gt('quantidade_estoque', 0);
           // Manter ordem por ranking
           const prodMap = Object.fromEntries((data ?? []).map((p: any) => [p.id, p]));
           produtos = topIds.map((id) => prodMap[id]).filter(Boolean);
@@ -89,6 +89,7 @@ export class TagsService {
           .select('id, name, price, preco_promo, image_url, tags, destaque, is_active, category_id')
           .contains('tags', [tag.slug])
           .eq('is_active', true)
+          .gt('quantidade_estoque', 0)
           .limit(12);
 
         if (data) {
