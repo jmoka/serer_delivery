@@ -941,6 +941,10 @@ export class RestauranteService {
     // aparecer explícito na conferência de fechamento, sem esconder dentro da forma.
     let total_vendas = 0;
     const por_pagamento: Record<string, number> = {};
+    // Taxa por forma (não some no bucket único "taxa_cartao") — pra tela de fechamento
+    // poder mostrar "Débito R$161,70 + taxa R$11,32 = R$173,02" em vez de um total
+    // de taxa solto, sem saber se veio do débito ou do crédito.
+    const taxa_por_forma: Record<string, number> = {};
     for (const p of entregues) {
       const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComanda?.get(p.id) : undefined;
       if (pagamentosComanda?.length) {
@@ -948,7 +952,10 @@ export class RestauranteService {
           const m = pag.forma_pagamento ?? 'outro';
           const taxa = pag.taxa_cartao_valor ?? 0;
           por_pagamento[m] = (por_pagamento[m] ?? 0) + (pag.valor ?? 0);
-          if (taxa > 0) por_pagamento['taxa_cartao'] = (por_pagamento['taxa_cartao'] ?? 0) + taxa;
+          if (taxa > 0) {
+            por_pagamento['taxa_cartao'] = (por_pagamento['taxa_cartao'] ?? 0) + taxa;
+            taxa_por_forma[m] = (taxa_por_forma[m] ?? 0) + taxa;
+          }
           total_vendas += (pag.valor ?? 0) + taxa;
         }
       } else {
@@ -977,6 +984,7 @@ export class RestauranteService {
       total_entradas,
       saldo: valor_inicial + total_vendas + total_entradas - total_saidas,
       por_pagamento,
+      taxa_por_forma,
       especie_calculada,
       saidas_especie,
       entradas_especie,
