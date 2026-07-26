@@ -1641,7 +1641,7 @@ export class RestauranteService {
 
     const { data: pedidos } = await this.supabase.client
       .from('orders')
-      .select('id, total, status, garcom_id, gorjeta_valor, created_at')
+      .select('id, total, status, canal, garcom_id, gorjeta_valor, created_at, numero_comanda, mesa_id, cliente_mesa_nome, customer_id, mesas(numero, nome), customers(name)')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .not('garcom_id', 'is', null)
@@ -1655,6 +1655,8 @@ export class RestauranteService {
           .select('garcom_id, order_id, valor_calculado')
           .in('order_id', orderIds)
       : { data: [] as any[] };
+
+    const pagamentosPorComanda = await this.buscarPagamentosPorComanda(pedidos ?? []);
 
     const { data: comandasAtuais } = await this.supabase.client
       .from('orders')
@@ -1698,7 +1700,35 @@ export class RestauranteService {
       if (c.status === 'fechada_garcom') row.comandas_pendentes++;
     }
 
-    return { garcons: Array.from(porGarcom.values()) };
+    const nomeGarcom = new Map<number, string>((garcons ?? []).map((g: any) => [g.id, g.nome]));
+    const vendas = (pedidos ?? [])
+      .filter((p: any) => p.status === 'paga')
+      .map((p: any) => {
+        const pagamentos = pagamentosPorComanda.get(p.id) ?? [];
+        const taxa_cartao = pagamentos.reduce((s, pg) => s + (pg.taxa_cartao_valor ?? 0), 0);
+        const formas_pagamento = pagamentos.length
+          ? [...new Set(pagamentos.map((pg) => pg.forma_pagamento))].join(' + ')
+          : null;
+        const gorjeta = p.gorjeta_valor ?? 0;
+        return {
+          order_id: p.id,
+          numero_comanda: p.numero_comanda,
+          garcom_id: p.garcom_id,
+          garcom_nome: nomeGarcom.get(p.garcom_id) ?? '—',
+          mesa_numero: p.mesas?.numero ?? null,
+          mesa_nome: p.mesas?.nome ?? null,
+          cliente_nome: p.customers?.name ?? p.cliente_mesa_nome ?? null,
+          data: p.created_at,
+          total: p.total ?? 0,
+          gorjeta,
+          taxa_cartao,
+          formas_pagamento,
+          total_geral: (p.total ?? 0) + gorjeta + taxa_cartao,
+        };
+      })
+      .sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
+
+    return { garcons: Array.from(porGarcom.values()), vendas };
   }
 
   // Relatório Produtos: lista/sem-estoque/ativos-bloqueados são estado atual (não filtrados
