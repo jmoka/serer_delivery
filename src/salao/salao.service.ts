@@ -616,8 +616,9 @@ export class SalaoService {
   // mesa querer pagar só o que ele consumiu, sem mexer no resto da conta dos outros.
   // Não exige item "pendente" (diferente de editar/remover item) — separa pra cobrança
   // vale pra itens já enviados/prontos também, só muda quem paga por eles.
-  async dividirComanda(comandaId: number, garcomId: number, itemIds: number[]) {
+  async dividirComanda(comandaId: number, garcomId: number, itemIds: number[], clienteNome: string, clienteTelefone?: string) {
     if (!itemIds?.length) throw new BadRequestException('Selecione ao menos 1 item pra separar');
+    if (!clienteNome?.trim()) throw new BadRequestException('Informe o nome do cliente da nova comanda');
 
     const origem = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (origem.status !== 'aberta') throw new BadRequestException('Só é possível dividir comandas abertas');
@@ -641,7 +642,8 @@ export class SalaoService {
         canal: 'presencial',
         status: 'aberta',
         garcom_id: garcomId,
-        cliente_mesa_nome: origem.cliente_mesa_nome ? `${origem.cliente_mesa_nome} (dividida)` : 'Comanda dividida',
+        cliente_mesa_nome: clienteNome.trim(),
+        cliente_mesa_telefone: clienteTelefone?.trim() || null,
         total: 0,
         caixa_id: caixaAberto?.id ?? null,
       })

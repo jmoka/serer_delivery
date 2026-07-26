@@ -123,8 +123,21 @@ export class RestauranteSalaoController {
   }
 
   @Post('comandas/:id/dividir')
-  dividir(@Param('id', ParseIntPipe) id: number, @Body() body: { item_ids: number[] }, @Req() req: any) {
-    return this.service.dividirComanda(id, req.restaurantId, body.item_ids);
+  dividir(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { item_ids: number[]; cliente_nome: string; cliente_telefone?: string },
+    @Req() req: any,
+  ) {
+    return this.service.dividirComanda(id, req.restaurantId, body.item_ids, body.cliente_nome, body.cliente_telefone);
+  }
+
+  @Patch('comandas/:id/cliente')
+  editarCliente(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { cliente_nome: string; cliente_telefone?: string },
+    @Req() req: any,
+  ) {
+    return this.service.editarClienteMesa(id, req.restaurantId, body);
   }
 
   @Get('comandas/:id/sugestao-gorjeta')
