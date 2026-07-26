@@ -786,9 +786,12 @@ export class RestauranteService {
   // (cozinha, bar, salgados...) — lista PLANA de itens (não agrupa por mesa/comanda,
   // cada item tem sua própria ação de preparo/impressão), ordenada por chegada.
   async getKdsSetor(restaurantId: number, impressoraId: number) {
-    // Itens "pronto" recentes (últimos 10min) também entram — sem isso, um clique errado
-    // em "Entregue"/"Pronto" faz o item sumir da tela sem chance de desfazer.
-    const limiteProntos = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    // Itens "pronto" de hoje inteiro também entram — sem isso, um clique errado em
+    // "Entregue"/"Pronto" faz o item sumir da tela sem chance de desfazer. A tela
+    // (Cozinha/Produção) que decide mostrar só os últimos N com opção de expandir.
+    const inicioDoDia = new Date();
+    inicioDoDia.setHours(0, 0, 0, 0);
+    const limiteProntos = inicioDoDia.toISOString();
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
       .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
