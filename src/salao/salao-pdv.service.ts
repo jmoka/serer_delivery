@@ -675,7 +675,6 @@ export class SalaoPdvService {
 
     if (formaPagamento === 'cash') {
       const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
-      if (gorjeta > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Gorjeta - ${identificador}`, gorjeta, 'gorjeta');
       if (troco && troco > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
     }
 
