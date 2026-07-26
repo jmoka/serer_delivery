@@ -169,7 +169,11 @@ export class SalaoService {
     const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     const totalTaxaCartao = (pagamentos ?? []).reduce((acc: number, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
     const totalFinal = subtotal - (comanda?.desconto_valor ?? 0) + (comanda?.acrescimo_valor ?? 0) + (comanda?.gorjeta_valor ?? 0) + totalTaxaCartao;
-    const totalPago = (pagamentos ?? []).reduce((acc: number, p: any) => acc + p.valor, 0);
+    // total_pago tem que incluir a taxa de cada pagamento — ela já foi cobrada do
+    // cliente junto com o valor base. Somar só p.valor (sem a taxa) fazia o saldo
+    // devedor contar a taxa já paga como se ainda estivesse em aberto, cobrando ela
+    // de novo no fechamento.
+    const totalPago = (pagamentos ?? []).reduce((acc: number, p: any) => acc + p.valor + (p.taxa_cartao_valor ?? 0), 0);
 
     return {
       subtotal: parseFloat(subtotal.toFixed(2)),
