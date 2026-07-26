@@ -576,7 +576,13 @@ export class SalaoPdvService {
       unit_price: i.products?.price,
     }));
 
-    const conteudo = this.salaoService.formatarConferenciaTexto(restaurante?.name, comanda, itensFormatados, valores);
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor')
+      .eq('order_id', id)
+      .order('criado_em', { ascending: true });
+
+    const conteudo = this.salaoService.formatarConferenciaTexto(restaurante?.name, comanda, itensFormatados, valores, pagamentos ?? []);
     const { error } = await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,
@@ -717,9 +723,18 @@ export class SalaoPdvService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('valor, forma_pagamento, origem')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
+
+    // Soma a taxa de TODOS os pagamentos da comanda (garçom + caixa, parciais e final) —
+    // usar só taxaCartaoValor (da última parcela) subestimava o recibo quando já havia
+    // pagamento parcial anterior em cartão.
+    const taxaCartaoTotalRecibo = (pagamentos ?? []).reduce((acc, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
+    // TOTAL do recibo é o valor geral da comanda inteira (produtos +/- desconto/acréscimo
+    // + gorjeta + taxa) — não "quanto faltava cobrar agora", que pode ser zero quando
+    // pagamentos parciais anteriores já cobriram tudo.
+    const totalGeralRecibo = parseFloat((totalFinal + gorjeta + taxaCartaoTotalRecibo).toFixed(2));
 
     const recibo = await this.salaoService.imprimirReciboSeConfigurado(
       restaurantId, comanda,
@@ -729,8 +744,8 @@ export class SalaoPdvService {
         desconto: comanda.desconto_valor ?? 0,
         acrescimo: comanda.acrescimo_valor ?? 0,
         gorjeta,
-        taxaCartao: taxaCartaoValor,
-        total: parseFloat(totalFinal.toFixed(2)),
+        taxaCartao: taxaCartaoTotalRecibo,
+        total: totalGeralRecibo,
         formaPagamento,
         trocoDado: troco && troco > 0 ? troco : 0,
       },
@@ -738,8 +753,8 @@ export class SalaoPdvService {
     );
 
     return {
-      ok: true, total: parseFloat(totalFinal.toFixed(2)),
-      taxa_cartao_valor: taxaCartaoValor, valor_cobrado: valorACobrar,
+      ok: true, total: parseFloat(totalFinal.toFixed(2)), total_geral: totalGeralRecibo,
+      taxa_cartao_valor: taxaCartaoTotalRecibo, valor_cobrado: valorACobrar,
       troco, recibo, pagamentos: pagamentos ?? [],
     };
   }
@@ -761,6 +776,10 @@ export class SalaoPdvService {
       .order('criado_em', { ascending: true });
 
     const taxaCartaoValor = (pagamentos ?? []).reduce((acc: number, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
+    // TOTAL do recibo é o valor geral da comanda (comanda.total já é subtotal +/- desconto/
+    // acréscimo, salvo no pagamento) somado à gorjeta e à taxa de cartão total — não o
+    // valor bruto salvo em orders.total, que sozinho não inclui gorjeta/taxa.
+    const totalGeralRecibo = parseFloat(((comanda.total ?? 0) + (comanda.gorjeta_valor ?? 0) + taxaCartaoValor).toFixed(2));
 
     const recibo = await this.salaoService.imprimirReciboSeConfigurado(
       restaurantId, comanda,
@@ -771,13 +790,13 @@ export class SalaoPdvService {
         acrescimo: comanda.acrescimo_valor ?? 0,
         gorjeta: comanda.gorjeta_valor ?? 0,
         taxaCartao: taxaCartaoValor,
-        total: comanda.total,
+        total: totalGeralRecibo,
         formaPagamento: comanda.payment_method,
         trocoDado: 0,
       },
       pagamentos ?? [],
     );
 
-    return { ok: true, recibo, subtotal, taxa_cartao_valor: taxaCartaoValor, pagamentos: pagamentos ?? [] };
+    return { ok: true, recibo, subtotal, total: totalGeralRecibo, taxa_cartao_valor: taxaCartaoValor, pagamentos: pagamentos ?? [] };
   }
 }

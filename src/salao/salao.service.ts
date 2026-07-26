@@ -765,7 +765,7 @@ export class SalaoService {
       formaPagamento: string;
       trocoDado?: number;
     },
-    pagamentos?: { valor: number; forma_pagamento: string; origem: string }[],
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number }[],
   ): string {
     const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
     const PAGAMENTO_LABEL: Record<string, string> = { pix: 'PIX', credit_card: 'Cartao', debit_card: 'Debito', cash: 'Dinheiro' };
@@ -800,7 +800,8 @@ export class SalaoService {
       linhas.push('Pagamentos:');
       for (const p of pagamentos) {
         const origemLabel = p.origem === 'garcom' ? 'garcom' : 'caixa';
-        linhas.push(`${PAGAMENTO_LABEL[p.forma_pagamento] ?? p.forma_pagamento} (${origemLabel}): R$ ${fmt(p.valor)}`);
+        const taxaP = p.taxa_cartao_valor ? ` + taxa R$ ${fmt(p.taxa_cartao_valor)}` : '';
+        linhas.push(`${PAGAMENTO_LABEL[p.forma_pagamento] ?? p.forma_pagamento} (${origemLabel}): R$ ${fmt(p.valor + (p.taxa_cartao_valor ?? 0))}${taxaP}`);
       }
     } else {
       linhas.push(`Pagamento: ${PAGAMENTO_LABEL[valores.formaPagamento] ?? valores.formaPagamento}`);
@@ -819,7 +820,7 @@ export class SalaoService {
     comanda: any,
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
     valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; total: number; formaPagamento: string; trocoDado?: number },
-    pagamentos?: { valor: number; forma_pagamento: string; origem: string }[],
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number }[],
   ): Promise<{ via: 'agente' } | { via: 'navegador' }> {
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
@@ -851,9 +852,10 @@ export class SalaoService {
   // cliente (QR, sem login) só pode solicitar conferência, nunca gerar isso direto.
   formatarConferenciaTexto(
     restauranteNome: string,
-    comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null },
+    comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null; garcons?: { nome: string } | null },
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
     valores: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number }[],
   ): string {
     const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
     const NEGRITO_ON = '\x1b\x45\x01';
@@ -868,6 +870,7 @@ export class SalaoService {
       linhas.push(this.removerAcentos(`Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}`));
     }
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
+    if (comanda.garcons?.nome) linhas.push(this.removerAcentos(`Garcom: ${comanda.garcons.nome}`));
     linhas.push(new Date().toLocaleString('pt-BR'));
     linhas.push('--------------------------------');
     let subtotal = 0;
@@ -886,7 +889,17 @@ export class SalaoService {
     if (gorjeta) linhas.push(`Gorjeta: + R$ ${fmt(gorjeta)}`);
     if (taxaCartao) linhas.push(`Taxa cartao: + R$ ${fmt(taxaCartao)}`);
     linhas.push(`${NEGRITO_ON}TOTAL: R$ ${fmt(total)}${NEGRITO_OFF}`);
-    if (formaPagamento) linhas.push(`Forma de pagamento: ${PAGAMENTO_LABEL[formaPagamento] ?? formaPagamento}`);
+    if (pagamentos?.length) {
+      linhas.push('--------------------------------');
+      linhas.push('Ja pago:');
+      for (const p of pagamentos) {
+        const origemLabel = p.origem === 'garcom' ? 'garcom' : 'caixa';
+        const taxaP = p.taxa_cartao_valor ? ` + taxa R$ ${fmt(p.taxa_cartao_valor)}` : '';
+        linhas.push(`${PAGAMENTO_LABEL[p.forma_pagamento] ?? p.forma_pagamento} (${origemLabel}): R$ ${fmt(p.valor + (p.taxa_cartao_valor ?? 0))}${taxaP}`);
+      }
+    } else if (formaPagamento) {
+      linhas.push(`Forma de pagamento: ${PAGAMENTO_LABEL[formaPagamento] ?? formaPagamento}`);
+    }
     linhas.push('--------------------------------');
     linhas.push('Peca ao garcom pra fechar a conta');
     return linhas.join('\n');
