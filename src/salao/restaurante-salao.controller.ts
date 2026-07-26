@@ -122,6 +122,11 @@ export class RestauranteSalaoController {
     return this.service.transferir(id, req.restaurantId, body);
   }
 
+  @Post('comandas/:id/dividir')
+  dividir(@Param('id', ParseIntPipe) id: number, @Body() body: { item_ids: number[] }, @Req() req: any) {
+    return this.service.dividirComanda(id, req.restaurantId, body.item_ids);
+  }
+
   @Get('comandas/:id/sugestao-gorjeta')
   sugestaoGorjeta(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.sugestaoGorjeta(id, req.restaurantId);

@@ -612,6 +612,56 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
+  // Separa itens escolhidos pra uma comanda avulsa nova — pro caso de um cliente da
+  // mesa querer pagar só o que ele consumiu, sem mexer no resto da conta dos outros.
+  // Não exige item "pendente" (diferente de editar/remover item) — separa pra cobrança
+  // vale pra itens já enviados/prontos também, só muda quem paga por eles.
+  async dividirComanda(comandaId: number, garcomId: number, itemIds: number[]) {
+    if (!itemIds?.length) throw new BadRequestException('Selecione ao menos 1 item pra separar');
+
+    const origem = await this.garantirComandaDoGarcom(comandaId, garcomId);
+    if (origem.status !== 'aberta') throw new BadRequestException('Só é possível dividir comandas abertas');
+
+    const { data: itensOrigem } = await this.supabase.client
+      .from('order_items').select('id').eq('order_id', comandaId);
+    const idsValidos = new Set((itensOrigem ?? []).map((i: any) => i.id));
+    const idsParaMover = [...new Set(itemIds)].filter((id) => idsValidos.has(id));
+    if (!idsParaMover.length) throw new BadRequestException('Nenhum item válido selecionado');
+    if (idsParaMover.length === idsValidos.size) {
+      throw new BadRequestException('Selecione menos que todos os itens — pra mover a comanda inteira use transferir');
+    }
+
+    const { data: caixaAberto } = await this.supabase.client
+      .from('caixas').select('id').eq('restaurant_id', origem.restaurant_id).eq('status', 'aberto').maybeSingle();
+
+    const { data: novaComanda, error: errNova } = await this.supabase.client
+      .from('orders')
+      .insert({
+        restaurant_id: origem.restaurant_id,
+        canal: 'presencial',
+        status: 'aberta',
+        garcom_id: garcomId,
+        cliente_mesa_nome: origem.cliente_mesa_nome ? `${origem.cliente_mesa_nome} (dividida)` : 'Comanda dividida',
+        total: 0,
+        caixa_id: caixaAberto?.id ?? null,
+      })
+      .select('id')
+      .single();
+    if (errNova) throw errNova;
+
+    const { error: errMove } = await this.supabase.client
+      .from('order_items')
+      .update({ order_id: novaComanda.id })
+      .eq('order_id', comandaId)
+      .in('id', idsParaMover);
+    if (errMove) throw errMove;
+
+    await this.recalcularTotal(comandaId);
+    await this.recalcularTotal(novaComanda.id);
+
+    return { ok: true, comanda_nova_id: novaComanda.id };
+  }
+
   // Garçom confirma que levou o item até a mesa — a partir do momento que o Bar/Cozinha
   // já iniciou o preparo ('preparando' ou 'pronto', ver iniciarPreparoItem/marcarItemPronto
   // em restaurante.service.ts). Também força status pra 'pronto' se ainda tava 'preparando'

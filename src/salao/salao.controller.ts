@@ -74,6 +74,11 @@ export class SalaoController {
     return this.service.removerItem(id, req.garcomId, itemId);
   }
 
+  @Post('comandas/:id/dividir')
+  dividirComanda(@Param('id', ParseIntPipe) id: number, @Body() body: { item_ids: number[] }, @Req() req: any) {
+    return this.service.dividirComanda(id, req.garcomId, body.item_ids);
+  }
+
   @Patch('comandas/:id/itens/:itemId/entregar')
   confirmarEntregaItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
     return this.service.confirmarEntregaItem(id, req.garcomId, itemId);
