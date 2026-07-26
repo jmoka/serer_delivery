@@ -398,7 +398,7 @@ export class SalaoService {
   async itensProntos(garcomId: number) {
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, numero_comanda, mesa_id, mesas(numero, nome)')
+      .select('id, numero_comanda, mesa_id, cliente_mesa_nome, mesas(numero, nome)')
       .eq('garcom_id', garcomId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom']);
@@ -422,6 +422,7 @@ export class SalaoService {
         order_id: i.order_id,
         numero_comanda: comanda?.numero_comanda ?? i.order_id,
         mesa: comanda?.mesas ? `Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}` : null,
+        cliente: comanda?.cliente_mesa_nome ?? null,
         product_name: i.products?.name,
         quantity: i.quantity,
       };
