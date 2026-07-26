@@ -794,7 +794,7 @@ export class RestauranteService {
     const limiteProntos = inicioDoDia.toISOString();
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .or(`status.in.(enviado,preparando),and(status.eq.pronto,pronto_em.gte.${limiteProntos})`)
       .order('enviado_em', { ascending: true });
@@ -828,6 +828,8 @@ export class RestauranteService {
           entregue_garcom: i.entregue_garcom ?? false,
           tipo: ehSalao ? 'salao' : 'delivery',
           mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+          mesa_numero: i.orders?.mesas?.numero ?? null,
+          numero_comanda: i.orders?.numero_comanda ?? null,
           cliente: i.orders?.cliente_mesa_nome ?? (i.orders?.customer_id ? customerMap[i.orders.customer_id] ?? null : null),
           garcom: i.orders?.garcons?.nome ?? null,
           // Status de entrega do pedido (delivery) — usado no Bar pra alerta de motoboy
