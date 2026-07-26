@@ -238,6 +238,11 @@ export class RestauranteController {
     return this.service.adicionarSaida(req.restaurantId, body);
   }
 
+  @Delete('caixa/saida/:index')
+  estornarSaida(@Param('index', ParseIntPipe) index: number, @Req() req: any) {
+    return this.service.estornarSaida(req.restaurantId, index);
+  }
+
   @Post('caixa/entrada')
   adicionarEntrada(@Req() req: any, @Body() body: { descricao: string; valor: number; meio?: string }) {
     return this.service.adicionarEntrada(req.restaurantId, body);

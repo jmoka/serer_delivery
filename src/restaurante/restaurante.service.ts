@@ -1294,6 +1294,22 @@ export class RestauranteService {
     return nova;
   }
 
+  // Estorna uma saída lançada por engano (ex: sangria automática de gorjeta que não devia
+  // existir) — remove o registro do array e o valor volta a contar no saldo do caixa.
+  async estornarSaida(restaurantId: number, index: number) {
+    const { data: caixa } = await this.supabase.client
+      .from('caixas').select('id, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
+
+    const saidas = (caixa.saidas ?? []) as any[];
+    if (index < 0 || index >= saidas.length) throw new BadRequestException('Saída não encontrada');
+
+    const novasSaidas = saidas.filter((_, i) => i !== index);
+    const { error } = await this.supabase.client.from('caixas').update({ saidas: novasSaidas }).eq('id', caixa.id);
+    if (error) throw error;
+    return { ok: true };
+  }
+
   async adicionarEntrada(restaurantId: number, body: { descricao: string; valor: number; meio?: string }) {
     if (!body.valor || body.valor <= 0) throw new BadRequestException('Valor da entrada deve ser maior que zero');
     if (!body.descricao?.trim()) throw new BadRequestException('Descrição da entrada é obrigatória');
