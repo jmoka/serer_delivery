@@ -914,6 +914,34 @@ export class RestauranteService {
     throw new BadRequestException('Item já está aguardando — não dá pra voltar mais');
   }
 
+  // Cancela item ainda "Aguardando Preparo" — some da fila de Produção e Cozinha
+  // (ambas leem por status via GET /kds). Só permite nesse estágio: depois que a
+  // cozinha já começou o preparo, cancelar teria que envolver estorno/decisão do
+  // dono, fora do escopo desse botão rápido.
+  async cancelarItem(itemId: number, restaurantId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, order_id, orders(restaurant_id)')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
+    }
+
+    if (item.status !== 'enviado') {
+      throw new BadRequestException('Só é possível cancelar um item enquanto está Aguardando Preparo');
+    }
+
+    const { error } = await this.supabase.client
+      .from('order_items')
+      .update({ status: 'cancelado', cancelado_em: new Date().toISOString() })
+      .eq('id', itemId);
+    if (error) throw error;
+
+    return { ok: true };
+  }
+
   private readonly STATUS_ABERTOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery'];
   private readonly COMANDA_STATUS_ABERTOS = ['aberta', 'fechada_garcom'];
 
