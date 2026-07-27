@@ -74,6 +74,23 @@ export class SalaoService {
       .order('criado_em', { ascending: true });
     const taxaCartaoTotal = (pagamentos ?? []).reduce((acc: number, p: any) => acc + (p.taxa_cartao_valor ?? 0), 0);
 
+    // gorjeta_valor só é gravado quando a comanda é paga (garçom/caixa escolhe o valor
+    // na hora) — enquanto a comanda ainda está aberta o cliente não vê nenhuma gorjeta
+    // no Total/Falta pagar, mesmo o restaurante tendo um percentual sugerido configurado.
+    // Estimativa: calcula em cima do percentual pra já aparecer no acompanhamento antes
+    // do pagamento; quando pago, usa o valor real cobrado (não recalcula).
+    const gorjetaJaDefinida = (comanda as any).gorjeta_valor !== null && (comanda as any).gorjeta_valor !== undefined;
+    const gorjetaEstimativa = !gorjetaJaDefinida && comanda.status !== 'paga' && percentualGorjeta > 0;
+    let gorjetaValor = (comanda as any).gorjeta_valor ?? 0;
+    let totalComGorjeta = saldo.total;
+    let saldoComGorjeta = saldo.saldo;
+    if (gorjetaEstimativa) {
+      const baseCalculo = saldo.subtotal - ((comanda as any).desconto_valor ?? 0) + ((comanda as any).acrescimo_valor ?? 0);
+      gorjetaValor = parseFloat(((baseCalculo * percentualGorjeta) / 100).toFixed(2));
+      totalComGorjeta = parseFloat((saldo.total + gorjetaValor).toFixed(2));
+      saldoComGorjeta = parseFloat((saldo.saldo + gorjetaValor).toFixed(2));
+    }
+
     return {
       restaurante: (comanda as any).restaurants?.name,
       mesa: (comanda as any).mesas ? `Mesa ${(comanda as any).mesas.numero}` : null,
@@ -87,11 +104,12 @@ export class SalaoService {
       desconto: (comanda as any).desconto_valor ?? 0,
       acrescimo: (comanda as any).acrescimo_valor ?? 0,
       gorjeta_percentual: percentualGorjeta,
-      gorjeta: (comanda as any).gorjeta_valor ?? 0,
-      total: saldo.total,
+      gorjeta: gorjetaValor,
+      gorjeta_estimativa: gorjetaEstimativa,
+      total: totalComGorjeta,
       total_pago: saldo.total_pago,
       taxa_cartao_total: parseFloat(taxaCartaoTotal.toFixed(2)),
-      saldo: saldo.saldo,
+      saldo: saldoComGorjeta,
       pagamentos: (pagamentos ?? []).map((p: any) => ({
         valor: p.valor,
         forma_pagamento: p.forma_pagamento,
