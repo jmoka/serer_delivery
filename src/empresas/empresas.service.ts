@@ -12,7 +12,7 @@ export class EmpresasService {
   async listar(apenasAtivo?: boolean) {
     let query = this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, created_at')
+      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, modulo_delivery, modulo_salao, created_at')
       .order('name');
 
     const { data, error } = await query;
@@ -23,7 +23,7 @@ export class EmpresasService {
   async buscar(id: number) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, payment_config, comissao_pct, user_id, slug, created_at')
+      .select('id, name, address, logo_url, business_hours, payment_config, comissao_pct, user_id, slug, modulo_delivery, modulo_salao, created_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -56,6 +56,8 @@ export class EmpresasService {
     comissao_pct?: number;
     user_id?: string;
     slug?: string;
+    modulo_delivery?: boolean;
+    modulo_salao?: boolean;
   }) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
@@ -66,6 +68,8 @@ export class EmpresasService {
         comissao_pct: body.comissao_pct ?? 5.0,
         user_id: body.user_id || null,
         slug: body.slug || this.gerarSlug(body.name),
+        modulo_delivery: body.modulo_delivery ?? true,
+        modulo_salao: body.modulo_salao ?? false,
       })
       .select()
       .single();
@@ -82,6 +86,8 @@ export class EmpresasService {
     business_hours: object;
     payment_config: object;
     user_id: string;
+    modulo_delivery: boolean;
+    modulo_salao: boolean;
   }>) {
     const payload: Record<string, any> = { ...body, updated_at: new Date().toISOString() };
     if ('user_id' in payload && !payload.user_id) payload.user_id = null;
