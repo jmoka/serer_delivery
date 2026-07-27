@@ -24,6 +24,8 @@ export class EmpresasController {
     logo_url?: string;
     comissao_pct?: number;
     user_id?: string;
+    modulo_delivery?: boolean;
+    modulo_salao?: boolean;
   }) {
     return this.service.criar(body);
   }
