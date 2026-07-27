@@ -86,7 +86,7 @@ export class AgenteImpressaoService {
       'TESTE DE IMPRESSÃO',
       impressora.nome,
       `Setor: ${impressora.setor}`,
-      new Date().toLocaleString('pt-BR'),
+      new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
       '--------------------------------',
       'Se você está lendo isso,',
       'a impressora está funcionando!',
