@@ -802,7 +802,7 @@ export class SalaoService {
     if (comanda.garcons?.nome) linhas.push(this.removerAcentos(`Garcom: ${comanda.garcons.nome}`));
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(`Cliente: ${comanda.cliente_mesa_nome}`));
     if (comanda.cliente_mesa_telefone) linhas.push(`Whatsapp: ${comanda.cliente_mesa_telefone}`);
-    linhas.push(new Date().toLocaleString('pt-BR'));
+    linhas.push(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }));
     linhas.push('--------------------------------');
     itens.forEach((item, idx) => {
       linhas.push(`${NEGRITO_ON}${this.removerAcentos(item.product_name ?? 'Produto')}${NEGRITO_OFF}`);
@@ -852,7 +852,7 @@ export class SalaoService {
     linhas.push('RECIBO DE PAGAMENTO');
     linhas.push(comanda.mesa_id ? this.removerAcentos(`Mesa ${comanda.mesas?.numero ?? comanda.mesa_id}`) : 'Venda balcao');
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
-    linhas.push(new Date().toLocaleString('pt-BR'));
+    linhas.push(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }));
     linhas.push('--------------------------------');
     const LARGURA_LINHA = 32;
     for (const item of itens) {
@@ -945,7 +945,7 @@ export class SalaoService {
     }
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
     if (comanda.garcons?.nome) linhas.push(this.removerAcentos(`Garcom: ${comanda.garcons.nome}`));
-    linhas.push(new Date().toLocaleString('pt-BR'));
+    linhas.push(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }));
     linhas.push('--------------------------------');
     let subtotal = 0;
     for (const item of itens) {
