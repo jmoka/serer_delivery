@@ -1042,6 +1042,7 @@ export class RestauranteService {
       especie_calculada,
       saidas_especie,
       entradas_especie,
+      cash_recebido,
     };
   }
 
