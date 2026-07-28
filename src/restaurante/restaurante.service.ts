@@ -1324,7 +1324,21 @@ export class RestauranteService {
     if (body.meio) nova.meio = body.meio;
     const { error } = await this.supabase.client.from('caixas').update({ saidas: [...saidas, nova] }).eq('id', caixa.id);
     if (error) throw error;
-    return nova;
+    return { ...nova, caixa_id: caixa.id };
+  }
+
+  // Remove uma saída específica do caixa (usado pro estorno automático de repasse de
+  // garçom) — casa por criado_em porque índice no array pode mudar se outras saídas
+  // forem removidas antes.
+  private async removerSaidaPorCriadoEm(restaurantId: number, caixaId: number, criadoEm: string) {
+    const { data: caixa } = await this.supabase.client
+      .from('caixas').select('id, saidas').eq('id', caixaId).eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    if (!caixa) throw new BadRequestException('O caixa desse lançamento já foi fechado — não é possível estornar automaticamente.');
+
+    const saidas = (caixa.saidas ?? []) as any[];
+    const novasSaidas = saidas.filter((s) => s.criado_em !== criadoEm);
+    const { error } = await this.supabase.client.from('caixas').update({ saidas: novasSaidas }).eq('id', caixa.id);
+    if (error) throw error;
   }
 
   // Estorna uma saída lançada por engano (ex: sangria automática de gorjeta que não devia
@@ -1510,13 +1524,22 @@ export class RestauranteService {
   async getRelatorio(restaurantId: number, de: string, ate: string) {
     const { data: orders, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, status, payment_method, canal, created_at, customer_id, customers(name)')
+      .select('id, total, status, payment_method, canal, created_at, customer_id, gorjeta_valor, customers(name)')
       .eq('restaurant_id', restaurantId)
       .gte('created_at', de)
       .lte('created_at', ate)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
+
+    const { data: repassesPeriodo } = await this.supabase.client
+      .from('garcom_repasses')
+      .select('valor_gorjeta, valor_comissao')
+      .eq('restaurant_id', restaurantId)
+      .gte('pago_em', de)
+      .lte('pago_em', ate);
+    const total_gorjetas_pagas = (repassesPeriodo ?? []).reduce((s: number, r: any) => s + (r.valor_gorjeta ?? 0), 0);
+    const total_comissoes_pagas = (repassesPeriodo ?? []).reduce((s: number, r: any) => s + (r.valor_comissao ?? 0), 0);
 
     const orderIds = (orders ?? []).map((o: any) => o.id);
 
@@ -1537,7 +1560,7 @@ export class RestauranteService {
         pedidos: [],
         saidas: saidasVazio,
         fluxo_caixa: [],
-        resumo: { total_pedidos: 0, entregues: 0, cancelados: 0, em_andamento: 0, total_vendas: 0, ticket_medio: 0, por_pagamento: {}, total_saidas: totalSaidasVazio, total_comissao: 0, total_gorjeta: 0, total_troco: 0, saldo_liquido: -totalSaidasVazio },
+        resumo: { total_pedidos: 0, entregues: 0, cancelados: 0, em_andamento: 0, total_vendas: 0, ticket_medio: 0, por_pagamento: {}, total_saidas: totalSaidasVazio, total_comissao: 0, total_gorjeta: 0, total_gorjetas_pagas, total_comissoes_pagas, total_troco: 0, saldo_liquido: -totalSaidasVazio },
       };
     }
 
@@ -1652,6 +1675,8 @@ export class RestauranteService {
         total_saidas,
         total_comissao,
         total_gorjeta,
+        total_gorjetas_pagas,
+        total_comissoes_pagas,
         total_troco,
         saldo_liquido: total_vendas - total_saidas,
       },
@@ -1728,6 +1753,17 @@ export class RestauranteService {
       if (c.status === 'fechada_garcom') row.comandas_pendentes++;
     }
 
+    const { data: repasses } = await this.supabase.client
+      .from('garcom_repasses')
+      .select('id, garcom_id, valor_gorjeta, valor_comissao, pago_em')
+      .eq('restaurant_id', restaurantId)
+      .eq('periodo_de', de)
+      .eq('periodo_ate', ate);
+    const repassePorGarcom = new Map<number, any>((repasses ?? []).map((r: any) => [r.garcom_id, r]));
+    for (const row of porGarcom.values()) {
+      row.repasse = repassePorGarcom.get(row.garcom_id) ?? null;
+    }
+
     const nomeGarcom = new Map<number, string>((garcons ?? []).map((g: any) => [g.id, g.nome]));
     const vendas = (pedidos ?? [])
       .filter((p: any) => p.status === 'paga')
@@ -1757,6 +1793,99 @@ export class RestauranteService {
       .sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
 
     return { garcons: Array.from(porGarcom.values()), vendas };
+  }
+
+  // Dono clica "Marcar como pago" na linha do garçom, pro período em foco no relatório —
+  // registra que a gorjeta + comissão calculadas ali já foram repassadas. UNIQUE
+  // (garcom_id, periodo_de, periodo_ate) impede marcar duas vezes o mesmo período.
+  async registrarRepasseGarcom(
+    restaurantId: number,
+    garcomId: number,
+    body: {
+      de: string; ate: string; valor_gorjeta: number; valor_comissao: number;
+      valor_dinheiro?: number; valor_pix?: number;
+    },
+  ) {
+    const { data: garcom } = await this.supabase.client
+      .from('garcons')
+      .select('id, nome')
+      .eq('id', garcomId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!garcom) throw new NotFoundException('Garçom não encontrado neste restaurante');
+
+    const total = Number((body.valor_gorjeta ?? 0) + (body.valor_comissao ?? 0));
+    const valorDinheiro = Number(body.valor_dinheiro ?? 0);
+    const valorPix = Number(body.valor_pix ?? 0);
+    if (Math.abs(valorDinheiro + valorPix - total) > 0.01) {
+      throw new BadRequestException('Soma dos valores por forma de pagamento não bate com o total a repassar');
+    }
+
+    // Repasse em dinheiro sai do caixa igual qualquer outra sangria — precisa de caixa
+    // aberto pra vincular a baixa. Repasse em PIX não mexe no caixa físico. Guarda
+    // caixa_id + criado_em da saída gerada pra dar pra estornar essa baixa específica
+    // depois, se o dono marcar o repasse como "não pago" de novo por engano.
+    let saidaCaixaId: number | null = null;
+    let saidaCriadoEm: string | null = null;
+    if (valorDinheiro > 0) {
+      const saida = await this.adicionarSaida(restaurantId, {
+        descricao: `Repasse gorjeta/comissão - ${garcom.nome}`,
+        valor: valorDinheiro,
+        meio: 'dinheiro',
+      });
+      saidaCaixaId = saida.caixa_id;
+      saidaCriadoEm = saida.criado_em;
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('garcom_repasses')
+      .insert({
+        restaurant_id: restaurantId,
+        garcom_id: garcomId,
+        periodo_de: body.de,
+        periodo_ate: body.ate,
+        valor_gorjeta: body.valor_gorjeta ?? 0,
+        valor_comissao: body.valor_comissao ?? 0,
+        valor_dinheiro: valorDinheiro,
+        valor_pix: valorPix,
+        caixa_id: saidaCaixaId,
+        saida_criado_em: saidaCriadoEm,
+      })
+      .select('id, valor_gorjeta, valor_comissao, valor_dinheiro, valor_pix, pago_em')
+      .single();
+
+    if (error) {
+      // Já tinha dado baixa no caixa — se o registro do repasse falhar (ex: período já
+      // marcado por outra aba), desfaz a saída pra não deixar o caixa com sangria órfã.
+      if (saidaCaixaId && saidaCriadoEm) {
+        await this.removerSaidaPorCriadoEm(restaurantId, saidaCaixaId, saidaCriadoEm).catch(() => {});
+      }
+      if (error.code === '23505') throw new ConflictException('Esse período já foi marcado como pago pra esse garçom.');
+      throw error;
+    }
+    return data;
+  }
+
+  // Reverte um repasse marcado como pago por engano — apaga o registro (o UNIQUE de
+  // período libera pra pagar de novo, corrigido) e, se tinha baixa em dinheiro no caixa,
+  // estorna essa saída também. Só funciona se o caixa daquela baixa ainda estiver aberto.
+  async estornarRepasseGarcom(restaurantId: number, repasseId: number) {
+    const { data: repasse, error: erroSelect } = await this.supabase.client
+      .from('garcom_repasses')
+      .select('id, valor_dinheiro, caixa_id, saida_criado_em')
+      .eq('id', repasseId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (erroSelect) throw erroSelect;
+    if (!repasse) throw new NotFoundException('Repasse não encontrado');
+
+    if (repasse.valor_dinheiro > 0 && repasse.caixa_id && repasse.saida_criado_em) {
+      await this.removerSaidaPorCriadoEm(restaurantId, repasse.caixa_id, repasse.saida_criado_em);
+    }
+
+    const { error } = await this.supabase.client.from('garcom_repasses').delete().eq('id', repasseId);
+    if (error) throw error;
+    return { ok: true };
   }
 
   // Relatório Produtos: lista/sem-estoque/ativos-bloqueados são estado atual (não filtrados

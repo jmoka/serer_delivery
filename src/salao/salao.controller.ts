@@ -142,7 +142,7 @@ export class SalaoController {
   }
 
   @Post('comandas/:id/fechar')
-  fechar(@Param('id', ParseIntPipe) id: number, @Body() body: { forma_pagamento: string }, @Req() req: any) {
-    return this.service.fecharComanda(id, req.garcomId, body.forma_pagamento);
+  fechar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.fecharComanda(id, req.garcomId);
   }
 }

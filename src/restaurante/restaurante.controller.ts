@@ -335,6 +335,23 @@ export class RestauranteController {
     return this.service.getRelatorioGarcom(req.restaurantId, de, ate);
   }
 
+  @Post('relatorio/garcom/:garcomId/repasse')
+  registrarRepasseGarcom(
+    @Req() req: any,
+    @Param('garcomId', ParseIntPipe) garcomId: number,
+    @Body() body: {
+      de: string; ate: string; valor_gorjeta: number; valor_comissao: number;
+      valor_dinheiro?: number; valor_pix?: number;
+    },
+  ) {
+    return this.service.registrarRepasseGarcom(req.restaurantId, garcomId, body);
+  }
+
+  @Delete('relatorio/garcom/repasse/:repasseId')
+  estornarRepasseGarcom(@Req() req: any, @Param('repasseId', ParseIntPipe) repasseId: number) {
+    return this.service.estornarRepasseGarcom(req.restaurantId, repasseId);
+  }
+
   @Get('relatorio/produtos')
   relatorioProdutos(
     @Req() req: any,

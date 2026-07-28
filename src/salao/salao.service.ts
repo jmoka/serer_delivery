@@ -1124,18 +1124,26 @@ export class SalaoService {
     return { ok: true, via: 'navegador', setor: (impressora as any).setor, impressora_nome: (impressora as any).nome, itens: itensFormatados };
   }
 
-  async fecharComanda(comandaId: number, garcomId: number, formaPagamento: string) {
-    if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
-
+  // Garçom não escolhe mais a forma de pagamento aqui — quem define isso é o caixa,
+  // no fechamento real da comanda (só ele emite recibo e finaliza o pagamento).
+  async fecharComanda(comandaId: number, garcomId: number) {
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (comanda.status !== 'aberta') throw new BadRequestException('Comanda já foi fechada');
 
     const { data: itens } = await this.supabase.client.from('order_items').select('id').eq('order_id', comandaId);
     if (!itens?.length) throw new BadRequestException('Comanda sem itens não pode ser fechada');
 
+    // Garçom só entrega a comanda pro caixa depois de cobrar tudo do cliente na mesa —
+    // gorjeta nesse momento é só estimativa (ainda não persistida), então só dá pra
+    // validar aqui o saldo dos itens; a garantia da gorjeta fica por conta do frontend.
+    const { saldo } = await this.saldoDevedor(comandaId);
+    if (saldo > 0.01) {
+      throw new BadRequestException('Saldo devedor pendente: registre os pagamentos até zerar o saldo antes de fechar a comanda');
+    }
+
     const { error } = await this.supabase.client
       .from('orders')
-      .update({ status: 'fechada_garcom', payment_method: formaPagamento })
+      .update({ status: 'fechada_garcom' })
       .eq('id', comandaId);
     if (error) throw error;
 
