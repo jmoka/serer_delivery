@@ -955,19 +955,19 @@ export class RestauranteService {
   // resto pelo caixa) — orders.payment_method só guarda a última forma usada no
   // fechamento, então pra decompor certo o "por forma de pagamento" precisa ir direto
   // no ledger de comanda_pagamentos. Delivery continua com pagamento único (sem mudança).
-  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>> {
+  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { order_id: number; valor: number; valor_recebido: number | null; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>> {
     const idsComanda = pedidos.filter((p: any) => p.canal === 'presencial').map((p: any) => p.id);
-    const mapa = new Map<number, { order_id: number; valor: number; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>();
+    const mapa = new Map<number, { order_id: number; valor: number; valor_recebido: number | null; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>();
     if (!idsComanda.length) return mapa;
 
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('order_id, valor, forma_pagamento, origem, troco, criado_em, taxa_cartao_valor')
+      .select('order_id, valor, valor_recebido, forma_pagamento, origem, troco, criado_em, taxa_cartao_valor')
       .in('order_id', idsComanda);
 
     for (const p of (data ?? []) as any[]) {
       if (!mapa.has(p.order_id)) mapa.set(p.order_id, []);
-      mapa.get(p.order_id)!.push({ order_id: p.order_id, valor: p.valor, forma_pagamento: p.forma_pagamento, origem: p.origem, troco: p.troco ?? 0, criado_em: p.criado_em, taxa_cartao_valor: p.taxa_cartao_valor ?? 0 });
+      mapa.get(p.order_id)!.push({ order_id: p.order_id, valor: p.valor, valor_recebido: p.valor_recebido ?? null, forma_pagamento: p.forma_pagamento, origem: p.origem, troco: p.troco ?? 0, criado_em: p.criado_em, taxa_cartao_valor: p.taxa_cartao_valor ?? 0 });
     }
     return mapa;
   }
@@ -977,7 +977,7 @@ export class RestauranteService {
     saidas: any[],
     valor_inicial: number,
     entradas: any[] = [],
-    pagamentosPorComanda?: Map<number, { valor: number; forma_pagamento: string; taxa_cartao_valor?: number }[]>,
+    pagamentosPorComanda?: Map<number, { valor: number; valor_recebido?: number | null; forma_pagamento: string; taxa_cartao_valor?: number }[]>,
   ) {
     const entregues = pedidos.filter((p) => this.STATUS_VENDA_FINALIZADA.includes(p.status));
     const total_saidas = saidas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
@@ -993,6 +993,12 @@ export class RestauranteService {
     // poder mostrar "Débito R$161,70 + taxa R$11,32 = R$173,02" em vez de um total
     // de taxa solto, sem saber se veio do débito ou do crédito.
     const taxa_por_forma: Record<string, number> = {};
+    // Dinheiro que o cliente entregou de fato (valor_recebido) — só pra exibição na
+    // conferência de fechamento. O que entra/sai fisicamente do caixa já é lançado como
+    // entrada/saída no ledger (ver registrarEntradaCaixa/registrarSaidaCaixa em
+    // salao.service.ts), então especie_calculada usa entradas_especie/saidas_especie,
+    // não esse valor — contar os dois juntos duplicaria a entrada em espécie.
+    let cash_recebido = 0;
     for (const p of entregues) {
       const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComanda?.get(p.id) : undefined;
       if (pagamentosComanda?.length) {
@@ -1005,22 +1011,23 @@ export class RestauranteService {
             taxa_por_forma[m] = (taxa_por_forma[m] ?? 0) + taxa;
           }
           total_vendas += (pag.valor ?? 0) + taxa;
+          if (m === 'cash') cash_recebido += pag.valor_recebido ?? pag.valor ?? 0;
         }
       } else {
         const m = p.payment_method ?? 'outro';
         por_pagamento[m] = (por_pagamento[m] ?? 0) + (p.total ?? 0);
         total_vendas += p.total ?? 0;
+        if (m === 'cash') cash_recebido += p.total ?? 0;
       }
     }
 
-    const vendas_dinheiro = por_pagamento['cash'] ?? 0;
     const saidas_especie = saidas
       .filter((s: any) => !s.meio || s.meio === 'dinheiro')
       .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
     const entradas_especie = entradas
       .filter((e: any) => !e.meio || e.meio === 'dinheiro')
       .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
-    const especie_calculada = valor_inicial + vendas_dinheiro + entradas_especie - saidas_especie;
+    const especie_calculada = valor_inicial + entradas_especie - saidas_especie;
 
     return {
       total_pedidos: pedidos.length,
@@ -1036,6 +1043,7 @@ export class RestauranteService {
       especie_calculada,
       saidas_especie,
       entradas_especie,
+      cash_recebido,
     };
   }
 
@@ -1318,8 +1326,22 @@ export class RestauranteService {
     if (!body.descricao?.trim()) throw new BadRequestException('Descrição da saída é obrigatória');
 
     const { data: caixa } = await this.supabase.client
-      .from('caixas').select('id, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+      .from('caixas').select('id, valor_inicial, entradas, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
     if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
+
+    // Sangria em espécie não pode passar do que tem fisicamente no caixa — sangria em
+    // pix/transferência/cartão não mexe no dinheiro físico, então não trava por saldo.
+    if (!body.meio || body.meio === 'dinheiro') {
+      const emDinheiro = (arr: any[]) => ((arr ?? []) as any[])
+        .filter((x) => !x.meio || x.meio === 'dinheiro')
+        .reduce((s: number, x: any) => s + (x.valor ?? 0), 0);
+      const saldoEspecie = (caixa.valor_inicial ?? 0) + emDinheiro(caixa.entradas) - emDinheiro(caixa.saidas);
+      if (Number(body.valor) > saldoEspecie) {
+        throw new BadRequestException(
+          `Caixa não tem saldo em espécie suficiente pra essa sangria (disponível: R$ ${saldoEspecie.toFixed(2)}). Registre uma Adição antes.`,
+        );
+      }
+    }
 
     const saidas = (caixa.saidas ?? []) as any[];
     const nova: any = { descricao: body.descricao.trim(), valor: Number(body.valor), criado_em: new Date().toISOString() };

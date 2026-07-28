@@ -218,6 +218,41 @@ export class SalaoService {
     await this.supabase.client.from('caixas').update({ saidas: [...saidas, nova] }).eq('id', caixa.id);
   }
 
+  // Lança uma entrada automática no caixa aberto — usado pra registrar o dinheiro que o
+  // cliente entregou de fato numa venda em espécie (não o valor da venda, o valor recebido).
+  async registrarEntradaCaixa(restaurantId: number, descricao: string, valor: number, tipo: string) {
+    if (!(valor > 0)) return;
+    const { data: caixa } = await this.supabase.client
+      .from('caixas')
+      .select('id, entradas')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aberto')
+      .maybeSingle();
+    if (!caixa) return;
+
+    const entradas = (caixa.entradas ?? []) as any[];
+    const nova = { descricao, valor, meio: 'dinheiro', tipo, criado_em: new Date().toISOString() };
+    await this.supabase.client.from('caixas').update({ entradas: [...entradas, nova] }).eq('id', caixa.id);
+  }
+
+  // Espécie disponível agora no caixa aberto — soma direto do ledger (fundo + entradas em
+  // dinheiro − saídas em dinheiro), sem precisar reconsultar pedidos. Usado pra bloquear
+  // troco ou sangria sem fundo suficiente.
+  async saldoEspecieDisponivel(restaurantId: number): Promise<number> {
+    const { data: caixa } = await this.supabase.client
+      .from('caixas')
+      .select('valor_inicial, entradas, saidas')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aberto')
+      .maybeSingle();
+    if (!caixa) return 0;
+    const emDinheiro = (arr: any[]) => ((arr ?? []) as any[])
+      .filter((x) => !x.meio || x.meio === 'dinheiro')
+      .reduce((s: number, x: any) => s + (x.valor ?? 0), 0);
+    const saldo = (caixa.valor_inicial ?? 0) + emDinheiro(caixa.entradas) - emDinheiro(caixa.saidas);
+    return parseFloat(saldo.toFixed(2));
+  }
+
   // Registra um pagamento parcial — não fecha a comanda sozinho, só abate do saldo devedor.
   // Chamado tanto pelo garçom (informar forma de pagamento) quanto pelo caixa (conferência).
   // Em dinheiro, valorRecebido é o que o cliente entregou — troco é calculado e vira saída
@@ -239,6 +274,14 @@ export class SalaoService {
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valor) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
       troco = parseFloat((valorRecebido - valor).toFixed(2));
+      if (troco > 0) {
+        const saldoEspecie = await this.saldoEspecieDisponivel(restaurantId);
+        if (saldoEspecie < troco) {
+          throw new BadRequestException(
+            `Caixa não tem troco suficiente em espécie (disponível: R$ ${saldoEspecie.toFixed(2)}, necessário: R$ ${troco.toFixed(2)}). Registre uma Adição no caixa antes de finalizar esse pagamento.`,
+          );
+        }
+      }
     }
 
     const { error } = await this.supabase.client
@@ -249,8 +292,11 @@ export class SalaoService {
       });
     if (error) throw error;
 
-    if (troco && troco > 0) {
-      await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco');
+    if (formaPagamento === 'cash' && valorRecebido !== undefined) {
+      await this.registrarEntradaCaixa(restaurantId, `Venda em dinheiro${identificador ? ` - ${identificador}` : ''}`, valorRecebido, 'venda_dinheiro');
+      if (troco && troco > 0) {
+        await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco');
+      }
     }
 
     return this.saldoDevedor(comandaId);
