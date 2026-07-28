@@ -735,19 +735,21 @@ export class SalaoPdvService {
     // Se já teve pagamento parcial (garçom ou caixa), só registra o que ainda falta —
     // o ledger de comanda_pagamentos fica completo pra conferência.
     const { saldo } = await this.salaoService.saldoDevedor(id);
+    // Fechamento não cobre mais o saldo restante sozinho — o operador é obrigado a lançar
+    // os pagamentos parciais (com a forma correta de cada um) até o saldo zerar antes de
+    // poder fechar. Evita fechar tudo numa forma só quando o cliente pagou split.
+    if (saldo > 0.01) {
+      throw new BadRequestException('Saldo devedor pendente: registre os pagamentos até zerar o saldo antes de fechar a comanda');
+    }
     const gorjeta = gorjetaValor ?? 0;
-    const valorACobrarBase = parseFloat((saldo + gorjeta).toFixed(2));
+    const valorACobrarBase = parseFloat(gorjeta.toFixed(2));
     const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valorACobrarBase, formaPagamento);
-    // Em dinheiro, o cliente entrega pro que falta da comanda + gorjeta juntos nesse momento.
+    // A essa altura o saldo dos itens já está zerado — só falta cobrar a gorjeta (se houver).
     const valorACobrar = parseFloat((valorACobrarBase + taxaCartaoValor).toFixed(2));
     let troco: number | null = null;
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valorACobrar) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
       troco = parseFloat((valorRecebido - valorACobrar).toFixed(2));
-    }
-
-    if (saldo > 0.01) {
-      await this.salaoService.registrarPagamento(id, 'estabelecimento', saldo, formaPagamento, restaurantId, undefined, undefined, taxaCartaoValor);
     }
 
     if (formaPagamento === 'cash') {
