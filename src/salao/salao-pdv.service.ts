@@ -824,10 +824,19 @@ export class SalaoPdvService {
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valorACobrar) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
       troco = parseFloat((valorRecebido - valorACobrar).toFixed(2));
+      if (troco > 0) {
+        const saldoEspecie = await this.salaoService.saldoEspecieDisponivel(restaurantId);
+        if (saldoEspecie < troco) {
+          throw new BadRequestException(
+            `Caixa não tem troco suficiente em espécie (disponível: R$ ${saldoEspecie.toFixed(2)}, necessário: R$ ${troco.toFixed(2)}). Registre uma Adição no caixa antes de finalizar esse pagamento.`,
+          );
+        }
+      }
     }
 
-    if (formaPagamento === 'cash') {
+    if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
+      await this.salaoService.registrarEntradaCaixa(restaurantId, `Venda em dinheiro - ${identificador}`, valorRecebido, 'venda_dinheiro');
       if (troco && troco > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
     }
 

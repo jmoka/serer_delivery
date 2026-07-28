@@ -993,10 +993,11 @@ export class RestauranteService {
     // poder mostrar "Débito R$161,70 + taxa R$11,32 = R$173,02" em vez de um total
     // de taxa solto, sem saber se veio do débito ou do crédito.
     const taxa_por_forma: Record<string, number> = {};
-    // Dinheiro físico que entrou no caixa — usa o que o cliente entregou (valor_recebido),
-    // não o valor da venda. Sem isso, um pagamento de R$50 recebido em R$100 registrava
-    // entrada de R$50 e saída de troco R$50 (variação líquida zero), quando na prática
-    // R$100 entraram e R$50 saíram de troco (variação líquida +R$50).
+    // Dinheiro que o cliente entregou de fato (valor_recebido) — só pra exibição na
+    // conferência de fechamento. O que entra/sai fisicamente do caixa já é lançado como
+    // entrada/saída no ledger (ver registrarEntradaCaixa/registrarSaidaCaixa em
+    // salao.service.ts), então especie_calculada usa entradas_especie/saidas_especie,
+    // não esse valor — contar os dois juntos duplicaria a entrada em espécie.
     let cash_recebido = 0;
     for (const p of entregues) {
       const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComanda?.get(p.id) : undefined;
@@ -1026,7 +1027,7 @@ export class RestauranteService {
     const entradas_especie = entradas
       .filter((e: any) => !e.meio || e.meio === 'dinheiro')
       .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
-    const especie_calculada = valor_inicial + cash_recebido + entradas_especie - saidas_especie;
+    const especie_calculada = valor_inicial + entradas_especie - saidas_especie;
 
     return {
       total_pedidos: pedidos.length,
@@ -1325,8 +1326,22 @@ export class RestauranteService {
     if (!body.descricao?.trim()) throw new BadRequestException('Descrição da saída é obrigatória');
 
     const { data: caixa } = await this.supabase.client
-      .from('caixas').select('id, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+      .from('caixas').select('id, valor_inicial, entradas, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
     if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
+
+    // Sangria em espécie não pode passar do que tem fisicamente no caixa — sangria em
+    // pix/transferência/cartão não mexe no dinheiro físico, então não trava por saldo.
+    if (!body.meio || body.meio === 'dinheiro') {
+      const emDinheiro = (arr: any[]) => ((arr ?? []) as any[])
+        .filter((x) => !x.meio || x.meio === 'dinheiro')
+        .reduce((s: number, x: any) => s + (x.valor ?? 0), 0);
+      const saldoEspecie = (caixa.valor_inicial ?? 0) + emDinheiro(caixa.entradas) - emDinheiro(caixa.saidas);
+      if (Number(body.valor) > saldoEspecie) {
+        throw new BadRequestException(
+          `Caixa não tem saldo em espécie suficiente pra essa sangria (disponível: R$ ${saldoEspecie.toFixed(2)}). Registre uma Adição antes.`,
+        );
+      }
+    }
 
     const saidas = (caixa.saidas ?? []) as any[];
     const nova: any = { descricao: body.descricao.trim(), valor: Number(body.valor), criado_em: new Date().toISOString() };
