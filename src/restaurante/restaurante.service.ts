@@ -1029,6 +1029,19 @@ export class RestauranteService {
       .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
     const especie_calculada = valor_inicial + entradas_especie - saidas_especie;
 
+    // saldo (contábil) já conta a venda em dinheiro via total_vendas — as entradas/saídas
+    // automáticas de venda_dinheiro/troco (ver registrarEntradaCaixa/registrarSaidaCaixa em
+    // salao.service.ts) representam a MESMA venda no ledger físico do caixa. Somar
+    // total_entradas/total_saidas crus aqui contaria essa venda duas vezes. Filtra fora só
+    // pra esse cálculo — total_entradas/total_saidas retornados continuam com tudo, pro
+    // ledger (KPIs "Adições"/"Sangrias") mostrar os lançamentos automáticos normalmente.
+    const entradas_saldo = entradas
+      .filter((e: any) => e.tipo !== 'venda_dinheiro')
+      .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
+    const saidas_saldo = saidas
+      .filter((s: any) => s.tipo !== 'troco')
+      .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
+
     return {
       total_pedidos: pedidos.length,
       entregues: entregues.length,
@@ -1037,7 +1050,7 @@ export class RestauranteService {
       total_vendas,
       total_saidas,
       total_entradas,
-      saldo: valor_inicial + total_vendas + total_entradas - total_saidas,
+      saldo: valor_inicial + total_vendas + entradas_saldo - saidas_saldo,
       por_pagamento,
       taxa_por_forma,
       especie_calculada,
