@@ -175,7 +175,7 @@ export class SalaoPdvService {
     const comanda = await this.buscarComanda(id, restaurantId);
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, products(name, image_url)')
+      .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, entregue_garcom, products(name, image_url)')
       .eq('order_id', id)
       .order('id', { ascending: true });
     const { data: pagamentos } = await this.supabase.client
@@ -280,10 +280,14 @@ export class SalaoPdvService {
   // nome/telefone de cliente. Daqui em diante usa os mesmos endpoints de comanda
   // normal (itens, desconto/acréscimo, pagamento parcial multi-forma, pagar) — evita
   // duplicar a lógica de pagamento/taxa de cartão que já existe pra mesa/comanda.
-  async abrirVendaBalcao(restaurantId: number) {
+  async abrirVendaBalcao(restaurantId: number, userId: string) {
     const { data: caixaAberto } = await this.supabase.client
       .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
     if (!caixaAberto) throw new BadRequestException('Abra o caixa antes de vender');
+
+    const { data: userData } = await this.supabase.client.auth.admin.getUserById(userId);
+    const nomeCompleto = userData?.user?.user_metadata?.name as string | undefined;
+    const abertoPorNome = nomeCompleto?.trim().split(' ')[0] || null;
 
     const { data: venda, error } = await this.supabase.client
       .from('orders')
@@ -294,12 +298,82 @@ export class SalaoPdvService {
         cliente_mesa_nome: 'Venda balcão',
         total: 0,
         caixa_id: caixaAberto.id,
+        is_venda_balcao: true,
+        aberto_por_nome: abertoPorNome,
       })
       .select('id')
       .single();
     if (error) throw error;
 
     return this.comandaDetalhe(venda.id, restaurantId);
+  }
+
+  // Painel de chamada (Salão): lista comandas de venda balcão com ao menos 1 item
+  // 'pronto' ainda não entregue (entregue_garcom cobre delivery de garçom E balcão,
+  // já que balcão não tem garçom envolvido). Agrupa por comanda pra chamar o cliente
+  // uma vez só mesmo com itens de setores diferentes (cozinha+bar).
+  async filaChamadaBalcao(restaurantId: number) {
+    const { data: itens, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, product_id, quantity, status, pronto_em, entregue_garcom, order_id, products(name), orders!inner(id, restaurant_id, is_venda_balcao, aberto_por_nome, chamado_count, ultima_chamada_em)')
+      .eq('orders.restaurant_id', restaurantId)
+      .eq('orders.is_venda_balcao', true)
+      .eq('status', 'pronto')
+      .eq('entregue_garcom', false)
+      .order('pronto_em', { ascending: true });
+    if (error) throw error;
+
+    const porComanda = new Map<number, any>();
+    for (const i of itens as any[]) {
+      const o = i.orders;
+      if (!porComanda.has(o.id)) {
+        porComanda.set(o.id, {
+          order_id: o.id,
+          cliente: o.aberto_por_nome ?? 'Balcão',
+          chamado_count: o.chamado_count ?? 0,
+          ultima_chamada_em: o.ultima_chamada_em,
+          pronto_em: i.pronto_em,
+          itens: [],
+        });
+      }
+      const c = porComanda.get(o.id);
+      c.itens.push({ id: i.id, product_name: i.products?.name, quantity: i.quantity });
+      if (i.pronto_em < c.pronto_em) c.pronto_em = i.pronto_em;
+    }
+
+    return { fila: [...porComanda.values()].sort((a, b) => a.pronto_em.localeCompare(b.pronto_em)) };
+  }
+
+  // Incrementa o contador de chamados (bipe+pisca) — chamado pelo front a cada ciclo
+  // de 7s enquanto a comanda estiver em destaque na tela de chamada.
+  async marcarChamada(orderId: number, restaurantId: number) {
+    const { data: order } = await this.supabase.client
+      .from('orders').select('id, chamado_count').eq('id', orderId).eq('restaurant_id', restaurantId).eq('is_venda_balcao', true).maybeSingle();
+    if (!order) throw new NotFoundException('Comanda de balcão não encontrada');
+
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({ chamado_count: (order.chamado_count ?? 0) + 1, ultima_chamada_em: new Date().toISOString() })
+      .eq('id', orderId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Marca item de venda balcão como entregue — sem garçom envolvido, então não usa
+  // garantirComandaDoGarcom (essa é escopo dono/operador via restaurantId).
+  async marcarItemBalcaoEntregue(orderId: number, restaurantId: number, itemId: number) {
+    const { data: order } = await this.supabase.client
+      .from('orders').select('id').eq('id', orderId).eq('restaurant_id', restaurantId).eq('is_venda_balcao', true).maybeSingle();
+    if (!order) throw new NotFoundException('Comanda de balcão não encontrada');
+
+    const { data: item } = await this.supabase.client
+      .from('order_items').select('id').eq('id', itemId).eq('order_id', orderId).maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+
+    const { error } = await this.supabase.client
+      .from('order_items').update({ entregue_garcom: true, entregue_em: new Date().toISOString() }).eq('id', itemId);
+    if (error) throw error;
+    return { ok: true };
   }
 
   async editarClienteMesa(id: number, restaurantId: number, body: { cliente_nome: string; cliente_telefone?: string }) {

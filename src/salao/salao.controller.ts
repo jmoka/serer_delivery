@@ -74,6 +74,16 @@ export class SalaoController {
     return this.service.removerItem(id, req.garcomId, itemId);
   }
 
+  @Patch('comandas/:id/itens/:itemId/observacao')
+  editarObservacaoItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Body() body: { observacao: string },
+    @Req() req: any,
+  ) {
+    return this.service.editarObservacaoItem(id, req.garcomId, itemId, body.observacao);
+  }
+
   @Post('comandas/:id/dividir')
   dividirComanda(
     @Param('id', ParseIntPipe) id: number,

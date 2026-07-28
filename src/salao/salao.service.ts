@@ -620,6 +620,23 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
+  // Observação pode ser editada/incluída mesmo depois do item já enviado pro setor —
+  // diferente de quantidade/remoção (travadas após enviado), esquecer a observação é
+  // erro comum do garçom e não deve exigir cancelar/reenviar o item inteiro.
+  async editarObservacaoItem(comandaId: number, garcomId: number, itemId: number, observacao: string) {
+    await this.garantirComandaDoGarcom(comandaId, garcomId);
+
+    const { data: item } = await this.supabase.client
+      .from('order_items').select('id').eq('id', itemId).eq('order_id', comandaId).maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+
+    const { error } = await this.supabase.client
+      .from('order_items').update({ observacao: observacao?.trim() || null }).eq('id', itemId);
+    if (error) throw error;
+
+    return this.obterComanda(comandaId, garcomId);
+  }
+
   async removerItem(comandaId: number, garcomId: number, itemId: number) {
     await this.garantirItemPendenteDoGarcom(comandaId, garcomId, itemId);
 

@@ -52,7 +52,26 @@ export class RestauranteSalaoController {
 
   @Post('venda-balcao/abrir')
   abrirVendaBalcao(@Req() req: any) {
-    return this.service.abrirVendaBalcao(req.restaurantId);
+    return this.service.abrirVendaBalcao(req.restaurantId, req.userId);
+  }
+
+  @Get('chamada')
+  filaChamadaBalcao(@Req() req: any) {
+    return this.service.filaChamadaBalcao(req.restaurantId);
+  }
+
+  @Post('chamada/:id/chamar')
+  marcarChamada(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.marcarChamada(id, req.restaurantId);
+  }
+
+  @Post('chamada/:id/itens/:itemId/entregar')
+  marcarItemBalcaoEntregue(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Req() req: any,
+  ) {
+    return this.service.marcarItemBalcaoEntregue(id, req.restaurantId, itemId);
   }
 
   @Get('comandas/:id')
