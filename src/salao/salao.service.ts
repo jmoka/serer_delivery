@@ -1193,8 +1193,16 @@ export class SalaoService {
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (comanda.status !== 'aberta') throw new BadRequestException('Comanda já foi fechada');
 
-    const { data: itens } = await this.supabase.client.from('order_items').select('id').eq('order_id', comandaId);
+    const { data: itens } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, entregue_garcom')
+      .eq('order_id', comandaId);
     if (!itens?.length) throw new BadRequestException('Comanda sem itens não pode ser fechada');
+
+    const temEntregaPendente = itens.some((i) => ['preparando', 'pronto'].includes(i.status) && !i.entregue_garcom);
+    if (temEntregaPendente) {
+      throw new BadRequestException('Tem item pronto sem confirmar entrega: confirme a entrega antes de fechar a comanda');
+    }
 
     // Garçom só entrega a comanda pro caixa depois de cobrar tudo do cliente na mesa —
     // gorjeta nesse momento é só estimativa (ainda não persistida), então só dá pra
