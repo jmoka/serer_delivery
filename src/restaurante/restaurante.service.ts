@@ -1783,6 +1783,46 @@ export class RestauranteService {
       row.total_comissao += c.valor_calculado ?? 0;
     }
 
+    // Produto favorito de cada garçom: agrega quantidade/receita por produto entre as
+    // comandas pagas do período, reaproveitando o mesmo padrão de prodMap do getRelatorio.
+    const pedidosPagos = (pedidos ?? []).filter((p: any) => p.status === 'paga');
+    const garcomPorOrderId = new Map<number, number>(pedidosPagos.map((p: any) => [p.id, p.garcom_id]));
+    const orderIdsPagos = pedidosPagos.map((p: any) => p.id);
+    const { data: itemsGarcom } = orderIdsPagos.length
+      ? await this.supabase.client
+          .from('order_items')
+          .select('order_id, product_id, quantity, unit_price')
+          .in('order_id', orderIdsPagos)
+      : { data: [] as any[] };
+
+    const productIdsGarcom = [...new Set<number>((itemsGarcom ?? []).map((i: any) => i.product_id))];
+    const { data: produtosGarcom } = productIdsGarcom.length
+      ? await this.supabase.client.from('products').select('id, name').in('id', productIdsGarcom)
+      : { data: [] as any[] };
+    const prodNomeMap = Object.fromEntries((produtosGarcom ?? []).map((p: any) => [p.id, p.name]));
+
+    const produtosPorGarcom = new Map<number, Map<number, { name: string; quantidade: number; receita: number }>>();
+    for (const i of (itemsGarcom ?? []) as any[]) {
+      const garcomId = garcomPorOrderId.get(i.order_id);
+      if (!garcomId || !porGarcom.has(garcomId)) continue;
+      if (!produtosPorGarcom.has(garcomId)) produtosPorGarcom.set(garcomId, new Map());
+      const mapaProdutos = produtosPorGarcom.get(garcomId)!;
+      if (!mapaProdutos.has(i.product_id)) {
+        mapaProdutos.set(i.product_id, { name: prodNomeMap[i.product_id] ?? `#${i.product_id}`, quantidade: 0, receita: 0 });
+      }
+      const row = mapaProdutos.get(i.product_id)!;
+      row.quantidade += i.quantity ?? 0;
+      row.receita += (i.quantity ?? 0) * (i.unit_price ?? 0);
+    }
+    for (const [garcomId, mapaProdutos] of produtosPorGarcom) {
+      porGarcom.get(garcomId).produtos = [...mapaProdutos.values()]
+        .sort((a, b) => b.quantidade - a.quantidade)
+        .slice(0, 5);
+    }
+    for (const row of porGarcom.values()) {
+      if (!row.produtos) row.produtos = [];
+    }
+
     for (const c of (comandasAtuais ?? []) as any[]) {
       const row = porGarcom.get(c.garcom_id);
       if (!row) continue;
