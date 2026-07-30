@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { SupabaseJwtService } from '../auth/supabase-jwt.service';
 import { haversineKm } from '../common/geo.util';
 import { normalizarDominio } from '../common/dominio.util';
+import { CombosService } from '../combos/combos.service';
 import * as os from 'os';
 
 const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active, quantidade_estoque';
@@ -13,6 +14,7 @@ export class CatalogoController {
   constructor(
     private supabase: SupabaseService,
     private supabaseJwt: SupabaseJwtService,
+    private combosService: CombosService,
   ) {}
 
   @Get('acesso')
@@ -177,6 +179,49 @@ export class CatalogoController {
     };
   }
 
+  // Marketplace (home sem domínio customizado): combo ativo de todos os
+  // estabelecimentos, com estoque de todo ingrediente — mesmo critério
+  // de disponibilidade do CombosService, só que sem restringir a 1 restaurante.
+  @Get('combos')
+  async todosOsCombos() {
+    const { data: restaurantes } = await this.supabase.client
+      .from('restaurants')
+      .select('id, name, logo_url, slug, aparencia, frete_motoboy')
+      .not('slug', 'is', null)
+      .eq('bloqueado', false);
+
+    if (!restaurantes?.length) return { combos: [] };
+
+    const restIds = restaurantes.map((r) => r.id);
+    const restMap = Object.fromEntries(restaurantes.map((r) => [r.id, r]));
+
+    const { data: combos, error } = await this.supabase.client
+      .from('combos')
+      .select(
+        'id, name, description, price, preco_promo, image_url, destaque, restaurant_id, is_active, combo_items(quantity, products(quantidade_estoque, is_active))',
+      )
+      .eq('is_active', true)
+      .in('restaurant_id', restIds)
+      .order('destaque', { ascending: false })
+      .order('name')
+      .limit(200);
+
+    if (error) throw error;
+
+    return {
+      combos: (combos ?? [])
+        .map((c: any) => {
+          const { combo_items, ...resto } = c;
+          const itens = combo_items ?? [];
+          const disponivel =
+            itens.length > 0 &&
+            itens.every((ci: any) => ci.products?.is_active && (ci.products?.quantidade_estoque ?? 0) > 0);
+          return { ...resto, disponivel, restaurante: restMap[c.restaurant_id] ?? null };
+        })
+        .filter((c: any) => c.disponivel && c.restaurante),
+    };
+  }
+
   // Resolução de domínio customizado — precisa vir ANTES de @Get(':slug') na
   // ordem das rotas (mesma regra de 'filtros'/'produtos' acima).
   @Get('by-domain/:host')
@@ -231,8 +276,12 @@ export class CatalogoController {
     const promos = (produtos ?? []).filter(
       (p) => Array.isArray(p.tags) && p.tags.includes('promo') && p.preco_promo != null,
     );
-    // Combos são entidade separada — carregados pelo client se necessário
-    const combos: any[] = [];
+
+    // Combos são entidade separada de products — mesmos campos de exibição
+    // (name/price/preco_promo/image_url/destaque) pra reusar o mesmo card do cliente.
+    // Some do cardápio se faltar estoque de qualquer produto que o compõe.
+    const combosDisponiveis = await this.combosService.listarComDisponibilidade(restaurante.id);
+    const combos = combosDisponiveis.filter((c) => c.disponivel).map((c) => ({ ...c, tipo: 'combo' }));
 
     return { restaurante, cardapio, destaques, promos, combos };
   }

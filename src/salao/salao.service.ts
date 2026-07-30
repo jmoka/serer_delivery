@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { EstoqueService } from '../estoque/estoque.service';
+import { CombosService, ItemExpandido } from '../combos/combos.service';
 
 export interface AbrirComandaBody {
   mesa_id?: number;
@@ -9,7 +10,8 @@ export interface AbrirComandaBody {
 }
 
 export interface ItemComandaBody {
-  product_id: number;
+  product_id?: number;
+  combo_id?: number;
   quantity: number;
   observacao?: string;
 }
@@ -19,6 +21,7 @@ export class SalaoService {
   constructor(
     private supabase: SupabaseService,
     private estoque: EstoqueService,
+    private combosService: CombosService,
   ) {}
 
   async mesas(restaurantId: number) {
@@ -146,6 +149,14 @@ export class SalaoService {
       .order('name', { ascending: true });
     if (error) throw error;
     return (data ?? []).map((p: any) => ({ ...p, category_name: p.categories?.name ?? 'Outros' }));
+  }
+
+  // Combo é entidade separada de products (ver CombosService) — lista à parte pro
+  // garçom oferecer junto do cardápio normal na comanda. Some da lista se faltar
+  // estoque de qualquer produto que o compõe (mesma regra do produto avulso).
+  async combos(restaurantId: number) {
+    const combos = await this.combosService.listarComDisponibilidade(restaurantId);
+    return combos.filter((c) => c.disponivel);
   }
 
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
@@ -574,7 +585,7 @@ export class SalaoService {
 
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, entregue_garcom, products(name, image_url)')
+      .select('id, product_id, quantity, unit_price, observacao, combo_nome, combo_quantidade, status, enviado_em, entregue_garcom, products(name, image_url)')
       .eq('order_id', comandaId)
       .order('id', { ascending: true });
     if (error) throw error;
@@ -607,33 +618,58 @@ export class SalaoService {
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (comanda.status !== 'aberta') throw new BadRequestException('Comanda não está aberta');
 
-    const prodIds = itens.map((i) => i.product_id);
+    const itensDiretos = itens.filter((i) => i.product_id != null);
+    const itensCombo = itens.filter((i) => i.combo_id != null);
+
+    const prodIds = itensDiretos.map((i) => i.product_id as number);
     const { data: produtos, error: errProd } = await this.supabase.client
       .from('products')
       .select('id, price, is_active')
-      .in('id', prodIds);
+      .in('id', prodIds.length ? prodIds : [0]);
     if (errProd) throw errProd;
 
     const prodMap = Object.fromEntries((produtos ?? []).map((p) => [p.id, p]));
-    for (const item of itens) {
-      const prod = prodMap[item.product_id];
+    for (const item of itensDiretos) {
+      const prod = prodMap[item.product_id as number];
       if (!prod) throw new BadRequestException(`Produto ${item.product_id} não encontrado`);
       if (!prod.is_active) throw new BadRequestException(`Produto ${item.product_id} inativo`);
     }
 
+    // Combo explode nas linhas dos produtos reais (mesma observação copiada pra cada
+    // linha, já que não faz sentido dividir a nota do garçom entre os itens do combo).
+    const linhasCombo = (
+      await Promise.all(
+        itensCombo.map(async (i) => {
+          const linhas = await this.combosService.expandir(i.combo_id as number, i.quantity, comanda.restaurant_id);
+          return linhas.map((l) => ({ ...l, observacao: i.observacao }));
+        }),
+      )
+    ).flat();
+
+    const linhasDiretas: (ItemExpandido & { observacao?: string })[] = itensDiretos.map((i) => ({
+      product_id: i.product_id as number,
+      quantity: i.quantity,
+      unit_price: prodMap[i.product_id as number].price,
+      observacao: i.observacao,
+    }));
+
+    const linhasFinais = [...linhasDiretas, ...linhasCombo];
+
     const { error } = await this.supabase.client.from('order_items').insert(
-      itens.map((i) => ({
+      linhasFinais.map((l) => ({
         order_id: comandaId,
-        product_id: i.product_id,
-        quantity: i.quantity,
-        unit_price: prodMap[i.product_id].price,
-        observacao: i.observacao?.trim() || null,
+        product_id: l.product_id,
+        quantity: l.quantity,
+        unit_price: l.unit_price,
+        observacao: l.observacao?.trim() || null,
+        combo_nome: l.combo_nome ?? null,
+        combo_quantidade: l.combo_quantidade ?? null,
         status: 'pendente',
       })),
     );
     if (error) throw error;
 
-    await this.estoque.decrementarItens(itens);
+    await this.estoque.decrementarItens(linhasFinais);
 
     await this.recalcularTotal(comandaId);
     return this.obterComanda(comandaId, garcomId);

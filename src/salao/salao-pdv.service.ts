@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { SalaoService } from './salao.service';
 import type { ItemComandaBody } from './salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
+import { CombosService, ItemExpandido } from '../combos/combos.service';
 
 // PDV do caixa (lado estabelecimento): ações de cancelar/desconto/acréscimo/pagar
 // são exclusivas do dono (RestaurantOwnerGuard) — o garçom nunca tem acesso a
@@ -13,6 +14,7 @@ export class SalaoPdvService {
     private supabase: SupabaseService,
     private salaoService: SalaoService,
     private estoque: EstoqueService,
+    private combos: CombosService,
   ) {}
 
   async mesas(restaurantId: number) {
@@ -177,7 +179,7 @@ export class SalaoPdvService {
     const comanda = await this.buscarComanda(id, restaurantId);
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, observacao, status, enviado_em, entregue_garcom, products(name, image_url)')
+      .select('id, product_id, quantity, unit_price, observacao, combo_nome, combo_quantidade, status, enviado_em, entregue_garcom, products(name, image_url)')
       .eq('order_id', id)
       .order('id', { ascending: true });
     const { data: pagamentos } = await this.supabase.client
@@ -428,33 +430,57 @@ export class SalaoPdvService {
     const comanda = await this.buscarComanda(id, restaurantId);
     if (comanda.status !== 'aberta') throw new BadRequestException('Comanda não está aberta');
 
-    const prodIds = itens.map((i) => i.product_id);
+    const itensDiretos = itens.filter((i) => i.product_id != null);
+    const itensCombo = itens.filter((i) => i.combo_id != null);
+
+    const prodIds = itensDiretos.map((i) => i.product_id as number);
     const { data: produtos, error: errProd } = await this.supabase.client
       .from('products')
       .select('id, price, is_active')
-      .in('id', prodIds);
+      .in('id', prodIds.length ? prodIds : [0]);
     if (errProd) throw errProd;
 
     const prodMap = Object.fromEntries((produtos ?? []).map((p) => [p.id, p]));
-    for (const item of itens) {
-      const prod = prodMap[item.product_id];
+    for (const item of itensDiretos) {
+      const prod = prodMap[item.product_id as number];
       if (!prod) throw new BadRequestException(`Produto ${item.product_id} não encontrado`);
       if (!prod.is_active) throw new BadRequestException(`Produto ${item.product_id} inativo`);
     }
 
+    // Combo explode nas linhas dos produtos reais (mesma observação copiada pra cada linha).
+    const linhasCombo = (
+      await Promise.all(
+        itensCombo.map(async (i) => {
+          const linhas = await this.combos.expandir(i.combo_id as number, i.quantity, restaurantId);
+          return linhas.map((l) => ({ ...l, observacao: i.observacao }));
+        }),
+      )
+    ).flat();
+
+    const linhasDiretas: (ItemExpandido & { observacao?: string })[] = itensDiretos.map((i) => ({
+      product_id: i.product_id as number,
+      quantity: i.quantity,
+      unit_price: prodMap[i.product_id as number].price,
+      observacao: i.observacao,
+    }));
+
+    const linhasFinais = [...linhasDiretas, ...linhasCombo];
+
     const { error } = await this.supabase.client.from('order_items').insert(
-      itens.map((i) => ({
+      linhasFinais.map((l) => ({
         order_id: id,
-        product_id: i.product_id,
-        quantity: i.quantity,
-        unit_price: prodMap[i.product_id].price,
-        observacao: i.observacao?.trim() || null,
+        product_id: l.product_id,
+        quantity: l.quantity,
+        unit_price: l.unit_price,
+        observacao: l.observacao?.trim() || null,
+        combo_nome: l.combo_nome ?? null,
+        combo_quantidade: l.combo_quantidade ?? null,
         status: 'pendente',
       })),
     );
     if (error) throw error;
 
-    await this.estoque.decrementarItens(itens);
+    await this.estoque.decrementarItens(linhasFinais);
 
     const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', id);
     const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);

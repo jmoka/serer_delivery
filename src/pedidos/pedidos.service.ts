@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { SalaoService } from '../salao/salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
+import { CombosService, ItemExpandido } from '../combos/combos.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
@@ -14,6 +15,7 @@ export class PedidosService {
     private geocoding: GeocodingService,
     private salaoService: SalaoService,
     private estoque: EstoqueService,
+    private combos: CombosService,
   ) {}
 
   // Roteia os itens do pedido delivery pro mesmo mecanismo de KDS por setor que o
@@ -132,7 +134,7 @@ export class PedidosService {
     const [{ data: itensRaw }, { data: cliente }, { data: empresa }, { data: motoboy }, { data: pagamento }] = await Promise.all([
       this.supabase.client
         .from('order_items')
-        .select('id, quantity, unit_price, product_id, status, enviado_em, preparando_em')
+        .select('id, quantity, unit_price, product_id, combo_nome, combo_quantidade, status, enviado_em, preparando_em')
         .eq('order_id', id),
       pedido.customer_id
         ? this.supabase.client.from('customers').select('id, name, email, phone_e164, address_json').eq('id', pedido.customer_id).maybeSingle()
@@ -166,30 +168,45 @@ export class PedidosService {
     payment_method: string;
     troco_para?: number;
     user_id: string;
-    itens: { product_id: number; quantity: number }[];
+    itens: { product_id?: number; combo_id?: number; quantity: number }[];
   }) {
     if (!body.itens?.length) throw new BadRequestException('Pedido precisa de pelo menos 1 item');
 
-    // Busca preços dos produtos
-    const prodIds = body.itens.map((i) => i.product_id);
+    const itensDiretos = body.itens.filter((i) => i.product_id != null);
+    const itensCombo = body.itens.filter((i) => i.combo_id != null);
+
+    // Busca preços dos produtos vendidos diretamente (fora de combo)
+    const prodIds = itensDiretos.map((i) => i.product_id as number);
     const { data: produtos, error: errProd } = await this.supabase.client
       .from('products')
       .select('id, price, is_active')
-      .in('id', prodIds);
+      .in('id', prodIds.length ? prodIds : [0]);
 
     if (errProd) throw errProd;
 
     const prodMap = Object.fromEntries((produtos ?? []).map((p) => [p.id, p]));
 
-    for (const item of body.itens) {
-      const prod = prodMap[item.product_id];
+    for (const item of itensDiretos) {
+      const prod = prodMap[item.product_id as number];
       if (!prod) throw new BadRequestException(`Produto ${item.product_id} não encontrado`);
       if (!prod.is_active) throw new BadRequestException(`Produto ${item.product_id} inativo`);
     }
 
-    const subtotal = body.itens.reduce((acc, item) => {
-      return acc + prodMap[item.product_id].price * item.quantity;
-    }, 0);
+    // Combo não é vendável direto — vira as linhas dos produtos reais que o compõem,
+    // com preço escalado pra bater o valor promocional do combo (ver CombosService).
+    const linhasCombo: ItemExpandido[] = (
+      await Promise.all(itensCombo.map((i) => this.combos.expandir(i.combo_id as number, i.quantity, body.restaurant_id)))
+    ).flat();
+
+    const linhasDiretas: ItemExpandido[] = itensDiretos.map((item) => ({
+      product_id: item.product_id as number,
+      quantity: item.quantity,
+      unit_price: prodMap[item.product_id as number].price,
+    }));
+
+    const linhasFinais = [...linhasDiretas, ...linhasCombo];
+
+    const subtotal = linhasFinais.reduce((acc, l) => acc + l.unit_price * l.quantity, 0);
 
     // Busca frete do restaurante e soma ao total
     const { data: rest } = await this.supabase.client
@@ -267,12 +284,14 @@ export class PedidosService {
 
     if (errPedido) throw errPedido;
 
-    // Cria itens
-    const itensPrepared = body.itens.map((item) => ({
+    // Cria itens — combo já chega explodido nas linhas dos produtos reais (linhasFinais)
+    const itensPrepared = linhasFinais.map((l) => ({
       order_id: pedido.id,
-      product_id: item.product_id,
-      quantity: item.quantity,
-      unit_price: prodMap[item.product_id].price,
+      product_id: l.product_id,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+      combo_nome: l.combo_nome ?? null,
+      combo_quantidade: l.combo_quantidade ?? null,
     }));
 
     const { error: errItens } = await this.supabase.client
@@ -282,8 +301,9 @@ export class PedidosService {
     if (errItens) throw errItens;
 
     // Reserva o estoque assim que o pedido é criado — evita vender 2x o último item
-    // enquanto ele ainda está pendente de confirmação.
-    await this.estoque.decrementarItens(body.itens);
+    // enquanto ele ainda está pendente de confirmação. Já é por produto real, então
+    // cobre item vendido direto e item vindo de combo igual.
+    await this.estoque.decrementarItens(linhasFinais);
 
     return { pedido, itens: itensPrepared };
   }

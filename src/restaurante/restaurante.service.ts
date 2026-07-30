@@ -7,6 +7,7 @@ import { PedidosService } from '../pedidos/pedidos.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { MotoboyService } from '../motoboy/motoboy.service';
 import { EstoqueService } from '../estoque/estoque.service';
+import { CombosService } from '../combos/combos.service';
 
 @Injectable()
 export class RestauranteService {
@@ -18,6 +19,7 @@ export class RestauranteService {
     private geocoding: GeocodingService,
     private motoboyService: MotoboyService,
     private estoque: EstoqueService,
+    private combosService: CombosService,
   ) {}
 
   async minhaEmpresa(userId: string) {
@@ -266,15 +268,11 @@ export class RestauranteService {
 
   // ── Combos ──────────────────────────────────────────────────────────────────
 
+  // Não filtra por estoque aqui — essa listagem alimenta tanto a tela de gestão de
+  // combos (dono precisa ver os inativos/sem estoque pra corrigir) quanto o picker
+  // de venda (restaurante-salao filtra `disponivel` no client, igual já faz com produto).
   async meusCombos(restaurantId: number) {
-    const { data, error } = await this.supabase.client
-      .from('combos')
-      .select('id, name, description, price, preco_promo, image_url, is_active, destaque, created_at')
-      .eq('restaurant_id', restaurantId)
-      .order('destaque', { ascending: false })
-      .order('name');
-    if (error) throw error;
-    return { combos: data ?? [] };
+    return { combos: await this.combosService.listarComDisponibilidade(restaurantId) };
   }
 
   async getComboDetalhe(comboId: number, restaurantId: number) {
@@ -284,24 +282,56 @@ export class RestauranteService {
 
     const { data: items } = await this.supabase.client
       .from('combo_items')
-      .select('id, quantity, product_id, products(id, name, price, image_url)')
+      .select('id, quantity, product_id, preco_no_combo, products(id, name, price, image_url)')
       .eq('combo_id', comboId);
 
     return { ...combo, items: items ?? [] };
   }
 
+  // Preço (R$) e Preço promo (R$) do combo NÃO vêm do client (Zero Trust) — são
+  // calculados aqui a partir do preço real de cada produto (tabela `products`) e do
+  // `preco_no_combo` que o dono escolheu pra cada item (o que ele decide cobrar por
+  // aquele produto especificamente dentro do combo).
+  private async calcularPrecosCombo(restaurantId: number, items: { product_id: number; quantity: number; preco_no_combo: number }[]) {
+    if (!items?.length) throw new BadRequestException('Adicione pelo menos 1 produto ao combo');
+
+    const prodIds = items.map((i) => i.product_id);
+    const { data: produtos } = await this.supabase.client
+      .from('products').select('id, price').eq('restaurant_id', restaurantId).in('id', prodIds);
+    const prodMap = Object.fromEntries((produtos ?? []).map((p) => [p.id, p]));
+
+    let precoTotal = 0;
+    let precoPromoTotal = 0;
+    for (const item of items) {
+      const prod = prodMap[item.product_id];
+      if (!prod) throw new BadRequestException(`Produto ${item.product_id} não encontrado`);
+      if (item.preco_no_combo == null || item.preco_no_combo < 0) {
+        throw new BadRequestException('Informe o valor cobrado no combo pra cada produto');
+      }
+      precoTotal += prod.price * item.quantity;
+      precoPromoTotal += item.preco_no_combo * item.quantity;
+    }
+
+    return {
+      price: parseFloat(precoTotal.toFixed(2)),
+      preco_promo: parseFloat(precoPromoTotal.toFixed(2)),
+    };
+  }
+
   async criarCombo(restaurantId: number, body: {
-    name: string; description?: string; price: number; preco_promo?: number;
-    image_url?: string; destaque?: boolean; items?: { product_id: number; quantity: number }[];
+    name: string; description?: string;
+    image_url?: string; destaque?: boolean; items: { product_id: number; quantity: number; preco_no_combo: number }[];
   }) {
+    const { price, preco_promo } = await this.calcularPrecosCombo(restaurantId, body.items);
+
     const { data: combo, error } = await this.supabase.client
       .from('combos')
       .insert({
         restaurant_id: restaurantId,
         name: body.name,
         description: body.description ?? null,
-        price: body.price,
-        preco_promo: body.preco_promo ?? null,
+        price,
+        preco_promo,
         image_url: body.image_url ?? null,
         destaque: body.destaque ?? false,
         is_active: true,
@@ -310,11 +340,9 @@ export class RestauranteService {
       .single();
     if (error) throw error;
 
-    if (body.items?.length) {
-      await this.supabase.client.from('combo_items').insert(
-        body.items.map((i) => ({ combo_id: combo.id, product_id: i.product_id, quantity: i.quantity })),
-      );
-    }
+    await this.supabase.client.from('combo_items').insert(
+      body.items.map((i) => ({ combo_id: combo.id, product_id: i.product_id, quantity: i.quantity, preco_no_combo: i.preco_no_combo })),
+    );
 
     return this.getComboDetalhe(combo.id, restaurantId);
   }
@@ -327,11 +355,15 @@ export class RestauranteService {
     const update: any = {};
     if (body.name !== undefined) update.name = body.name;
     if (body.description !== undefined) update.description = body.description ?? null;
-    if (body.price !== undefined) update.price = body.price;
-    if (body.preco_promo !== undefined) update.preco_promo = body.preco_promo ?? null;
     if (body.image_url !== undefined) update.image_url = body.image_url ?? null;
     if (body.destaque !== undefined) update.destaque = body.destaque;
     if (body.is_active !== undefined) update.is_active = body.is_active;
+
+    if (Array.isArray(body.items)) {
+      const { price, preco_promo } = await this.calcularPrecosCombo(restaurantId, body.items);
+      update.price = price;
+      update.preco_promo = preco_promo;
+    }
 
     if (Object.keys(update).length > 0) {
       const { error } = await this.supabase.client.from('combos').update(update).eq('id', comboId);
@@ -340,11 +372,9 @@ export class RestauranteService {
 
     if (Array.isArray(body.items)) {
       await this.supabase.client.from('combo_items').delete().eq('combo_id', comboId);
-      if (body.items.length > 0) {
-        await this.supabase.client.from('combo_items').insert(
-          body.items.map((i: any) => ({ combo_id: comboId, product_id: i.product_id, quantity: i.quantity })),
-        );
-      }
+      await this.supabase.client.from('combo_items').insert(
+        body.items.map((i: any) => ({ combo_id: comboId, product_id: i.product_id, quantity: i.quantity, preco_no_combo: i.preco_no_combo })),
+      );
     }
 
     return this.getComboDetalhe(comboId, restaurantId);
