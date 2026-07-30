@@ -5,6 +5,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 
 export interface GarcomJwtPayload {
   garcomId: number;
+  sessionId: string;
 }
 
 @Injectable()
@@ -30,12 +31,18 @@ export class GarcomGuard implements CanActivate {
 
     const { data } = await this.supabase.client
       .from('garcons')
-      .select('id, restaurant_id, nome, ativo, permissoes, restaurants(aparencia, salao_modo)')
+      .select('id, restaurant_id, nome, ativo, permissoes, active_session_id, session_expires_at, restaurants(aparencia, salao_modo)')
       .eq('id', payload.garcomId)
       .maybeSingle();
 
     if (!data) throw new UnauthorizedException('Garçom não encontrado');
     if (!data.ativo) throw new ForbiddenException('Acesso desativado');
+
+    const sessaoValida =
+      data.active_session_id === payload.sessionId &&
+      !!data.session_expires_at &&
+      new Date(data.session_expires_at).getTime() > Date.now();
+    if (!sessaoValida) throw new UnauthorizedException('Sessão encerrada. Faça login novamente.');
 
     const restauranteAberto = (data as any).restaurants?.aparencia?.aberto === true;
     if (!restauranteAberto) throw new ForbiddenException('Restaurante fechado. Aguarde o caixa ser aberto para entrar.');

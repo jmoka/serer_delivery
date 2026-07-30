@@ -42,6 +42,11 @@ export class RestauranteMotoboysController {
     return this.service.removerAfiliacao(motoboyId, req.restaurantId);
   }
 
+  @Post(':motoboyId/forcar-logout')
+  forcarLogout(@Param('motoboyId', ParseIntPipe) motoboyId: number, @Req() req: any) {
+    return this.service.forcarLogout(motoboyId, req.restaurantId);
+  }
+
   @Patch(':pedidoId/atribuir')
   atribuir(
     @Param('pedidoId', ParseIntPipe) pedidoId: number,

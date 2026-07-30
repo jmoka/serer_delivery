@@ -33,6 +33,11 @@ export class RestauranteGarconsController {
     return this.service.remover(id, req.restaurantId);
   }
 
+  @Post(':id/forcar-logout')
+  forcarLogout(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.forcarLogout(id, req.restaurantId);
+  }
+
   @Get('comissoes')
   listarComissoes(@Req() req: any) {
     return this.service.listarComissoesConfig(req.restaurantId);

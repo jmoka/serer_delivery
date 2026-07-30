@@ -23,4 +23,10 @@ export class MotoboyAuthController {
   completarCadastro(@Body() body: CadastroMotoboyBody, @Req() req: any) {
     return this.service.completarCadastro(req.motoboyId, body);
   }
+
+  @Post('logout')
+  @UseGuards(MotoboyGuard)
+  logout(@Req() req: any) {
+    return this.service.logout(req.motoboyId);
+  }
 }

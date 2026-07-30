@@ -1,12 +1,16 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { GarcomGuard } from '../auth/garcom.guard';
+import { GarcomAuthService } from './garcom-auth.service';
 import { SalaoService } from './salao.service';
 import type { AbrirComandaBody, ItemComandaBody } from './salao.service';
 
 @Controller('garcom')
 @UseGuards(GarcomGuard)
 export class SalaoController {
-  constructor(private service: SalaoService) {}
+  constructor(
+    private service: SalaoService,
+    private authService: GarcomAuthService,
+  ) {}
 
   @Get('me')
   me(@Req() req: any) {
@@ -17,6 +21,11 @@ export class SalaoController {
       permissoes: req.garcomPermissoes,
       salaoModo: req.salaoModo,
     };
+  }
+
+  @Post('logout')
+  logout(@Req() req: any) {
+    return this.authService.logout(req.garcomId);
   }
 
   @Get('mesas')

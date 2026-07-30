@@ -50,16 +50,21 @@ export class MotoboyService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')
-      .select('motoboy:motoboys(id, name, phone, foto_perfil_url)')
+      .select('motoboy:motoboys(id, name, phone, foto_perfil_url, active_session_id, session_expires_at)')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'aceito');
     if (error) throw error;
 
+    const agora = Date.now();
     const motoboys = await Promise.all(
-      (data ?? []).map(async (row: any) => ({
-        ...row.motoboy,
-        foto_perfil_url: await this.signedUrl(row.motoboy?.foto_perfil_url),
-      })),
+      (data ?? []).map(async (row: any) => {
+        const { active_session_id, session_expires_at, ...resto } = row.motoboy ?? {};
+        return {
+          ...resto,
+          foto_perfil_url: await this.signedUrl(resto.foto_perfil_url),
+          sessao_ativa: !!active_session_id && !!session_expires_at && new Date(session_expires_at).getTime() > agora,
+        };
+      }),
     );
     return { motoboys };
   }
@@ -182,6 +187,17 @@ export class MotoboyService {
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new NotFoundException('Afiliação não encontrada');
+    return { ok: true };
+  }
+
+  // Libera o motoboy pra logar em outro dispositivo, encerrando a sessão travada.
+  async forcarLogout(motoboyId: number, restaurantId: number) {
+    await this.exigirAfiliacaoAceita(motoboyId, restaurantId);
+    const { error } = await this.supabase.client
+      .from('motoboys')
+      .update({ active_session_id: null, session_expires_at: null })
+      .eq('id', motoboyId);
+    if (error) throw error;
     return { ok: true };
   }
 

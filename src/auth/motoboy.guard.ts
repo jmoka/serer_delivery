@@ -5,6 +5,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 
 export interface MotoboyJwtPayload {
   motoboyId: number;
+  sessionId: string;
 }
 
 @Injectable()
@@ -32,12 +33,18 @@ export class MotoboyGuard implements CanActivate {
     if (payload) {
       const { data } = await this.supabase.client
         .from('motoboys')
-        .select('id, name, is_active, precisa_completar_cadastro')
+        .select('id, name, is_active, precisa_completar_cadastro, active_session_id, session_expires_at')
         .eq('id', payload.motoboyId)
         .maybeSingle();
 
       if (!data) throw new UnauthorizedException('Motoboy não encontrado');
       if (!data.is_active) throw new ForbiddenException('Conta desativada');
+
+      const sessaoValida =
+        data.active_session_id === payload.sessionId &&
+        !!data.session_expires_at &&
+        new Date(data.session_expires_at).getTime() > Date.now();
+      if (!sessaoValida) throw new UnauthorizedException('Sessão encerrada. Faça login novamente.');
 
       request.motoboyId = data.id;
       request.motoboyName = data.name;

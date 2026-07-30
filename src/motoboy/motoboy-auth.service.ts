@@ -1,9 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SupabaseJwtService } from '../auth/supabase-jwt.service';
+
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // igual ao expiresIn do JWT
 
 export interface CadastroMotoboyBody {
   name: string;
@@ -46,9 +49,43 @@ export class MotoboyAuthService {
       .eq('id', userId);
   }
 
-  private gerarToken(motoboyId: number): string {
+  private gerarToken(motoboyId: number, sessionId: string): string {
     const secret = this.config.getOrThrow('MOTOBOY_JWT_SECRET');
-    return jwt.sign({ motoboyId }, secret, { expiresIn: '30d' });
+    return jwt.sign({ motoboyId, sessionId }, secret, { expiresIn: '30d' });
+  }
+
+  // Só abre sessão nova se não houver outra ativa (ou se a anterior já expirou) —
+  // update condicional atômico evita corrida entre dois logins simultâneos.
+  private async abrirSessao(motoboyId: number): Promise<string> {
+    const sessionId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+
+    const { data } = await this.supabase.client
+      .from('motoboys')
+      .update({ active_session_id: sessionId, session_expires_at: expiresAt })
+      .eq('id', motoboyId)
+      .or(`active_session_id.is.null,session_expires_at.lt.${nowIso}`)
+      .select('id')
+      .maybeSingle();
+
+    if (!data) {
+      throw new ConflictException('Este motoboy já está logado em outro dispositivo. Peça pro estabelecimento liberar o acesso.');
+    }
+    return sessionId;
+  }
+
+  private async criarSessaoEToken(motoboyId: number): Promise<string> {
+    const sessionId = await this.abrirSessao(motoboyId);
+    return this.gerarToken(motoboyId, sessionId);
+  }
+
+  async logout(motoboyId: number) {
+    await this.supabase.client
+      .from('motoboys')
+      .update({ active_session_id: null, session_expires_at: null })
+      .eq('id', motoboyId);
+    return { ok: true };
   }
 
   // Bucket privado — grava o path do objeto, não a URL (URL é gerada sob demanda via signed URL).
@@ -108,7 +145,7 @@ export class MotoboyAuthService {
 
     await this.vincularContaCliente(motoboy.id, body.supabase_access_token);
 
-    return { token: this.gerarToken(motoboy.id) };
+    return { token: await this.criarSessaoEToken(motoboy.id) };
   }
 
   async login(identificador: string, password: string) {
@@ -124,7 +161,7 @@ export class MotoboyAuthService {
     const ok = await bcrypt.compare(password, motoboy.password_hash);
     if (!ok) throw new UnauthorizedException('Credenciais inválidas');
 
-    return { token: this.gerarToken(motoboy.id) };
+    return { token: await this.criarSessaoEToken(motoboy.id) };
   }
 
   // Motoboys antigos (criados antes do login por senha) — completam cadastro usando o token legado.
@@ -158,6 +195,6 @@ export class MotoboyAuthService {
 
     await this.vincularContaCliente(motoboyId, body.supabase_access_token);
 
-    return { token: this.gerarToken(motoboyId) };
+    return { token: await this.criarSessaoEToken(motoboyId) };
   }
 }

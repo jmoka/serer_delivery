@@ -75,11 +75,16 @@ export class GarconsService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('garcons')
-      .select('id, nome, telefone, login_key, ativo, permissoes, ultimo_acesso_em, created_at')
+      .select('id, nome, telefone, login_key, ativo, permissoes, ultimo_acesso_em, active_session_id, session_expires_at, created_at')
       .eq('restaurant_id', restaurantId)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    return data;
+
+    const agora = Date.now();
+    return (data ?? []).map(({ active_session_id, session_expires_at, ...resto }) => ({
+      ...resto,
+      sessao_ativa: !!active_session_id && !!session_expires_at && new Date(session_expires_at).getTime() > agora,
+    }));
   }
 
   private async garantirPertence(id: number, restaurantId: number) {
@@ -123,6 +128,17 @@ export class GarconsService {
   async remover(id: number, restaurantId: number) {
     await this.garantirPertence(id, restaurantId);
     const { error } = await this.supabase.client.from('garcons').delete().eq('id', id);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Libera o garçom pra logar em outro dispositivo, encerrando a sessão travada.
+  async forcarLogout(id: number, restaurantId: number) {
+    await this.garantirPertence(id, restaurantId);
+    const { error } = await this.supabase.client
+      .from('garcons')
+      .update({ active_session_id: null, session_expires_at: null })
+      .eq('id', id);
     if (error) throw error;
     return { ok: true };
   }
