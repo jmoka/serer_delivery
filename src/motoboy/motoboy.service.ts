@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { SupabaseService } from '../supabase/supabase.service';
 import { ComissaoService } from './comissao.service';
 import { GeocodingService } from './geocoding.service';
+import { EstoqueService } from '../estoque/estoque.service';
 
 const DOC_BUCKET = 'motoboy-documentos';
 const SIGNED_URL_TTL = 60 * 10; // 10 min
@@ -12,6 +13,7 @@ export class MotoboyService {
     private supabase: SupabaseService,
     private comissao: ComissaoService,
     private geocoding: GeocodingService,
+    private estoque: EstoqueService,
   ) {}
 
   private async exigirAfiliacaoAceita(motoboyId: number, restaurantId: number) {
@@ -513,6 +515,10 @@ export class MotoboyService {
       .update(update)
       .eq('id', pedidoId);
     if (error) throw error;
+
+    if (tipo === 'cancelada' && pedido.status !== 'canceled') {
+      await this.estoque.restaurarItensDoPedido(pedidoId);
+    }
 
     return { ok: true, pedido_id: pedidoId, tipo, status: update.status ?? pedido.status };
   }

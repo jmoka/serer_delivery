@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { SupabaseService } from '../supabase/supabase.service';
 import { SalaoService } from './salao.service';
 import type { ItemComandaBody } from './salao.service';
+import { EstoqueService } from '../estoque/estoque.service';
 
 // PDV do caixa (lado estabelecimento): ações de cancelar/desconto/acréscimo/pagar
 // são exclusivas do dono (RestaurantOwnerGuard) — o garçom nunca tem acesso a
@@ -11,6 +12,7 @@ export class SalaoPdvService {
   constructor(
     private supabase: SupabaseService,
     private salaoService: SalaoService,
+    private estoque: EstoqueService,
   ) {}
 
   async mesas(restaurantId: number) {
@@ -452,6 +454,8 @@ export class SalaoPdvService {
     );
     if (error) throw error;
 
+    await this.estoque.decrementarItens(itens);
+
     const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', id);
     const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', id);
@@ -471,7 +475,7 @@ export class SalaoPdvService {
     }
 
     const { data: item } = await this.supabase.client
-      .from('order_items').select('id').eq('id', itemId).eq('order_id', comandaId).maybeSingle();
+      .from('order_items').select('id, product_id, quantity').eq('id', itemId).eq('order_id', comandaId).maybeSingle();
     if (!item) throw new NotFoundException('Item não encontrado');
 
     const update: Record<string, unknown> = {};
@@ -483,6 +487,10 @@ export class SalaoPdvService {
 
     const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
     if (error) throw error;
+
+    if (body.quantity !== undefined && body.quantity !== item.quantity) {
+      await this.estoque.ajustarPorDelta(item.product_id, item.quantity, body.quantity);
+    }
 
     const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
     const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
@@ -499,7 +507,7 @@ export class SalaoPdvService {
 
     const { data: item } = await this.supabase.client
       .from('order_items')
-      .select('id')
+      .select('id, product_id, quantity')
       .eq('id', itemId)
       .eq('order_id', comandaId)
       .maybeSingle();
@@ -507,6 +515,8 @@ export class SalaoPdvService {
 
     const { error } = await this.supabase.client.from('order_items').delete().eq('id', itemId);
     if (error) throw error;
+
+    await this.estoque.restaurarItens([{ product_id: item.product_id, quantity: item.quantity }]);
 
     const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
     const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
@@ -673,6 +683,8 @@ export class SalaoPdvService {
 
     const { error } = await this.supabase.client.from('orders').update({ status: 'canceled' }).eq('id', id);
     if (error) throw error;
+
+    await this.estoque.restaurarItensDoPedido(id);
 
     if (comanda.mesa_id) {
       await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);

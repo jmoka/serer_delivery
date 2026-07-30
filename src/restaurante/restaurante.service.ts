@@ -6,6 +6,7 @@ import { ProdutosService } from '../produtos/produtos.service';
 import { PedidosService } from '../pedidos/pedidos.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { MotoboyService } from '../motoboy/motoboy.service';
+import { EstoqueService } from '../estoque/estoque.service';
 
 @Injectable()
 export class RestauranteService {
@@ -16,6 +17,7 @@ export class RestauranteService {
     private pedidos: PedidosService,
     private geocoding: GeocodingService,
     private motoboyService: MotoboyService,
+    private estoque: EstoqueService,
   ) {}
 
   async minhaEmpresa(userId: string) {
@@ -87,6 +89,9 @@ export class RestauranteService {
       .single();
 
     if (errUpd) throw errUpd;
+
+    await this.estoque.restaurarItensDoPedido(pedidoId);
+
     return data;
   }
 
@@ -923,7 +928,7 @@ export class RestauranteService {
   async cancelarItem(itemId: number, restaurantId: number) {
     const { data: item } = await this.supabase.client
       .from('order_items')
-      .select('id, status, order_id, orders(restaurant_id)')
+      .select('id, status, order_id, product_id, quantity, orders(restaurant_id)')
       .eq('id', itemId)
       .maybeSingle();
 
@@ -940,6 +945,8 @@ export class RestauranteService {
       .update({ status: 'cancelado', cancelado_em: new Date().toISOString() })
       .eq('id', itemId);
     if (error) throw error;
+
+    await this.estoque.restaurarItens([{ product_id: item.product_id, quantity: item.quantity }]);
 
     return { ok: true };
   }

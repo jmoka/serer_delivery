@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { join } from 'path';
 import { SupabaseModule } from './supabase/supabase.module';
+import { EstoqueModule } from './estoque/estoque.module';
 import { AuthModule } from './auth/auth.module';
 import { McpModule } from './mcp/mcp.module';
 import { EmpresasModule } from './empresas/empresas.module';
@@ -28,6 +29,7 @@ import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.modul
       ],
     }),
     SupabaseModule,
+    EstoqueModule,
     AuthModule,
     McpModule,
     EmpresasModule,

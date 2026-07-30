@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { EstoqueService } from '../estoque/estoque.service';
 
 export interface AbrirComandaBody {
   mesa_id?: number;
@@ -15,7 +16,10 @@ export interface ItemComandaBody {
 
 @Injectable()
 export class SalaoService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private estoque: EstoqueService,
+  ) {}
 
   async mesas(restaurantId: number) {
     const { data: mesas, error } = await this.supabase.client
@@ -135,7 +139,7 @@ export class SalaoService {
   async produtos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, price, image_url, category_id, categories(name)')
+      .select('id, name, price, image_url, category_id, quantidade_estoque, categories(name)')
       .eq('restaurant_id', restaurantId)
       .eq('is_active', true)
       .gt('quantidade_estoque', 0)
@@ -629,6 +633,8 @@ export class SalaoService {
     );
     if (error) throw error;
 
+    await this.estoque.decrementarItens(itens);
+
     await this.recalcularTotal(comandaId);
     return this.obterComanda(comandaId, garcomId);
   }
@@ -638,7 +644,7 @@ export class SalaoService {
 
     const { data: item } = await this.supabase.client
       .from('order_items')
-      .select('id, status')
+      .select('id, status, product_id, quantity')
       .eq('id', itemId)
       .eq('order_id', comandaId)
       .maybeSingle();
@@ -650,7 +656,7 @@ export class SalaoService {
   }
 
   async editarItem(comandaId: number, garcomId: number, itemId: number, body: { quantity?: number; observacao?: string }) {
-    await this.garantirItemPendenteDoGarcom(comandaId, garcomId, itemId);
+    const item = await this.garantirItemPendenteDoGarcom(comandaId, garcomId, itemId);
 
     const update: Record<string, unknown> = {};
     if (body.quantity !== undefined) {
@@ -661,6 +667,10 @@ export class SalaoService {
 
     const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
     if (error) throw error;
+
+    if (body.quantity !== undefined && body.quantity !== item.quantity) {
+      await this.estoque.ajustarPorDelta(item.product_id, item.quantity, body.quantity);
+    }
 
     await this.recalcularTotal(comandaId);
     return this.obterComanda(comandaId, garcomId);
@@ -684,10 +694,12 @@ export class SalaoService {
   }
 
   async removerItem(comandaId: number, garcomId: number, itemId: number) {
-    await this.garantirItemPendenteDoGarcom(comandaId, garcomId, itemId);
+    const item = await this.garantirItemPendenteDoGarcom(comandaId, garcomId, itemId);
 
     const { error } = await this.supabase.client.from('order_items').delete().eq('id', itemId);
     if (error) throw error;
+
+    await this.estoque.restaurarItens([{ product_id: item.product_id, quantity: item.quantity }]);
 
     await this.recalcularTotal(comandaId);
     return this.obterComanda(comandaId, garcomId);
@@ -807,13 +819,15 @@ export class SalaoService {
     }
 
     const { data: itens } = await this.supabase.client
-      .from('order_items').select('id, status').eq('order_id', comandaId);
+      .from('order_items').select('id, status, product_id, quantity').eq('order_id', comandaId);
     if ((itens ?? []).some((i: any) => i.status !== 'pendente')) {
       throw new BadRequestException('Só é possível excluir a comanda antes de enviar algum item pra cozinha');
     }
 
     const { error } = await this.supabase.client.from('orders').update({ status: 'canceled' }).eq('id', comandaId);
     if (error) throw error;
+
+    if (itens?.length) await this.estoque.restaurarItens(itens);
 
     if (comanda.mesa_id) {
       await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);

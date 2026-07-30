@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { SalaoService } from '../salao/salao.service';
+import { EstoqueService } from '../estoque/estoque.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
@@ -12,6 +13,7 @@ export class PedidosService {
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
     private salaoService: SalaoService,
+    private estoque: EstoqueService,
   ) {}
 
   // Roteia os itens do pedido delivery pro mesmo mecanismo de KDS por setor que o
@@ -279,6 +281,10 @@ export class PedidosService {
 
     if (errItens) throw errItens;
 
+    // Reserva o estoque assim que o pedido é criado — evita vender 2x o último item
+    // enquanto ele ainda está pendente de confirmação.
+    await this.estoque.decrementarItens(body.itens);
+
     return { pedido, itens: itensPrepared };
   }
 
@@ -286,6 +292,9 @@ export class PedidosService {
     if (!STATUS_VALIDOS.includes(status)) {
       throw new BadRequestException(`Status inválido: ${status}`);
     }
+
+    const { data: antes } = await this.supabase.client.from('orders').select('status').eq('id', id).maybeSingle();
+    const statusAnterior = antes?.status;
 
     const { data, error } = await this.supabase.client
       .from('orders')
@@ -299,6 +308,10 @@ export class PedidosService {
 
     if (status === 'confirmed') {
       await this.rotearItensParaSetor(id, data.restaurant_id);
+    }
+
+    if (status === 'canceled' && statusAnterior !== 'canceled') {
+      await this.estoque.restaurarItensDoPedido(id);
     }
 
     // Comissão registrada automaticamente via trigger on_order_delivered quando status = 'delivered'
@@ -340,6 +353,8 @@ export class PedidosService {
       .single();
 
     if (errUpd) throw errUpd;
+
+    await this.estoque.restaurarItensDoPedido(id);
 
     const valor_devolver = pagamento?.valor ?? 0;
     return {
