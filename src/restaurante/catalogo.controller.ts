@@ -1,6 +1,7 @@
 import { Controller, Get, Headers, NotFoundException, Param, Query } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SupabaseJwtService } from '../auth/supabase-jwt.service';
+import { RedisService } from '../redis/redis.service';
 import { haversineKm } from '../common/geo.util';
 import { normalizarDominio } from '../common/dominio.util';
 import { CombosService } from '../combos/combos.service';
@@ -9,12 +10,18 @@ import * as os from 'os';
 const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active, quantidade_estoque';
 const RAIO_KM_PADRAO = 15;
 
+// TTL curto: aceita alguns segundos de defasagem de estoque/preço no marketplace
+// público em troca de menos carga no Supabase (mesmo trade-off que iFood/Rappi fazem).
+const TTL_CARDAPIO = 15;
+const TTL_FILTROS = 60;
+
 @Controller('r')
 export class CatalogoController {
   constructor(
     private supabase: SupabaseService,
     private supabaseJwt: SupabaseJwtService,
     private combosService: CombosService,
+    private redis: RedisService,
   ) {}
 
   @Get('acesso')
@@ -63,6 +70,18 @@ export class CatalogoController {
     },
     @Headers('authorization') authorization?: string,
   ) {
+    // Sem Authorization o resultado é puramente função da querystring — cacheável.
+    // Com Authorization pode depender do endereço salvo do cliente (personalizado), então
+    // nesse caso sempre busca direto no Supabase, igual já fazia antes do cache.
+    const cacheKey = !authorization
+      ? `catalogo:home:${JSON.stringify(query, Object.keys(query).sort())}`
+      : null;
+
+    if (cacheKey) {
+      const cached = await this.redis.getJSON<{ restaurantes: any[] }>(cacheKey);
+      if (cached) return cached;
+    }
+
     let q = this.supabase.client
       .from('restaurants')
       .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, aparencia, frete_motoboy, lat, lng')
@@ -119,7 +138,9 @@ export class CatalogoController {
         .sort((a, b) => (a.distancia_km ?? Infinity) - (b.distancia_km ?? Infinity));
     }
 
-    return { restaurantes };
+    const resultado = { restaurantes };
+    if (cacheKey) await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    return resultado;
   }
 
   // Valores distintos de estado/cidade/bairro entre restaurantes ativos — alimenta os
@@ -127,6 +148,10 @@ export class CatalogoController {
   // pra montar as opções). Precisa vir ANTES de @Get(':slug') na ordem das rotas.
   @Get('filtros')
   async filtrosGeograficos() {
+    const cacheKey = 'catalogo:filtros';
+    const cached = await this.redis.getJSON<{ locais: any[] }>(cacheKey);
+    if (cached) return cached;
+
     const { data, error } = await this.supabase.client
       .from('restaurants')
       .select('state, city, neighborhood')
@@ -143,11 +168,17 @@ export class CatalogoController {
       vistos.add(key);
       locais.push({ state: r.state, city: r.city, neighborhood: r.neighborhood });
     }
-    return { locais };
+    const resultado = { locais };
+    await this.redis.setJSON(cacheKey, resultado, TTL_FILTROS);
+    return resultado;
   }
 
   @Get('produtos')
   async todosOsProdutos() {
+    const cacheKey = 'catalogo:produtos:marketplace';
+    const cached = await this.redis.getJSON<{ produtos: any[] }>(cacheKey);
+    if (cached) return cached;
+
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
       .select('id, name, logo_url, slug, aparencia, frete_motoboy')
@@ -171,12 +202,14 @@ export class CatalogoController {
 
     if (error) throw error;
 
-    return {
+    const resultado = {
       produtos: (produtos ?? []).map((p) => ({
         ...p,
         restaurante: restMap[p.restaurant_id] ?? null,
       })).filter((p) => p.restaurante),
     };
+    await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    return resultado;
   }
 
   // Marketplace (home sem domínio customizado): combo ativo de todos os
@@ -184,6 +217,10 @@ export class CatalogoController {
   // de disponibilidade do CombosService, só que sem restringir a 1 restaurante.
   @Get('combos')
   async todosOsCombos() {
+    const cacheKey = 'catalogo:combos:marketplace';
+    const cached = await this.redis.getJSON<{ combos: any[] }>(cacheKey);
+    if (cached) return cached;
+
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
       .select('id, name, logo_url, slug, aparencia, frete_motoboy')
@@ -208,7 +245,7 @@ export class CatalogoController {
 
     if (error) throw error;
 
-    return {
+    const resultado = {
       combos: (combos ?? [])
         .map((c: any) => {
           const { combo_items, ...resto } = c;
@@ -220,6 +257,8 @@ export class CatalogoController {
         })
         .filter((c: any) => c.disponivel && c.restaurante),
     };
+    await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    return resultado;
   }
 
   // Resolução de domínio customizado — precisa vir ANTES de @Get(':slug') na
@@ -227,6 +266,10 @@ export class CatalogoController {
   @Get('by-domain/:host')
   async cardapioPorDominio(@Param('host') host: string) {
     const dominio = normalizarDominio(host);
+    const cacheKey = `catalogo:cardapio:dominio:${dominio}`;
+    const cached = await this.redis.getJSON<any>(cacheKey);
+    if (cached) return cached;
+
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
       .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy')
@@ -234,11 +277,17 @@ export class CatalogoController {
       .maybeSingle();
 
     if (!restaurante) throw new NotFoundException('Domínio não configurado');
-    return this.montarCardapio(restaurante);
+    const resultado = await this.montarCardapio(restaurante);
+    await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    return resultado;
   }
 
   @Get(':slug')
   async cardapio(@Param('slug') slug: string) {
+    const cacheKey = `catalogo:cardapio:${slug}`;
+    const cached = await this.redis.getJSON<any>(cacheKey);
+    if (cached) return cached;
+
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
       .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy')
@@ -246,7 +295,9 @@ export class CatalogoController {
       .maybeSingle();
 
     if (!restaurante) throw new NotFoundException('Restaurante não encontrado');
-    return this.montarCardapio(restaurante);
+    const resultado = await this.montarCardapio(restaurante);
+    await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    return resultado;
   }
 
   private async montarCardapio(restaurante: any) {
