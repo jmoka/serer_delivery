@@ -634,7 +634,7 @@ export class SalaoService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor')
+      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco')
       .eq('order_id', comandaId)
       .order('criado_em', { ascending: true });
     const saldo = await this.saldoDevedor(comandaId);
