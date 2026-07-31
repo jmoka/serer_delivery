@@ -121,11 +121,6 @@ export class SalaoController {
     return this.service.editarClienteMesa(id, req.garcomId, body);
   }
 
-  @Delete('comandas/:id')
-  excluirComanda(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.service.excluirComanda(id, req.garcomId);
-  }
-
   @Post('comandas/:id/pagamento')
   registrarPagamento(
     @Param('id', ParseIntPipe) id: number,

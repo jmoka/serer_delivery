@@ -218,7 +218,7 @@ export class SalaoService {
 
   // Lança uma saída automática no caixa aberto do restaurante — usado pra registrar troco
   // dado e gorjeta paga em dinheiro, sem o caixa precisar lançar isso manualmente depois.
-  async registrarSaidaCaixa(restaurantId: number, descricao: string, valor: number, tipo: 'troco' | 'gorjeta') {
+  async registrarSaidaCaixa(restaurantId: number, descricao: string, valor: number, tipo: 'troco' | 'gorjeta' | 'estorno_pagamento') {
     if (!(valor > 0)) return;
     const { data: caixa } = await this.supabase.client
       .from('caixas')
@@ -248,6 +248,37 @@ export class SalaoService {
     const entradas = (caixa.entradas ?? []) as any[];
     const nova = { descricao, valor, meio: 'dinheiro', tipo, criado_em: new Date().toISOString() };
     await this.supabase.client.from('caixas').update({ entradas: [...entradas, nova] }).eq('id', caixa.id);
+  }
+
+  // Deletar (ou trocar a forma de) um pagamento em dinheiro já lançado não desfazia
+  // sozinho o que aconteceu no caixa físico: nem a entrada (valor_recebido — ver
+  // registrarEntradaCaixa) nem a saída de troco que ela gerou (ver registrarSaidaCaixa).
+  // Corrigir um valor errado sem estornar os dois deixava dinheiro fantasma — e faltando
+  // o troco de volta, o saldo ficava errado pro lado contrário (faltando dinheiro).
+  async estornarPagamentoEmDinheiro(
+    restaurantId: number,
+    identificador: string,
+    pagamento: { forma_pagamento: string; valor: number; valor_recebido?: number | null; troco?: number | null },
+  ) {
+    if (pagamento.forma_pagamento !== 'cash') return;
+    const valorCreditado = pagamento.valor_recebido ?? pagamento.valor;
+    await this.registrarSaidaCaixa(restaurantId, `Estorno pagamento removido - ${identificador}`, valorCreditado, 'estorno_pagamento');
+    if ((pagamento.troco ?? 0) > 0) {
+      await this.registrarEntradaCaixa(restaurantId, `Estorno troco (pagamento removido) - ${identificador}`, pagamento.troco as number, 'estorno_troco');
+    }
+  }
+
+  // Comanda cancelada/excluída não pode deixar pra trás nenhum pagamento em dinheiro já
+  // lançado no caixa físico — senão o dinheiro de uma venda que não existe mais continua
+  // contando (mesmo problema do estorno individual, só que a comanda inteira some).
+  async estornarPagamentosDaComanda(restaurantId: number, comandaId: number, identificador: string) {
+    const { data: pagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('forma_pagamento, valor, valor_recebido, troco')
+      .eq('order_id', comandaId);
+    for (const pagamento of (pagamentos ?? []) as any[]) {
+      await this.estornarPagamentoEmDinheiro(restaurantId, identificador, pagamento);
+    }
   }
 
   // Espécie disponível agora no caixa aberto — soma direto do ledger (fundo + entradas em
@@ -333,13 +364,14 @@ export class SalaoService {
   private async buscarPagamentoDoGarcom(comandaId: number, pagamentoId: number) {
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, origem')
+      .select('id, origem, forma_pagamento, valor, valor_recebido, troco')
       .eq('id', pagamentoId)
       .eq('order_id', comandaId)
       .maybeSingle();
     if (!data) throw new NotFoundException('Pagamento não encontrado');
     // Garçom só edita/remove o que ele mesmo lançou — pagamento do caixa é exclusivo do PDV.
     if (data.origem !== 'garcom') throw new ForbiddenException('Só é possível editar/remover pagamentos lançados por você');
+    return data;
   }
 
   async editarPagamentoComoGarcom(
@@ -353,7 +385,11 @@ export class SalaoService {
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
-    await this.buscarPagamentoDoGarcom(comandaId, pagamentoId);
+    const pagamentoAnterior = await this.buscarPagamentoDoGarcom(comandaId, pagamentoId);
+    const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
+    // Estorna o que foi creditado com o valor/forma antigos antes de aplicar o novo —
+    // senão corrigir um valor errado soma os dois no caixa físico.
+    await this.estornarPagamentoEmDinheiro(comanda.restaurant_id, identificador, pagamentoAnterior);
 
     const taxaCartaoValor = await this.calcularTaxaCartao(comanda.restaurant_id, valor, formaPagamento);
     const { error } = await this.supabase.client
@@ -361,6 +397,10 @@ export class SalaoService {
       .update({ valor, forma_pagamento: formaPagamento, taxa_cartao_valor: taxaCartaoValor || null })
       .eq('id', pagamentoId);
     if (error) throw error;
+
+    if (formaPagamento === 'cash') {
+      await this.registrarEntradaCaixa(comanda.restaurant_id, `Venda em dinheiro (corrigido) - ${identificador}`, valor, 'venda_dinheiro');
+    }
 
     return this.obterComanda(comandaId, garcomId);
   }
@@ -372,10 +412,12 @@ export class SalaoService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
 
-    await this.buscarPagamentoDoGarcom(comandaId, pagamentoId);
+    const pagamento = await this.buscarPagamentoDoGarcom(comandaId, pagamentoId);
 
     const { error } = await this.supabase.client.from('comanda_pagamentos').delete().eq('id', pagamentoId);
     if (error) throw error;
+
+    await this.estornarPagamentoEmDinheiro(comanda.restaurant_id, `Comanda #${comanda.numero_comanda ?? comandaId}`, pagamento);
 
     return this.obterComanda(comandaId, garcomId);
   }
@@ -846,30 +888,8 @@ export class SalaoService {
     return this.obterComanda(comandaId, garcomId);
   }
 
-  // Garçom só exclui a própria comanda antes de mandar qualquer item pra cozinha — depois
-  // disso é o estabelecimento que decide (cancelar via PDV), pra não sumir pedido em preparo.
-  async excluirComanda(comandaId: number, garcomId: number) {
-    const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
-    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
-      throw new BadRequestException('Comanda já foi paga ou cancelada');
-    }
-
-    const { data: itens } = await this.supabase.client
-      .from('order_items').select('id, status, product_id, quantity').eq('order_id', comandaId);
-    if ((itens ?? []).some((i: any) => i.status !== 'pendente')) {
-      throw new BadRequestException('Só é possível excluir a comanda antes de enviar algum item pra cozinha');
-    }
-
-    const { error } = await this.supabase.client.from('orders').update({ status: 'canceled' }).eq('id', comandaId);
-    if (error) throw error;
-
-    if (itens?.length) await this.estoque.restaurarItens(itens);
-
-    if (comanda.mesa_id) {
-      await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);
-    }
-    return { ok: true };
-  }
+  // Excluir/cancelar comanda é exclusivo do estabelecimento (via PDV) — garçom não tem
+  // mais essa ação (só o dono decide, evita comanda sumir sem o caixa saber).
 
   // Marcador seguro pra "negrito desligado" — o comando ESC/POS real (ESC E 0x00) tem um
   // byte NUL, que o Postgres TEXT não aceita (quebra o insert). Guardamos esse marcador no

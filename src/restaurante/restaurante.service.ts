@@ -1072,11 +1072,16 @@ export class RestauranteService {
     // total_entradas/total_saidas crus aqui contaria essa venda duas vezes. Filtra fora só
     // pra esse cálculo — total_entradas/total_saidas retornados continuam com tudo, pro
     // ledger (KPIs "Adições"/"Sangrias") mostrar os lançamentos automáticos normalmente.
+    // estorno_troco compensa o troco original (já fora de saidas_saldo) quando um
+    // pagamento com troco é corrigido/removido — mesma lógica do estorno_pagamento.
     const entradas_saldo = entradas
-      .filter((e: any) => e.tipo !== 'venda_dinheiro')
+      .filter((e: any) => e.tipo !== 'venda_dinheiro' && e.tipo !== 'estorno_troco')
       .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
+    // estorno_pagamento compensa uma venda_dinheiro que também já ficou de fora daqui
+    // (pagamento corrigido/removido) — mesma lógica do troco, senão penaliza o saldo
+    // líquido por uma venda que nem conta mais em total_vendas.
     const saidas_saldo = saidas
-      .filter((s: any) => s.tipo !== 'troco')
+      .filter((s: any) => s.tipo !== 'troco' && s.tipo !== 'estorno_pagamento')
       .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
 
     return {

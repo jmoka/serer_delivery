@@ -205,11 +205,12 @@ export class SalaoPdvService {
   private async buscarPagamento(comandaId: number, pagamentoId: number) {
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id')
+      .select('id, forma_pagamento, valor, valor_recebido, troco')
       .eq('id', pagamentoId)
       .eq('order_id', comandaId)
       .maybeSingle();
     if (!data) throw new NotFoundException('Pagamento não encontrado');
+    return data;
   }
 
   // Comanda já paga só pode ter a forma de pagamento corrigida (não valor) enquanto o
@@ -238,15 +239,24 @@ export class SalaoPdvService {
     }
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
+    const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
+
     if (comanda.status === 'paga') {
       await this.garantirCaixaAbertoDaComanda(comanda);
-      await this.buscarPagamento(comandaId, pagamentoId);
-      const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
+      const anterior = await this.buscarPagamento(comandaId, pagamentoId);
+      // Só a forma muda aqui (valor travado) — estorna o que foi creditado na forma
+      // antiga e credita de novo na forma nova, senão trocar "dinheiro" por "pix" deixa
+      // o dinheiro fantasma no caixa físico.
+      await this.salaoService.estornarPagamentoEmDinheiro(restaurantId, identificador, anterior);
+      const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, anterior.valor, formaPagamento);
       const { error } = await this.supabase.client
         .from('comanda_pagamentos')
         .update({ forma_pagamento: formaPagamento, taxa_cartao_valor: taxaCartaoValor || null })
         .eq('id', pagamentoId);
       if (error) throw error;
+      if (formaPagamento === 'cash') {
+        await this.salaoService.registrarEntradaCaixa(restaurantId, `Venda em dinheiro (corrigido) - ${identificador}`, anterior.valor_recebido ?? anterior.valor, 'venda_dinheiro');
+      }
       // orders.payment_method só é usado como resumo de exibição quando não há
       // comanda_pagamentos — mantém em sincronia mesmo assim, evita confusão no recibo.
       await this.supabase.client.from('orders').update({ payment_method: formaPagamento }).eq('id', comandaId);
@@ -254,7 +264,8 @@ export class SalaoPdvService {
     }
 
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
-    await this.buscarPagamento(comandaId, pagamentoId);
+    const anterior = await this.buscarPagamento(comandaId, pagamentoId);
+    await this.salaoService.estornarPagamentoEmDinheiro(restaurantId, identificador, anterior);
 
     const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
     const { error } = await this.supabase.client
@@ -262,6 +273,10 @@ export class SalaoPdvService {
       .update({ valor, forma_pagamento: formaPagamento, taxa_cartao_valor: taxaCartaoValor || null })
       .eq('id', pagamentoId);
     if (error) throw error;
+
+    if (formaPagamento === 'cash') {
+      await this.salaoService.registrarEntradaCaixa(restaurantId, `Venda em dinheiro (corrigido) - ${identificador}`, valor, 'venda_dinheiro');
+    }
 
     return this.comandaDetalhe(comandaId, restaurantId);
   }
@@ -272,10 +287,12 @@ export class SalaoPdvService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
 
-    await this.buscarPagamento(comandaId, pagamentoId);
+    const pagamento = await this.buscarPagamento(comandaId, pagamentoId);
 
     const { error } = await this.supabase.client.from('comanda_pagamentos').delete().eq('id', pagamentoId);
     if (error) throw error;
+
+    await this.salaoService.estornarPagamentoEmDinheiro(restaurantId, `Comanda #${comanda.numero_comanda ?? comandaId}`, pagamento);
 
     return this.comandaDetalhe(comandaId, restaurantId);
   }
@@ -711,6 +728,7 @@ export class SalaoPdvService {
     if (error) throw error;
 
     await this.estoque.restaurarItensDoPedido(id);
+    await this.salaoService.estornarPagamentosDaComanda(restaurantId, id, `Comanda #${comanda.numero_comanda ?? id} (cancelada)`);
 
     if (comanda.mesa_id) {
       await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);
@@ -832,7 +850,11 @@ export class SalaoPdvService {
     return { percentual, valor_sugerido: parseFloat(((subtotal * percentual) / 100).toFixed(2)) };
   }
 
-  async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number) {
+  // gorjetaDireta: cliente pagou a gorjeta direto pro garçom (pix/dinheiro), por fora
+  // do caixa do estabelecimento — não cobra na comanda nem entra no gorjeta_valor (que
+  // alimenta o relatório de repasse do garçom, senão contaria a mesma gorjeta 2x: o
+  // garçom já ficou com o dinheiro na mão, não tem o que repassar).
+  async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number, gorjetaDireta?: boolean) {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
     const comanda = await this.buscarComanda(id, restaurantId);
@@ -853,7 +875,7 @@ export class SalaoPdvService {
     if (saldo > 0.01) {
       throw new BadRequestException('Saldo devedor pendente: registre os pagamentos até zerar o saldo antes de fechar a comanda');
     }
-    const gorjeta = gorjetaValor ?? 0;
+    const gorjeta = gorjetaDireta ? 0 : (gorjetaValor ?? 0);
     const valorACobrarBase = parseFloat(gorjeta.toFixed(2));
     const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valorACobrarBase, formaPagamento);
     // A essa altura o saldo dos itens já está zerado — só falta cobrar a gorjeta (se houver).
@@ -902,7 +924,9 @@ export class SalaoPdvService {
         status: 'paga',
         payment_method: formaPagamento,
         total: parseFloat(totalFinal.toFixed(2)),
-        gorjeta_valor: gorjetaValor ?? null,
+        // Direto pro garçom não conta gorjeta_valor — é isso que alimenta o repasse
+        // (ver getRelatorioGarcom) e o valor cobrado da comanda.
+        gorjeta_valor: gorjetaDireta ? null : (gorjetaValor ?? null),
         caixa_id: caixaId,
         pago_em: new Date().toISOString(),
       })

@@ -9,9 +9,10 @@ import { MotoboyAuthController } from './motoboy-auth.controller';
 import { MotoboyEstabelecimentosController } from './motoboy-estabelecimentos.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { SalaoModule } from '../salao/salao.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule],
+  imports: [AuthModule, SupabaseModule, SalaoModule],
   controllers: [
     RestauranteMotoboysController,
     MotoboyPortalController,

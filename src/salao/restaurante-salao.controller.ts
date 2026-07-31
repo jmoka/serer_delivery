@@ -201,9 +201,9 @@ export class RestauranteSalaoController {
   @Post('comandas/:id/pagar')
   pagar(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { forma_pagamento: string; gorjeta_valor?: number; valor_recebido?: number },
+    @Body() body: { forma_pagamento: string; gorjeta_valor?: number; valor_recebido?: number; gorjeta_direta?: boolean },
     @Req() req: any,
   ) {
-    return this.service.pagar(id, req.restaurantId, body.forma_pagamento, body.gorjeta_valor, body.valor_recebido);
+    return this.service.pagar(id, req.restaurantId, body.forma_pagamento, body.gorjeta_valor, body.valor_recebido, body.gorjeta_direta);
   }
 }

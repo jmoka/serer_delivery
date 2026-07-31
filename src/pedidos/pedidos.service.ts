@@ -320,7 +320,7 @@ export class PedidosService {
       .from('orders')
       .update({ status, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, status, total, restaurant_id, updated_at')
+      .select('id, status, total, restaurant_id, payment_method, updated_at')
       .single();
 
     if (error) throw error;
@@ -332,6 +332,13 @@ export class PedidosService {
 
     if (status === 'canceled' && statusAnterior !== 'canceled') {
       await this.estoque.restaurarItensDoPedido(id);
+    }
+
+    // Delivery pago em dinheiro precisa creditar o caixa físico igual já acontece na
+    // venda do salão (ver SalaoService.registrarEntradaCaixa) — sem isso "Espécie no
+    // caixa" nunca soma a venda em dinheiro, só o fundo inicial.
+    if (status === 'delivered' && statusAnterior !== 'delivered' && data.payment_method === 'cash') {
+      await this.salaoService.registrarEntradaCaixa(data.restaurant_id, `Venda delivery em dinheiro - Pedido #${id}`, data.total, 'venda_dinheiro');
     }
 
     // Comissão registrada automaticamente via trigger on_order_delivered quando status = 'delivered'

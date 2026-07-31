@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { ComissaoService } from './comissao.service';
 import { GeocodingService } from './geocoding.service';
 import { EstoqueService } from '../estoque/estoque.service';
+import { SalaoService } from '../salao/salao.service';
 
 const DOC_BUCKET = 'motoboy-documentos';
 const SIGNED_URL_TTL = 60 * 10; // 10 min
@@ -14,6 +15,7 @@ export class MotoboyService {
     private comissao: ComissaoService,
     private geocoding: GeocodingService,
     private estoque: EstoqueService,
+    private salaoService: SalaoService,
   ) {}
 
   private async exigirAfiliacaoAceita(motoboyId: number, restaurantId: number) {
@@ -362,7 +364,7 @@ export class MotoboyService {
   ) {
     const { data: pedido } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, total, frete_cobrado, customer_id')
+      .select('id, status, restaurant_id, total, frete_cobrado, customer_id, payment_method')
       .eq('id', pedidoId)
       .eq('motoboy_id', motoboyId)
       .maybeSingle();
@@ -417,6 +419,13 @@ export class MotoboyService {
       }
     }
 
+    // Pedido já veio com "pagamento em dinheiro" escolhido no checkout (não é o motoboy
+    // reportando o que cobrou na hora — isso é o `entregaPagamento` acima) — sem isso o
+    // caixa físico nunca credita essa venda, só o fundo inicial (mesmo bug do salão).
+    if (!entregaPagamento?.dinheiro && pedido.payment_method === 'cash' && pedido.restaurant_id) {
+      await this.salaoService.registrarEntradaCaixa(pedido.restaurant_id, `Venda delivery em dinheiro - Pedido #${pedidoId}`, pedido.total, 'venda_dinheiro');
+    }
+
     // Calcula e registra a comissão do motoboy (idempotente — UNIQUE(pedido_id))
     await this.comissao.registrarComissaoEntrega(pedido, motoboyId);
 
@@ -433,7 +442,7 @@ export class MotoboyService {
   ) {
     const { data: pedido } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, motoboy_id, total')
+      .select('id, status, restaurant_id, motoboy_id, total, payment_method')
       .eq('id', pedidoId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -484,6 +493,12 @@ export class MotoboyService {
           await this.supabase.client.from('caixas').update({ entradas: [...entradas, ...novas] }).eq('id', caixa.id);
         }
       }
+    }
+
+    // Idem confirmarEntrega: pedido pago em dinheiro no checkout, sem o dono reportar
+    // via entregaPagamento — precisa creditar o caixa físico do mesmo jeito.
+    if (!entregaPagamento?.dinheiro && pedido.payment_method === 'cash') {
+      await this.salaoService.registrarEntradaCaixa(restaurantId, `Venda delivery em dinheiro (entrega própria) - Pedido #${pedidoId}`, pedido.total, 'venda_dinheiro');
     }
 
     return { ok: true, pedido_id: pedidoId, status: 'delivered', entrega_propria: true };
