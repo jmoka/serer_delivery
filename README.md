@@ -78,6 +78,12 @@ PAGBANK_SANDBOX=true
 PAGBANK_WEBHOOK_URL=http://localhost:3002/pagamentos/webhook
 ```
 
+Variável opcional (cache — ver seção [Cache (Redis)](#cache-redis--catálogo-público)):
+
+```env
+REDIS_URL=redis://127.0.0.1:6379
+```
+
 ### Portas (desenvolvimento local)
 
 | Serviço       | Porta |
@@ -87,6 +93,52 @@ PAGBANK_WEBHOOK_URL=http://localhost:3002/pagamentos/webhook
 | Supabase API  | 54331 |
 | Supabase DB   | 54332 |
 | Supabase Studio | 54333 |
+
+---
+
+## Cache (Redis) — catálogo público
+
+Cache-aside com TTL curto (15s nas rotas de cardápio/marketplace, 60s no filtro geográfico) nas rotas públicas de `CatalogoController` (`/r/*`: home, filtros, produtos/combos do marketplace, cardápio por slug/domínio). Sem invalidação manual — aceita alguns segundos de defasagem de estoque/preço em troca de menos carga no Supabase. Escopo intencionalmente restrito ao catálogo público: estoque, caixa, pedidos e telas administrativas continuam sempre direto no banco.
+
+O cache é **best-effort**: sem `REDIS_URL` configurada, ou com Redis fora do ar, a aplicação sobe e funciona normalmente — só sem cache (log de warning, sem derrubar nada).
+
+### Rodando local (Docker)
+
+```bash
+docker run -d --name deliveryhub-redis -p 6379:6379 redis:7-alpine
+```
+
+No `.env` do backend:
+
+```env
+REDIS_URL=redis://127.0.0.1:6379
+```
+
+Parar/religar depois:
+
+```bash
+docker stop deliveryhub-redis
+docker start deliveryhub-redis
+```
+
+### Produção (VPS/EasyPanel)
+
+```env
+REDIS_URL=redis://default:SENHA@HOST_INTERNO:6379
+```
+
+**Atenção com a senha:** se tiver caractere especial (`@`, `%`, etc.), precisa URL-encode (`@` → `%40`) — senão o parser da URL quebra e o Redis recusa a conexão (`WRONGPASS`). Mais simples: usar senha só com letras/números, evita o problema de vez.
+
+### Testando se o cache está gravando
+
+`KEYS` sozinho é enganoso aqui — o TTL de 15s costuma expirar antes de você rodar o comando manualmente, dando falso negativo. Prova confiável, sem essa corrida:
+
+```bash
+# no redis-cli, deixa rodando:
+MONITOR
+```
+
+Faz uma request numa rota `/r/:slug` em outra aba e confere se aparece `GET` (miss) seguido de `SET ... EX 15` no `MONITOR`.
 
 ---
 
@@ -130,6 +182,7 @@ PORT=3002
 PAGBANK_TOKEN=<token de produção do PagBank>
 PAGBANK_SANDBOX=false
 PAGBANK_WEBHOOK_URL=https://SEU_DOMINIO/pagamentos/webhook
+REDIS_URL=redis://default:SENHA@HOST_INTERNO:6379
 ```
 
 Rodar com `npm run start:prod` (idealmente atrás de um process manager como PM2, para reiniciar sozinho em caso de queda):
