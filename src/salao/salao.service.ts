@@ -972,7 +972,7 @@ export class SalaoService {
       formaPagamento: string;
       trocoDado?: number;
     },
-    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number }[],
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number; valor_recebido?: number | null; troco?: number | null }[],
   ): string {
     const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
     const PAGAMENTO_LABEL: Record<string, string> = { pix: 'PIX', credit_card: 'Cartao', debit_card: 'Debito', cash: 'Dinheiro' };
@@ -1009,6 +1009,9 @@ export class SalaoService {
         const origemLabel = p.origem === 'garcom' ? 'garcom' : 'caixa';
         const taxaP = p.taxa_cartao_valor ? ` + taxa R$ ${fmt(p.taxa_cartao_valor)}` : '';
         linhas.push(`${PAGAMENTO_LABEL[p.forma_pagamento] ?? p.forma_pagamento} (${origemLabel}): R$ ${fmt(p.valor + (p.taxa_cartao_valor ?? 0))}${taxaP}`);
+        if (p.forma_pagamento === 'cash' && p.valor_recebido != null) {
+          linhas.push(`  Dinheiro: R$ ${fmt(p.valor_recebido)} - Troco: R$ ${fmt(p.troco ?? 0)}`);
+        }
       }
     } else {
       linhas.push(`Pagamento: ${PAGAMENTO_LABEL[valores.formaPagamento] ?? valores.formaPagamento}`);
@@ -1027,7 +1030,7 @@ export class SalaoService {
     comanda: any,
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
     valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; total: number; formaPagamento: string; trocoDado?: number },
-    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number }[],
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number; valor_recebido?: number | null; troco?: number | null }[],
   ): Promise<{ via: 'agente' } | { via: 'navegador' }> {
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')

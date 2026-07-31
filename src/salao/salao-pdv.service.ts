@@ -779,7 +779,7 @@ export class SalaoPdvService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('valor, forma_pagamento, origem, taxa_cartao_valor')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
 
@@ -941,7 +941,7 @@ export class SalaoPdvService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('valor, forma_pagamento, origem, taxa_cartao_valor')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
 
@@ -989,7 +989,7 @@ export class SalaoPdvService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('valor, forma_pagamento, origem, taxa_cartao_valor')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
 
