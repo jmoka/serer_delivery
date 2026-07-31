@@ -8,6 +8,8 @@
   "scripts": {
     "build": "nest build",
     "start": "nest start",
+    "redis_start": "docker start deliveryhub-redis",
+    "redis_stop": "docker stop deliveryhub-redis",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
     "test": "jest",
