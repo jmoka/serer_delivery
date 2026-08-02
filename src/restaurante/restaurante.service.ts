@@ -1649,7 +1649,7 @@ export class RestauranteService {
   async getRelatorio(restaurantId: number, de: string, ate: string) {
     const { data: orders, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, status, payment_method, canal, created_at, customer_id, gorjeta_valor, customers(name)')
+      .select('id, total, status, payment_method, canal, created_at, customer_id, gorjeta_valor, customers(name), mesa_id, cliente_mesa_nome, garcom_id, aberto_por_nome, garcons(nome)')
       .eq('restaurant_id', restaurantId)
       .gte('created_at', de)
       .lte('created_at', ate)
@@ -1773,14 +1773,16 @@ export class RestauranteService {
     const fluxo_caixa: any[] = [];
     let total_troco = 0;
     for (const p of nao_cancelados) {
+      const cliente_nome = p.customers?.name ?? p.cliente_mesa_nome ?? null;
       const pagamentosComanda = p.canal === 'presencial' ? pagamentosPorComandaRelatorio.get(p.id) : undefined;
       if (pagamentosComanda?.length) {
         for (const pag of pagamentosComanda) {
-          fluxo_caixa.push({ order_id: p.id, forma_pagamento: pag.forma_pagamento, origem: pag.origem, valor: pag.valor, troco: pag.troco, criado_em: pag.criado_em });
+          const atendente_nome = pag.origem === 'garcom' ? (p.garcons?.nome ?? '—') : pag.origem === 'estabelecimento' ? (p.aberto_por_nome ?? 'Balcão') : null;
+          fluxo_caixa.push({ order_id: p.id, forma_pagamento: pag.forma_pagamento, origem: pag.origem, valor: pag.valor, troco: pag.troco, criado_em: pag.criado_em, taxa_cartao_valor: pag.taxa_cartao_valor ?? 0, cliente_nome, atendente_nome });
           total_troco += pag.troco ?? 0;
         }
       } else {
-        fluxo_caixa.push({ order_id: p.id, forma_pagamento: p.payment_method ?? 'unknown', origem: 'delivery', valor: p.total ?? 0, troco: 0, criado_em: p.created_at });
+        fluxo_caixa.push({ order_id: p.id, forma_pagamento: p.payment_method ?? 'unknown', origem: 'delivery', valor: p.total ?? 0, troco: 0, criado_em: p.created_at, taxa_cartao_valor: 0, cliente_nome, atendente_nome: null });
       }
     }
     fluxo_caixa.sort((a, b) => new Date(a.criado_em).getTime() - new Date(b.criado_em).getTime());
