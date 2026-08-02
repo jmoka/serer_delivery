@@ -1738,10 +1738,10 @@ export class RestauranteService {
       return acc;
     }, {} as Record<string, { count: number; total: number }>);
 
-    // Saídas de caixas que se sobrepõem ao período
+    // Saídas e entradas de caixas que se sobrepõem ao período
     const { data: caixasPeriodo } = await this.supabase.client
       .from('caixas')
-      .select('id, saidas')
+      .select('id, saidas, entradas')
       .eq('restaurant_id', restaurantId)
       .lte('aberto_em', ate)
       .or(`fechado_em.is.null,fechado_em.gte.${de}`);
@@ -1749,13 +1749,19 @@ export class RestauranteService {
     const deDate = new Date(de);
     const ateDate = new Date(ate);
     const saidas: any[] = [];
+    const entradas: any[] = [];
     for (const c of (caixasPeriodo ?? [])) {
       for (const s of (c.saidas ?? [])) {
         const d = new Date(s.criado_em);
         if (d >= deDate && d <= ateDate) saidas.push(s);
       }
+      for (const e of (c.entradas ?? [])) {
+        const d = new Date(e.criado_em);
+        if (d >= deDate && d <= ateDate) entradas.push(e);
+      }
     }
     const total_saidas = saidas.reduce((sum, s) => sum + (s.valor ?? 0), 0);
+    const total_entradas = entradas.reduce((sum, e) => sum + (e.valor ?? 0), 0);
 
     // Comissão paga aos garçons no período (lançada no fechamento de cada comanda).
     const { data: comissoesPeriodo } = orderIds.length
@@ -1790,6 +1796,7 @@ export class RestauranteService {
     return {
       pedidos,
       saidas,
+      entradas,
       fluxo_caixa,
       resumo: {
         total_pedidos: pedidos.length,
@@ -1800,6 +1807,7 @@ export class RestauranteService {
         ticket_medio: entregues.length > 0 ? total_vendas / entregues.length : 0,
         por_pagamento,
         total_saidas,
+        total_entradas,
         total_comissao,
         total_gorjeta,
         total_gorjetas_pagas,
