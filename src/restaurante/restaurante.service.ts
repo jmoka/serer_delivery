@@ -829,9 +829,10 @@ export class RestauranteService {
     const limiteProntos = inicioDoDia.toISOString();
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, ordem_fila, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .or(`status.in.(enviado,preparando),and(status.eq.pronto,pronto_em.gte.${limiteProntos})`)
+      .order('ordem_fila', { ascending: true, nullsFirst: false })
       .order('enviado_em', { ascending: true });
     if (error) throw error;
 
@@ -977,6 +978,51 @@ export class RestauranteService {
     if (error) throw error;
 
     await this.estoque.restaurarItens([{ product_id: item.product_id, quantity: item.quantity }]);
+
+    return { ok: true };
+  }
+
+  // Adiantar/atrasar item na fila "Aguardando Preparo" — troca de posição com o vizinho
+  // (cima/baixo). Resequencia ordem_fila de TODOS os itens "enviado" do setor pra manter
+  // consistência: sem isso, itens ainda sem ordem_fila (null) ficariam intercalados de
+  // forma imprevisível com os já reordenados.
+  async moverPosicaoItem(itemId: number, restaurantId: number, direcao: 'cima' | 'baixo') {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, impressora_id, order_id, orders(restaurant_id)')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
+    }
+    if (item.status !== 'enviado') {
+      throw new BadRequestException('Só é possível reordenar um item enquanto está Aguardando Preparo');
+    }
+
+    const { data: fila, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, ordem_fila, enviado_em')
+      .eq('impressora_id', item.impressora_id)
+      .eq('status', 'enviado')
+      .order('ordem_fila', { ascending: true, nullsFirst: false })
+      .order('enviado_em', { ascending: true });
+    if (error) throw error;
+
+    const lista = fila as any[];
+    const idx = lista.findIndex((i) => i.id === itemId);
+    const swapIdx = direcao === 'cima' ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= lista.length) {
+      throw new BadRequestException('Item já está na ponta da fila');
+    }
+
+    [lista[idx], lista[swapIdx]] = [lista[swapIdx], lista[idx]];
+
+    await Promise.all(
+      lista.map((i, novaPos) =>
+        this.supabase.client.from('order_items').update({ ordem_fila: novaPos }).eq('id', i.id),
+      ),
+    );
 
     return { ok: true };
   }
