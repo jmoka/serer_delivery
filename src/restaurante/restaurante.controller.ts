@@ -290,6 +290,11 @@ export class RestauranteController {
     return this.service.cancelarItem(id, req.restaurantId);
   }
 
+  @Patch('kds/itens/:id/mover')
+  kdsMover(@Param('id', ParseIntPipe) id: number, @Body('direcao') direcao: 'cima' | 'baixo', @Req() req: any) {
+    return this.service.moverPosicaoItem(id, req.restaurantId, direcao);
+  }
+
   @Post('kds/itens/:id/reimprimir')
   kdsReimprimir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.salaoService.reimprimirItem(id, req.restaurantId);
