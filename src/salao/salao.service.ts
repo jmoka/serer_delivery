@@ -856,13 +856,41 @@ export class SalaoService {
     }
 
     const agora = new Date().toISOString();
-    const update: Record<string, unknown> = { entregue_garcom: true, entregue_em: agora };
+    const update: Record<string, unknown> = { entregue_garcom: true, entregue_em: agora, garcom_nao_entregou: false };
     if (item.status === 'preparando') {
       update.status = 'pronto';
       update.pronto_em = item.pronto_em ?? agora;
     }
 
     const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
+    if (error) throw error;
+
+    return this.obterComanda(comandaId, garcomId);
+  }
+
+  // Garçom marca que NÃO conseguiu entregar um item já pronto — volta pra fila de preparo
+  // (status 'enviado', mesma etapa do início) e liga garcom_nao_entregou pra Cozinha/Bar/
+  // Produção destacarem com borda vermelha + aviso. A flag só desliga quando o garçom
+  // confirmar a entrega de verdade depois (confirmarEntregaItem acima), mesmo que o item
+  // passe de novo por preparando/pronto nesse meio tempo — pedido explícito do usuário.
+  async naoEntregarItem(comandaId: number, garcomId: number, itemId: number) {
+    await this.garantirComandaDoGarcom(comandaId, garcomId);
+
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status')
+      .eq('id', itemId)
+      .eq('order_id', comandaId)
+      .maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (item.status !== 'pronto') {
+      throw new ForbiddenException('Item ainda não está pronto');
+    }
+
+    const { error } = await this.supabase.client
+      .from('order_items')
+      .update({ status: 'enviado', entregue_garcom: false, entregue_em: null, garcom_nao_entregou: true })
+      .eq('id', itemId);
     if (error) throw error;
 
     return this.obterComanda(comandaId, garcomId);
