@@ -112,6 +112,11 @@ export class SalaoController {
     return this.service.confirmarEntregaItem(id, req.garcomId, itemId);
   }
 
+  @Patch('comandas/:id/itens/:itemId/nao-entregar')
+  naoEntregarItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
+    return this.service.naoEntregarItem(id, req.garcomId, itemId);
+  }
+
   @Patch('comandas/:id/cliente')
   editarCliente(
     @Param('id', ParseIntPipe) id: number,
