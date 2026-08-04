@@ -25,7 +25,7 @@ export class RestauranteService {
   async minhaEmpresa(userId: string) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, payment_config, comissao_pct, type_id, modulo_delivery, modulo_salao, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, payment_config, comissao_pct, type_id, modulo_delivery, modulo_salao, auto_atendimento_habilitado, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -670,7 +670,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id',
+        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, auto_atendimento_habilitado',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -700,6 +700,7 @@ export class RestauranteService {
       taxa_cartao_percentual: parseFloat(data?.taxa_cartao_percentual ?? 0),
       salao_modo: data?.salao_modo ?? 'ambos',
       recibo_impressora_id: data?.recibo_impressora_id ?? null,
+      auto_atendimento_habilitado: data?.auto_atendimento_habilitado ?? false,
     };
   }
 
@@ -723,6 +724,7 @@ export class RestauranteService {
       taxa_cartao_percentual?: number;
       salao_modo?: 'mesas' | 'comandas' | 'ambos';
       recibo_impressora_id?: number | null;
+      auto_atendimento_habilitado?: boolean;
     },
   ) {
     const { data: atual } = await this.supabase.client
@@ -755,6 +757,7 @@ export class RestauranteService {
     if (body.taxa_cartao_percentual !== undefined) update.taxa_cartao_percentual = body.taxa_cartao_percentual;
     if (body.salao_modo !== undefined) update.salao_modo = body.salao_modo;
     if (body.recibo_impressora_id !== undefined) update.recibo_impressora_id = body.recibo_impressora_id;
+    if (body.auto_atendimento_habilitado !== undefined) update.auto_atendimento_habilitado = body.auto_atendimento_habilitado;
 
     const { error } = await this.supabase.client
       .from('restaurants')
@@ -829,7 +832,7 @@ export class RestauranteService {
     const limiteProntos = inicioDoDia.toISOString();
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, garcom_nao_entregou, ordem_fila, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, garcom_nao_entregou, garcom_indo_buscar, ordem_fila, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .or(`status.in.(enviado,preparando),and(status.eq.pronto,pronto_em.gte.${limiteProntos})`)
       .order('ordem_fila', { ascending: true, nullsFirst: false })
@@ -851,6 +854,7 @@ export class RestauranteService {
     return {
       itens: itensValidos.map((i) => {
         const ehSalao = !!(i.orders?.mesa_id || i.orders?.garcom_id || i.orders?.cliente_mesa_nome);
+        const ehAutoAtendimento = i.orders?.aberto_por_nome === 'Auto Atendimento';
         return {
           id: i.id,
           order_id: i.order_id,
@@ -863,13 +867,15 @@ export class RestauranteService {
           pronto_em: i.pronto_em,
           entregue_garcom: i.entregue_garcom ?? false,
           garcom_nao_entregou: i.garcom_nao_entregou ?? false,
+          garcom_indo_buscar: i.garcom_indo_buscar ?? false,
           tipo: ehSalao ? 'salao' : 'delivery',
+          is_auto_atendimento: ehAutoAtendimento,
           mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
           mesa_numero: i.orders?.mesas?.numero ?? null,
           numero_comanda: i.orders?.numero_comanda ?? null,
           cliente: i.orders?.cliente_mesa_nome ?? (i.orders?.customer_id ? customerMap[i.orders.customer_id] ?? null : null),
           garcom: i.orders?.garcons?.nome
-            ?? (i.orders?.is_venda_balcao ? 'Balcão' : (ehSalao ? 'Sem Garçom - Venda Direta' : null)),
+            ?? (ehAutoAtendimento ? 'Auto Atendimento' : i.orders?.is_venda_balcao ? 'Balcão' : (ehSalao ? 'Sem Garçom - Venda Direta' : null)),
           venda_balcao: i.orders?.is_venda_balcao ?? false,
           // Status de entrega do pedido (delivery) — usado no Bar pra alerta de motoboy
           // (em trânsito/entregue/ocorrência) e botão de localizar no mapa.

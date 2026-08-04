@@ -36,7 +36,7 @@ export class SalaoService {
     // clicar/entrar se a comanda for dele (ver garcom-portal, grid de mesas).
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, garcom_id, cliente_mesa_nome, total, garcons(nome), aberto_por_nome, conferencia_solicitada_em')
+      .select('id, mesa_id, garcom_id, cliente_mesa_nome, total, garcons(nome), aberto_por_nome, conferencia_solicitada_em, conferencia_vista_garcom_em')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -162,7 +162,7 @@ export class SalaoService {
   private async garantirComandaDoGarcom(comandaId: number, garcomId: number) {
     const { data } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, mesa_id, garcom_id, numero_comanda, cliente_mesa_nome, cliente_mesa_telefone, tracking_token, desconto_valor, acrescimo_valor, gorjeta_valor, mesas(numero, nome), garcons(nome)')
+      .select('id, status, restaurant_id, mesa_id, garcom_id, numero_comanda, cliente_mesa_nome, cliente_mesa_telefone, tracking_token, desconto_valor, acrescimo_valor, gorjeta_valor, sem_gorjeta, mesas(numero, nome, auto_atendimento_token), garcons(nome)')
       .eq('id', comandaId)
       .eq('canal', 'presencial')
       .maybeSingle();
@@ -509,7 +509,7 @@ export class SalaoService {
   async minhasComandas(garcomId: number) {
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at, conferencia_solicitada_em')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at, conferencia_solicitada_em, conferencia_vista_garcom_em, ultimo_pedido_cliente_em')
       .eq('garcom_id', garcomId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -855,8 +855,13 @@ export class SalaoService {
       throw new ForbiddenException('Item ainda não está em preparo');
     }
 
+    // garcom_indo_buscar NÃO reseta aqui de propósito — fica ligado pra Cozinha/Bar/
+    // Produção trocarem o banner "Garçom vindo buscar" por "Já entregue pelo garçom"
+    // (fecha o ciclo visual), em vez de o banner simplesmente sumir.
     const agora = new Date().toISOString();
-    const update: Record<string, unknown> = { entregue_garcom: true, entregue_em: agora, garcom_nao_entregou: false };
+    const update: Record<string, unknown> = {
+      entregue_garcom: true, entregue_em: agora, garcom_nao_entregou: false,
+    };
     if (item.status === 'preparando') {
       update.status = 'pronto';
       update.pronto_em = item.pronto_em ?? agora;
@@ -866,6 +871,27 @@ export class SalaoService {
     if (error) throw error;
 
     return this.obterComanda(comandaId, garcomId);
+  }
+
+  // Garçom clica "Indo buscar" no alerta de prato pronto — só sinaliza pra Cozinha/Bar/
+  // Produção (banner "Garçom vindo buscar"), não muda status nem confirma entrega.
+  // Exige item já pronto (mesmo estágio do alerta que dispara o botão).
+  async indoBuscarItem(comandaId: number, garcomId: number, itemId: number) {
+    await this.garantirComandaDoGarcom(comandaId, garcomId);
+
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status')
+      .eq('id', itemId)
+      .eq('order_id', comandaId)
+      .maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (item.status !== 'pronto') throw new ForbiddenException('Item ainda não está pronto');
+
+    const { error } = await this.supabase.client.from('order_items').update({ garcom_indo_buscar: true }).eq('id', itemId);
+    if (error) throw error;
+
+    return { ok: true };
   }
 
   // Garçom marca que NÃO conseguiu entregar um item já pronto — volta pra fila de preparo
@@ -889,7 +915,7 @@ export class SalaoService {
 
     const { error } = await this.supabase.client
       .from('order_items')
-      .update({ status: 'enviado', entregue_garcom: false, entregue_em: null, garcom_nao_entregou: true })
+      .update({ status: 'enviado', entregue_garcom: false, entregue_em: null, garcom_nao_entregou: true, garcom_indo_buscar: false })
       .eq('id', itemId);
     if (error) throw error;
 
@@ -1161,6 +1187,19 @@ export class SalaoService {
       .update({ conferencia_solicitada_em: new Date().toISOString() })
       .eq('id', comanda.id)
       .is('conferencia_solicitada_em', null);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Garçom clica "OK, entendi" no alerta de conferência — só limpa a visão DELE
+  // (badge some da mesa/"Minhas comandas"). O caixa continua vendo até imprimir de
+  // verdade (conferencia_solicitada_em intocado, fluxo próprio já existente).
+  async marcarConferenciaVista(comandaId: number, garcomId: number) {
+    await this.garantirComandaDoGarcom(comandaId, garcomId);
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({ conferencia_vista_garcom_em: new Date().toISOString() })
+      .eq('id', comandaId);
     if (error) throw error;
     return { ok: true };
   }

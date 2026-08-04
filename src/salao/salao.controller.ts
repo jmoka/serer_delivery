@@ -112,6 +112,16 @@ export class SalaoController {
     return this.service.confirmarEntregaItem(id, req.garcomId, itemId);
   }
 
+  @Patch('comandas/:id/itens/:itemId/indo-buscar')
+  indoBuscarItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
+    return this.service.indoBuscarItem(id, req.garcomId, itemId);
+  }
+
+  @Patch('comandas/:id/conferencia-vista')
+  marcarConferenciaVista(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.marcarConferenciaVista(id, req.garcomId);
+  }
+
   @Patch('comandas/:id/itens/:itemId/nao-entregar')
   naoEntregarItem(@Param('id', ParseIntPipe) id: number, @Param('itemId', ParseIntPipe) itemId: number, @Req() req: any) {
     return this.service.naoEntregarItem(id, req.garcomId, itemId);
