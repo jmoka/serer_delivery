@@ -12,6 +12,8 @@ import { RestauranteSalaoController } from './restaurante-salao.controller';
 import { MesasService } from './mesas.service';
 import { RestauranteMesasController } from './restaurante-mesas.controller';
 import { MesaAcompanharController } from './mesa-acompanhar.controller';
+import { AutoAtendimentoService } from './auto-atendimento.service';
+import { AutoAtendimentoController } from './auto-atendimento.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AgenteImpressaoModule } from '../agente-impressao/agente-impressao.module';
@@ -26,8 +28,9 @@ import { AgenteImpressaoModule } from '../agente-impressao/agente-impressao.modu
     RestauranteSalaoController,
     RestauranteMesasController,
     MesaAcompanharController,
+    AutoAtendimentoController,
   ],
-  providers: [SalaoService, GarcomAuthService, GarconsService, ImpressorasService, SalaoPdvService, MesasService],
-  exports: [SalaoService, GarconsService, ImpressorasService, SalaoPdvService, MesasService],
+  providers: [SalaoService, GarcomAuthService, GarconsService, ImpressorasService, SalaoPdvService, MesasService, AutoAtendimentoService],
+  exports: [SalaoService, GarconsService, ImpressorasService, SalaoPdvService, MesasService, AutoAtendimentoService],
 })
 export class SalaoModule {}

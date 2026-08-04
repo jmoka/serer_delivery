@@ -20,14 +20,14 @@ export class SalaoPdvService {
   async mesas(restaurantId: number) {
     const { data: mesas, error } = await this.supabase.client
       .from('mesas')
-      .select('id, numero, nome, status')
+      .select('id, numero, nome, status, auto_atendimento_token')
       .eq('restaurant_id', restaurantId)
       .order('numero', { ascending: true });
     if (error) throw error;
 
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, garcom_id, total, status, numero_comanda, cliente_mesa_nome, garcons(nome), aberto_por_nome')
+      .select('id, mesa_id, garcom_id, total, status, numero_comanda, cliente_mesa_nome, garcons(nome), aberto_por_nome, conferencia_solicitada_em')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -166,7 +166,7 @@ export class SalaoPdvService {
   private async buscarComanda(id: number, restaurantId: number) {
     const { data } = await this.supabase.client
       .from('orders')
-      .select('*, mesas(numero, nome), garcons(id, nome)')
+      .select('*, mesas(numero, nome, auto_atendimento_token), garcons(id, nome)')
       .eq('id', id)
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
