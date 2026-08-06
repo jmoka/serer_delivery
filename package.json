@@ -12,6 +12,7 @@
     "redis_stop": "docker stop deliveryhub-redis",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
+    "seed:primeiro-boot": "ts-node scripts/seed-primeiro-boot.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"
