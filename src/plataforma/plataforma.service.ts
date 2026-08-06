@@ -106,6 +106,9 @@ export class PlataformaService {
         ? `${'•'.repeat(8)}${String(cfg.cloudflare_tunnel_token).slice(-6)}`
         : null,
       cloudflare_configurado: !!(cfg.cloudflare_tunnel_token && cfg.cloudflare_domain),
+      // Instalação individual (mono-estabelecimento)
+      modo_individual: cfg.modo_individual ?? false,
+      modo_individual_restaurant_id: cfg.modo_individual_restaurant_id ?? null,
     };
   }
 
@@ -115,6 +118,8 @@ export class PlataformaService {
     pagbank_sandbox?: boolean;
     cloudflare_tunnel_token?: string;
     cloudflare_domain?: string;
+    modo_individual?: boolean;
+    modo_individual_restaurant_id?: number | null;
   }) {
     const { data: atual } = await this.supabase.client
       .from('platform_settings')
@@ -139,6 +144,12 @@ export class PlataformaService {
     }
     if (body.cloudflare_domain !== undefined) {
       novo.cloudflare_domain = body.cloudflare_domain.trim();
+    }
+    if (body.modo_individual !== undefined) {
+      novo.modo_individual = body.modo_individual;
+    }
+    if (body.modo_individual_restaurant_id !== undefined) {
+      novo.modo_individual_restaurant_id = body.modo_individual_restaurant_id;
     }
 
     const { error } = await this.supabase.client
