@@ -15,6 +15,10 @@ export class AtualizarPlanoDto {
   @IsIn(['mensal', 'trimestral', 'anual'])
   periodicidade?: 'mensal' | 'trimestral' | 'anual';
 
+  @IsOptional()
+  @IsIn(['saas', 'local'])
+  tipo?: 'saas' | 'local';
+
   // null explicito remove o limite (vira ilimitado)
   @IsOptional()
   @IsInt()

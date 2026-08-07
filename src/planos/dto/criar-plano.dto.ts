@@ -12,6 +12,11 @@ export class CriarPlanoDto {
   @IsIn(['mensal', 'trimestral', 'anual'])
   periodicidade: 'mensal' | 'trimestral' | 'anual';
 
+  // saas = loja multi-tenant; local = instalação individual licenciada
+  @IsOptional()
+  @IsIn(['saas', 'local'])
+  tipo?: 'saas' | 'local';
+
   @IsOptional()
   @IsInt()
   @Min(1)

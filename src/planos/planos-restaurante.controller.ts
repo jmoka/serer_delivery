@@ -11,7 +11,7 @@ export class PlanosRestauranteController {
 
   @Get('status')
   status(@Req() req: any) {
-    return this.service.sincronizarPeriodo(req.restaurantId);
+    return this.service.sincronizarPeriodo({ restaurantId: req.restaurantId });
   }
 
   @Get()
@@ -28,7 +28,7 @@ export class PlanosRestauranteController {
   // Dono escolhe/troca de plano (upgrade ou downgrade) na própria loja
   @Post('assinar')
   assinar(@Req() req: any, @Body() body: AtribuirAssinaturaDto) {
-    return this.service.atribuirAssinatura(req.restaurantId, body.plano_id);
+    return this.service.atribuirAssinatura({ restaurantId: req.restaurantId }, body.plano_id);
   }
 
   @Get('faturas')

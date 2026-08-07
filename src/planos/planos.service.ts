@@ -7,6 +7,10 @@ import { AtualizarPlanoDto } from './dto/atualizar-plano.dto';
 
 const STATUS_PAGOS = ['PAID', 'COMPLETED', 'AVAILABLE'];
 
+// Titular de uma assinatura: loja do SaaS multi-tenant OU instalação local licenciada.
+// Exatamente um dos dois — nunca os dois, nunca nenhum (mesma regra do CHECK no banco).
+export type Titular = { restaurantId: number } | { instalacaoId: number };
+
 const MESES_POR_PERIODICIDADE: Record<string, number> = {
   mensal: 1,
   trimestral: 3,
@@ -43,12 +47,13 @@ export class PlanosService {
     return { planos: data ?? [] };
   }
 
-  // Planos que o dono pode escolher na tela de upgrade — só os ativos
-  async listarPlanosAtivos() {
+  // Planos que o dono pode escolher na tela de upgrade — só os ativos do tipo certo
+  async listarPlanosAtivos(tipo: 'saas' | 'local' = 'saas') {
     const { data, error } = await this.supabase.client
       .from('planos')
       .select('*')
       .eq('ativo', true)
+      .eq('tipo', tipo)
       .order('valor', { ascending: true });
     if (error) throw error;
     return { planos: data ?? [] };
@@ -72,6 +77,7 @@ export class PlanosService {
         nome: body.nome,
         valor: body.valor,
         periodicidade: body.periodicidade,
+        tipo: body.tipo ?? 'saas',
         limite_produtos: body.limite_produtos ?? null,
         piso_faturamento: body.piso_faturamento ?? null,
         trial_dias: body.trial_dias ?? 0,
@@ -90,6 +96,7 @@ export class PlanosService {
     if (body.nome !== undefined) campos.nome = body.nome;
     if (body.valor !== undefined) campos.valor = body.valor;
     if (body.periodicidade !== undefined) campos.periodicidade = body.periodicidade;
+    if (body.tipo !== undefined) campos.tipo = body.tipo;
     if (body.limite_produtos !== undefined) campos.limite_produtos = body.limite_produtos;
     if (body.piso_faturamento !== undefined) campos.piso_faturamento = body.piso_faturamento;
     if (body.trial_dias !== undefined) campos.trial_dias = body.trial_dias;
@@ -136,18 +143,16 @@ export class PlanosService {
     return { assinaturas: data ?? [] };
   }
 
-  private async buscarAssinaturaRaw(restaurantId: number) {
-    const { data, error } = await this.supabase.client
-      .from('assinaturas')
-      .select('*, planos(*)')
-      .eq('restaurant_id', restaurantId)
-      .maybeSingle();
+  private async buscarAssinaturaRaw(titular: Titular) {
+    let q = this.supabase.client.from('assinaturas').select('*, planos(*)');
+    q = 'restaurantId' in titular ? q.eq('restaurant_id', titular.restaurantId) : q.eq('instalacao_id', titular.instalacaoId);
+    const { data, error } = await q.maybeSingle();
     if (error) throw error;
     return data;
   }
 
   async buscarAssinaturaPorRestaurante(restaurantId: number) {
-    const assinatura = await this.buscarAssinaturaRaw(restaurantId);
+    const assinatura = await this.buscarAssinaturaRaw({ restaurantId });
     if (!assinatura) throw new NotFoundException('Loja não tem assinatura');
 
     const { data: faturas, error } = await this.supabase.client
@@ -160,26 +165,47 @@ export class PlanosService {
     return { assinatura, faturas: faturas ?? [] };
   }
 
-  async atribuirAssinatura(restaurantId: number, planoId: number) {
+  async buscarAssinaturaPorInstalacao(instalacaoId: number) {
+    const assinatura = await this.buscarAssinaturaRaw({ instalacaoId });
+    if (!assinatura) throw new NotFoundException('Instalação não tem assinatura');
+
+    const { data: faturas, error } = await this.supabase.client
+      .from('plano_faturas')
+      .select('*')
+      .eq('instalacao_id', instalacaoId)
+      .order('periodo_inicio', { ascending: false });
+    if (error) throw error;
+
+    return { assinatura, faturas: faturas ?? [] };
+  }
+
+  async atribuirAssinatura(titular: Titular, planoId: number) {
     const plano = await this.buscarPlano(planoId);
 
-    const { data: restaurante, error: restErro } = await this.supabase.client
-      .from('restaurants').select('id').eq('id', restaurantId).maybeSingle();
-    if (restErro) throw restErro;
-    if (!restaurante) throw new NotFoundException('Loja não encontrada');
+    if ('restaurantId' in titular) {
+      const { data: restaurante, error: restErro } = await this.supabase.client
+        .from('restaurants').select('id').eq('id', titular.restaurantId).maybeSingle();
+      if (restErro) throw restErro;
+      if (!restaurante) throw new NotFoundException('Loja não encontrada');
 
-    // Módulos liberados na loja passam a refletir o que o plano inclui
-    const { error: moduloErro } = await this.supabase.client
-      .from('restaurants')
-      .update({
-        modulo_delivery: plano.inclui_delivery,
-        modulo_salao: plano.inclui_salao,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', restaurantId);
-    if (moduloErro) throw moduloErro;
+      // Módulos liberados na loja passam a refletir o que o plano inclui
+      const { error: moduloErro } = await this.supabase.client
+        .from('restaurants')
+        .update({
+          modulo_delivery: plano.inclui_delivery,
+          modulo_salao: plano.inclui_salao,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', titular.restaurantId);
+      if (moduloErro) throw moduloErro;
+    } else {
+      const { data: instalacao, error: instErro } = await this.supabase.client
+        .from('instalacoes_locais').select('id').eq('id', titular.instalacaoId).maybeSingle();
+      if (instErro) throw instErro;
+      if (!instalacao) throw new NotFoundException('Instalação não encontrada');
+    }
 
-    const existente = await this.buscarAssinaturaRaw(restaurantId);
+    const existente = await this.buscarAssinaturaRaw(titular);
     const agora = new Date();
     const temTrial = (plano.trial_dias ?? 0) > 0;
     const trialFim = temTrial ? somarDias(agora, plano.trial_dias) : null;
@@ -204,25 +230,28 @@ export class PlanosService {
       return data;
     }
 
+    const novaAssinatura: Record<string, any> = {
+      plano_id: planoId,
+      status: temTrial ? 'trial' : 'ativa',
+      data_inicio: agora.toISOString(),
+      trial_fim: trialFim?.toISOString() ?? null,
+      ultimo_periodo_faturado_fim: (trialFim ?? agora).toISOString(),
+    };
+    if ('restaurantId' in titular) novaAssinatura.restaurant_id = titular.restaurantId;
+    else novaAssinatura.instalacao_id = titular.instalacaoId;
+
     const { data, error } = await this.supabase.client
       .from('assinaturas')
-      .insert({
-        restaurant_id: restaurantId,
-        plano_id: planoId,
-        status: temTrial ? 'trial' : 'ativa',
-        data_inicio: agora.toISOString(),
-        trial_fim: trialFim?.toISOString() ?? null,
-        ultimo_periodo_faturado_fim: (trialFim ?? agora).toISOString(),
-      })
+      .insert(novaAssinatura)
       .select()
       .single();
     if (error) throw error;
     return data;
   }
 
-  async cancelarAssinatura(restaurantId: number) {
-    const existente = await this.buscarAssinaturaRaw(restaurantId);
-    if (!existente) throw new NotFoundException('Loja não tem assinatura');
+  async cancelarAssinatura(titular: Titular) {
+    const existente = await this.buscarAssinaturaRaw(titular);
+    if (!existente) throw new NotFoundException('Assinatura não encontrada');
 
     const { data, error } = await this.supabase.client
       .from('assinaturas')
@@ -237,7 +266,7 @@ export class PlanosService {
   // ── Limite de produtos ──────────────────────────────────────────
 
   async verificarLimiteProdutos(restaurantId: number) {
-    const assinatura = await this.buscarAssinaturaRaw(restaurantId);
+    const assinatura = await this.buscarAssinaturaRaw({ restaurantId });
     if (!assinatura || assinatura.status === 'cancelada') return; // loja sem plano = sem limite
     const limite = assinatura.planos?.limite_produtos;
     if (limite == null) return; // ilimitado
@@ -269,8 +298,8 @@ export class PlanosService {
   // faturado, e devolve o status atual de bloqueio da loja.
   // forcar=true também gera fatura do período atual mesmo que ainda não tenha
   // fechado (usado pelo botão "Renovar agora"/"Gerar fatura" sob demanda).
-  async sincronizarPeriodo(restaurantId: number, forcar = false) {
-    const assinatura = await this.buscarAssinaturaRaw(restaurantId);
+  async sincronizarPeriodo(titular: Titular, forcar = false) {
+    const assinatura = await this.buscarAssinaturaRaw(titular);
     if (!assinatura || assinatura.status === 'cancelada') {
       return { bloqueado: false, dias_atraso: 0, fatura_pendente_id: null, plano_nome: null, proxima_cobranca: null };
     }
@@ -332,32 +361,42 @@ export class PlanosService {
         if (jaExiste) break;
       }
 
-      const { data: faturamentoRows, error: fatErro } = await this.supabase.client
-        .from('orders')
-        .select('total')
-        .eq('restaurant_id', restaurantId)
-        .eq('status', 'delivered')
-        .gte('created_at', inicioPeriodo.toISOString())
-        .lt('created_at', fimPeriodo.toISOString());
-      if (fatErro) throw fatErro;
+      // Isenção por piso de faturamento só existe pro SaaS — instalação local
+      // não tem pedidos na tabela `orders` central (banco próprio, separado),
+      // então sempre cobra o valor cheio do plano.
+      let isento = false;
+      let valorFatura = plano.valor;
+      if ('restaurantId' in titular) {
+        const { data: faturamentoRows, error: fatErro } = await this.supabase.client
+          .from('orders')
+          .select('total')
+          .eq('restaurant_id', titular.restaurantId)
+          .eq('status', 'delivered')
+          .gte('created_at', inicioPeriodo.toISOString())
+          .lt('created_at', fimPeriodo.toISOString());
+        if (fatErro) throw fatErro;
 
-      const faturamento = (faturamentoRows ?? []).reduce((acc, o: any) => acc + (o.total ?? 0), 0);
+        const faturamento = (faturamentoRows ?? []).reduce((acc, o: any) => acc + (o.total ?? 0), 0);
+        isento = plano.piso_faturamento != null && faturamento < plano.piso_faturamento;
+        valorFatura = isento ? 0 : plano.valor;
+      }
 
-      const isento = plano.piso_faturamento != null && faturamento < plano.piso_faturamento;
-      const valorFatura = isento ? 0 : plano.valor;
       const vencimento = somarDias(fimPeriodo, 5);
+
+      const novaFatura: Record<string, any> = {
+        assinatura_id: assinatura.id,
+        periodo_inicio: inicioPeriodo.toISOString(),
+        periodo_fim: fimPeriodo.toISOString(),
+        valor: valorFatura,
+        status: isento ? 'isenta' : 'pendente',
+        vencimento: vencimento.toISOString(),
+      };
+      if ('restaurantId' in titular) novaFatura.restaurant_id = titular.restaurantId;
+      else novaFatura.instalacao_id = titular.instalacaoId;
 
       const { error: insErro } = await this.supabase.client
         .from('plano_faturas')
-        .insert({
-          assinatura_id: assinatura.id,
-          restaurant_id: restaurantId,
-          periodo_inicio: inicioPeriodo.toISOString(),
-          periodo_fim: fimPeriodo.toISOString(),
-          valor: valorFatura,
-          status: isento ? 'isenta' : 'pendente',
-          vencimento: vencimento.toISOString(),
-        });
+        .insert(novaFatura);
       // Ignora conflito de unicidade (fatura já gerada em corrida concorrente)
       if (insErro && !String(insErro.message).includes('duplicate')) throw insErro;
 
@@ -406,7 +445,7 @@ export class PlanosService {
   }
 
   async detalhePlanoRestaurante(restaurantId: number) {
-    const status = await this.sincronizarPeriodo(restaurantId);
+    const status = await this.sincronizarPeriodo({ restaurantId });
     const { assinatura, faturas } = await this.buscarAssinaturaPorRestaurante(restaurantId);
 
     const { count: produtosAtivos, error } = await this.supabase.client
@@ -426,24 +465,31 @@ export class PlanosService {
   }
 
   async gerarFaturaManual(restaurantId: number) {
-    await this.sincronizarPeriodo(restaurantId, true);
+    await this.sincronizarPeriodo({ restaurantId }, true);
     return this.buscarAssinaturaPorRestaurante(restaurantId);
   }
 
   // Dono renovando/antecipando a cobrança da própria loja pelo painel do plano
   async renovarAgora(restaurantId: number) {
-    return this.sincronizarPeriodo(restaurantId, true);
+    return this.sincronizarPeriodo({ restaurantId }, true);
+  }
+
+  async gerarFaturaManualInstalacao(instalacaoId: number) {
+    await this.sincronizarPeriodo({ instalacaoId }, true);
+    return this.buscarAssinaturaPorInstalacao(instalacaoId);
   }
 
   // ── Faturas (visão admin) ───────────────────────────────────────
 
-  async listarFaturas(filtros: { restaurant_id?: number; status?: string }) {
+  async listarFaturas(filtros: { restaurant_id?: number; status?: string; tipo?: 'saas' | 'local' }) {
     let q = this.supabase.client
       .from('plano_faturas')
-      .select('*, restaurants(name)')
+      .select('*, restaurants(name), instalacoes_locais(nome_cliente, serial)')
       .order('vencimento', { ascending: false });
     if (filtros.restaurant_id) q = q.eq('restaurant_id', filtros.restaurant_id);
     if (filtros.status) q = q.eq('status', filtros.status);
+    if (filtros.tipo === 'saas') q = q.not('restaurant_id', 'is', null);
+    if (filtros.tipo === 'local') q = q.not('instalacao_id', 'is', null);
     const { data, error } = await q;
     if (error) throw error;
     return { faturas: data ?? [] };

@@ -26,12 +26,12 @@ export class PlanosAdminController {
     @Param('restaurantId', ParseIntPipe) restaurantId: number,
     @Body() body: AtribuirAssinaturaDto,
   ) {
-    return this.service.atribuirAssinatura(restaurantId, body.plano_id);
+    return this.service.atribuirAssinatura({ restaurantId }, body.plano_id);
   }
 
   @Patch('assinaturas/:restaurantId/cancelar')
   cancelarAssinatura(@Param('restaurantId', ParseIntPipe) restaurantId: number) {
-    return this.service.cancelarAssinatura(restaurantId);
+    return this.service.cancelarAssinatura({ restaurantId });
   }
 
   @Post('assinaturas/:restaurantId/gerar-fatura')
@@ -40,10 +40,15 @@ export class PlanosAdminController {
   }
 
   @Get('faturas')
-  listarFaturas(@Query('restaurant_id') restaurantId?: string, @Query('status') status?: string) {
+  listarFaturas(
+    @Query('restaurant_id') restaurantId?: string,
+    @Query('status') status?: string,
+    @Query('tipo') tipo?: 'saas' | 'local',
+  ) {
     return this.service.listarFaturas({
       restaurant_id: restaurantId ? parseInt(restaurantId, 10) : undefined,
       status,
+      tipo,
     });
   }
 
