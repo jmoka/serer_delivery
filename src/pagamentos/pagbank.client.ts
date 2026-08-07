@@ -110,4 +110,10 @@ export class PagBankClient {
   async buscarOrdem(pagbankOrderId: string) {
     return this.request<any>('GET', `/orders/${pagbankOrderId}`);
   }
+
+  // Chave pública usada pelo PagBank.js no navegador pra criptografar o cartão
+  // antes de sair do cliente — o número do cartão nunca trafega em texto puro.
+  async buscarChavePublica() {
+    return this.request<{ public_key: string }>('GET', '/public-keys/card');
+  }
 }
