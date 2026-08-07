@@ -96,6 +96,7 @@ export class PagBankClient {
           installments: params.parcelas,
           capture: true,
           card: { encrypted: params.card_encrypted },
+          holder: { name: params.customer.name, tax_id: params.customer.tax_id },
         },
       }],
     };
