@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class UpdateConfigDto {
   @IsOptional()
@@ -14,18 +14,6 @@ export class UpdateConfigDto {
   @IsOptional()
   @IsBoolean()
   pagbank_sandbox?: boolean;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(500)
-  cloudflare_tunnel_token?: string;
-
-  // Domínio: apenas letras, números, pontos e hífens
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  @Matches(/^[a-zA-Z0-9.-]*$/, { message: 'Domínio inválido — use apenas letras, números, pontos e hífens' })
-  cloudflare_domain?: string;
 
   // Instalação individual: restringe o admin a 1 restaurante só (mono-estabelecimento)
   @IsOptional()

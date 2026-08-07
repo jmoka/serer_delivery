@@ -100,12 +100,6 @@ export class PlataformaService {
         ? `${'•'.repeat(8)}${String(cfg.pagbank_platform_token).slice(-4)}`
         : null,
       configurado: !!(cfg.pagbank_platform_token && cfg.pagbank_platform_account_id),
-      // Cloudflare Tunnel
-      cloudflare_domain: cfg.cloudflare_domain ?? '',
-      cloudflare_tunnel_token_masked: cfg.cloudflare_tunnel_token
-        ? `${'•'.repeat(8)}${String(cfg.cloudflare_tunnel_token).slice(-6)}`
-        : null,
-      cloudflare_configurado: !!(cfg.cloudflare_tunnel_token && cfg.cloudflare_domain),
       // Instalação individual (mono-estabelecimento)
       modo_individual: cfg.modo_individual ?? false,
       modo_individual_restaurant_id: cfg.modo_individual_restaurant_id ?? null,
@@ -119,8 +113,6 @@ export class PlataformaService {
     pagbank_platform_token?: string;
     pagbank_platform_account_id?: string;
     pagbank_sandbox?: boolean;
-    cloudflare_tunnel_token?: string;
-    cloudflare_domain?: string;
     modo_individual?: boolean;
     modo_individual_restaurant_id?: number | null;
     comissao_padrao_pct?: number;
@@ -143,12 +135,6 @@ export class PlataformaService {
     }
     if (body.pagbank_sandbox !== undefined) {
       novo.pagbank_sandbox = body.pagbank_sandbox;
-    }
-    if (body.cloudflare_tunnel_token?.trim()) {
-      novo.cloudflare_tunnel_token = body.cloudflare_tunnel_token.trim();
-    }
-    if (body.cloudflare_domain !== undefined) {
-      novo.cloudflare_domain = body.cloudflare_domain.trim();
     }
     if (body.modo_individual !== undefined) {
       novo.modo_individual = body.modo_individual;
