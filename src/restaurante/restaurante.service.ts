@@ -8,6 +8,7 @@ import { GeocodingService } from '../motoboy/geocoding.service';
 import { MotoboyService } from '../motoboy/motoboy.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService } from '../combos/combos.service';
+import { PlanosService } from '../planos/planos.service';
 
 @Injectable()
 export class RestauranteService {
@@ -20,6 +21,7 @@ export class RestauranteService {
     private motoboyService: MotoboyService,
     private estoque: EstoqueService,
     private combosService: CombosService,
+    private planos: PlanosService,
   ) {}
 
   async minhaEmpresa(userId: string) {
@@ -192,6 +194,8 @@ export class RestauranteService {
       impressora_id?: number; quantidade_estoque?: number; preco_custo?: number; quantidade_minima?: number;
     },
   ) {
+    await this.planos.verificarLimiteProdutos(restaurantId);
+
     // Valida se a categoria é do restaurante ou global (restaurant_id IS NULL)
     const { data: cat } = await this.supabase.client
       .from('categories').select('id, restaurant_id').eq('id', body.category_id).maybeSingle();

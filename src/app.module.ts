@@ -19,6 +19,7 @@ import { PerfilModule } from './perfil/perfil.module';
 import { TagsModule } from './tags/tags.module';
 import { SalaoModule } from './salao/salao.module';
 import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.module';
+import { PlanosModule } from './planos/planos.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.modul
     TagsModule,
     SalaoModule,
     AgenteImpressaoModule,
+    PlanosModule,
   ],
 })
 export class AppModule {}

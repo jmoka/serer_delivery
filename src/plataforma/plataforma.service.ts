@@ -109,6 +109,9 @@ export class PlataformaService {
       // Instalação individual (mono-estabelecimento)
       modo_individual: cfg.modo_individual ?? false,
       modo_individual_restaurant_id: cfg.modo_individual_restaurant_id ?? null,
+      // Comissão padrão e tolerância de inadimplência de planos
+      comissao_padrao_pct: cfg.comissao_padrao_pct ?? 5,
+      plano_dias_tolerancia: cfg.plano_dias_tolerancia ?? 3,
     };
   }
 
@@ -120,6 +123,8 @@ export class PlataformaService {
     cloudflare_domain?: string;
     modo_individual?: boolean;
     modo_individual_restaurant_id?: number | null;
+    comissao_padrao_pct?: number;
+    plano_dias_tolerancia?: number;
   }) {
     const { data: atual } = await this.supabase.client
       .from('platform_settings')
@@ -150,6 +155,12 @@ export class PlataformaService {
     }
     if (body.modo_individual_restaurant_id !== undefined) {
       novo.modo_individual_restaurant_id = body.modo_individual_restaurant_id;
+    }
+    if (body.comissao_padrao_pct !== undefined) {
+      novo.comissao_padrao_pct = body.comissao_padrao_pct;
+    }
+    if (body.plano_dias_tolerancia !== undefined) {
+      novo.plano_dias_tolerancia = body.plano_dias_tolerancia;
     }
 
     const { error } = await this.supabase.client

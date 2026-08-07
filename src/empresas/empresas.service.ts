@@ -30,13 +30,15 @@ export class EmpresasService {
     if (error) throw error;
     if (!data) throw new NotFoundException(`Empresa ${id} não encontrada`);
 
-    const { data: metricas } = await this.supabase.client
-      .from('orders')
-      .select('id, total, status')
-      .eq('restaurant_id', id);
+    const [{ data: metricas }, { data: platData }] = await Promise.all([
+      this.supabase.client.from('orders').select('id, total, status').eq('restaurant_id', id),
+      this.supabase.client.from('platform_settings').select('config').eq('id', 1).maybeSingle(),
+    ]);
 
     const entregues = (metricas ?? []).filter((p) => p.status === 'delivered');
     const faturamento = entregues.reduce((acc, p) => acc + (p.total ?? 0), 0);
+    const platCfg = (platData?.config ?? {}) as Record<string, any>;
+    const comissaoPct = data.comissao_pct ?? platCfg.comissao_padrao_pct ?? 5;
 
     return {
       empresa: data,
@@ -44,7 +46,7 @@ export class EmpresasService {
         total_pedidos: metricas?.length ?? 0,
         pedidos_entregues: entregues.length,
         faturamento,
-        comissao_acumulada: parseFloat((faturamento * (data.comissao_pct / 100)).toFixed(2)),
+        comissao_acumulada: parseFloat((faturamento * (comissaoPct / 100)).toFixed(2)),
       },
     };
   }
@@ -65,7 +67,7 @@ export class EmpresasService {
         name: body.name,
         address: body.address ?? null,
         logo_url: body.logo_url ?? null,
-        comissao_pct: body.comissao_pct ?? 5.0,
+        comissao_pct: body.comissao_pct ?? null,
         user_id: body.user_id || null,
         slug: body.slug || this.gerarSlug(body.name),
         modulo_delivery: body.modulo_delivery ?? true,

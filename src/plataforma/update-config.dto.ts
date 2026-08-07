@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
 
 export class UpdateConfigDto {
   @IsOptional()
@@ -35,4 +35,16 @@ export class UpdateConfigDto {
   @IsOptional()
   @IsInt()
   modo_individual_restaurant_id?: number | null;
+
+  // Comissão padrão da plataforma — usada por lojas com comissao_pct = NULL (sem override)
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  comissao_padrao_pct?: number;
+
+  // Dias de tolerância após vencimento de fatura de plano antes de bloquear o painel do dono
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  plano_dias_tolerancia?: number;
 }

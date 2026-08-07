@@ -53,7 +53,7 @@ export class OnboardingController {
         business_hours: body.business_hours ?? {},
         type_id: body.type_id ?? null,
         user_id: userId,
-        comissao_pct: 5.0,
+        // comissao_pct fica NULL — usa o padrão global da plataforma até o admin definir um override
         slug,
       })
       .select()

@@ -53,7 +53,7 @@ export class PagamentosService {
 
     const cfg = (restData?.payment_config ?? {}) as Record<string, any>;
     const platCfg = (platData?.config ?? {}) as Record<string, any>;
-    const comissaoPct: number = restData?.comissao_pct ?? 5;
+    const comissaoPct: number = restData?.comissao_pct ?? platCfg.comissao_padrao_pct ?? 5;
 
     // Platform token: DB tem prioridade sobre .env
     const platformToken =
