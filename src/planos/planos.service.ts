@@ -333,6 +333,7 @@ export class PlanosService {
         .select('id')
         .eq('assinatura_id', assinatura.id)
         .in('status', ['pendente', 'vencida'])
+        .is('plano_id_troca', null)
         .limit(1)
         .maybeSingle();
       if (pendErroCheck) throw pendErroCheck;
@@ -420,6 +421,7 @@ export class PlanosService {
       .select('id, vencimento, status')
       .eq('assinatura_id', assinatura.id)
       .in('status', ['pendente', 'vencida'])
+      .is('plano_id_troca', null)
       .order('vencimento', { ascending: true });
     if (pendErro) throw pendErro;
 
@@ -472,6 +474,43 @@ export class PlanosService {
   // Dono renovando/antecipando a cobrança da própria loja pelo painel do plano
   async renovarAgora(restaurantId: number) {
     return this.sincronizarPeriodo({ restaurantId }, true);
+  }
+
+  // Dono pedindo upgrade/downgrade — não troca na hora, gera uma fatura do
+  // valor cheio do plano novo. A troca só é aplicada quando essa fatura é
+  // confirmada paga (ver aplicarTrocaSeNecessario).
+  async iniciarTrocaPlano(restaurantId: number, planoId: number) {
+    const assinatura = await this.buscarAssinaturaRaw({ restaurantId });
+    if (!assinatura) throw new NotFoundException('Loja não tem assinatura');
+
+    const plano = await this.buscarPlano(planoId);
+    if (plano.tipo !== 'saas') throw new BadRequestException('Plano inválido');
+    if (plano.id === assinatura.plano_id) throw new BadRequestException('Já está nesse plano');
+
+    const agora = new Date();
+    const { data, error } = await this.supabase.client
+      .from('plano_faturas')
+      .insert({
+        assinatura_id: assinatura.id,
+        restaurant_id: restaurantId,
+        plano_id_troca: planoId,
+        periodo_inicio: agora.toISOString(),
+        periodo_fim: agora.toISOString(),
+        valor: plano.valor,
+        status: 'pendente',
+        vencimento: agora.toISOString(),
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  // Chamado depois que uma fatura é confirmada paga (Pix webhook ou cartão na
+  // hora) — se ela tinha plano_id_troca marcado, aplica a troca de plano agora.
+  private async aplicarTrocaSeNecessario(fatura: any) {
+    if (!fatura.plano_id_troca || !fatura.restaurant_id) return;
+    await this.atribuirAssinatura({ restaurantId: fatura.restaurant_id }, fatura.plano_id_troca);
   }
 
   async gerarFaturaManualInstalacao(instalacaoId: number) {
@@ -665,6 +704,8 @@ export class PlanosService {
       throw new BadRequestException(charge?.status === 'DECLINED' ? 'Cartão recusado' : 'Pagamento não aprovado, tente novamente');
     }
 
+    await this.aplicarTrocaSeNecessario(fatura);
+
     return { pago: true, fatura_id: fatura.id };
   }
 
@@ -682,7 +723,7 @@ export class PlanosService {
 
     const { data: fatura } = await this.supabase.client
       .from('plano_faturas')
-      .select('id, status')
+      .select('id, status, restaurant_id, plano_id_troca')
       .eq('pagbank_order_id', pagbankOrderId)
       .maybeSingle();
 
@@ -693,6 +734,8 @@ export class PlanosService {
       .from('plano_faturas')
       .update({ status: 'paga', pago_em: new Date().toISOString(), atualizado_em: new Date().toISOString() })
       .eq('id', fatura.id);
+
+    await this.aplicarTrocaSeNecessario(fatura);
 
     return { processado: true, fatura_id: fatura.id };
   }

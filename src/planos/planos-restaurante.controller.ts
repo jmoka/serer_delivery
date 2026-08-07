@@ -25,10 +25,10 @@ export class PlanosRestauranteController {
     return this.service.listarPlanosAtivos();
   }
 
-  // Dono escolhe/troca de plano (upgrade ou downgrade) na própria loja
+  // Dono pede troca de plano — gera fatura do plano novo, só efetiva ao pagar
   @Post('assinar')
   assinar(@Req() req: any, @Body() body: AtribuirAssinaturaDto) {
-    return this.service.atribuirAssinatura({ restaurantId: req.restaurantId }, body.plano_id);
+    return this.service.iniciarTrocaPlano(req.restaurantId, body.plano_id);
   }
 
   @Get('faturas')
