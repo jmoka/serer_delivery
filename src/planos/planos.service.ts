@@ -43,6 +43,17 @@ export class PlanosService {
     return { planos: data ?? [] };
   }
 
+  // Planos que o dono pode escolher na tela de upgrade — só os ativos
+  async listarPlanosAtivos() {
+    const { data, error } = await this.supabase.client
+      .from('planos')
+      .select('*')
+      .eq('ativo', true)
+      .order('valor', { ascending: true });
+    if (error) throw error;
+    return { planos: data ?? [] };
+  }
+
   async buscarPlano(id: number) {
     const { data, error } = await this.supabase.client
       .from('planos')
@@ -284,6 +295,21 @@ export class PlanosService {
       ? new Date(assinatura.ultimo_periodo_faturado_fim)
       : null;
 
+    // Se já existe fatura pendente/vencida de QUALQUER período, "Renovar agora"
+    // não pode gerar outra — o dono tem que pagar a que já existe primeiro.
+    let temPendenteAberta = false;
+    if (forcar) {
+      const { data: pendenteExistente, error: pendErroCheck } = await this.supabase.client
+        .from('plano_faturas')
+        .select('id')
+        .eq('assinatura_id', assinatura.id)
+        .in('status', ['pendente', 'vencida'])
+        .limit(1)
+        .maybeSingle();
+      if (pendErroCheck) throw pendErroCheck;
+      temPendenteAberta = !!pendenteExistente;
+    }
+
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const fimPeriodo = somarMeses(inicioPeriodo, meses);
@@ -291,6 +317,8 @@ export class PlanosService {
       if (!periodoFechado && !forcar) break;
 
       if (!periodoFechado) {
+        if (temPendenteAberta) break;
+
         // Período em aberto forçado: se já existe fatura pra esse período (de um
         // "Renovar agora" anterior), não gera outra nem avança o ciclo de novo —
         // senão cada clique empurraria a cobrança um mês pra frente.
@@ -449,18 +477,7 @@ export class PlanosService {
 
   // ── Pagamento via PagBank (cobrança direta loja -> plataforma, sem split) ──
 
-  async pagarFatura(restaurantId: number, faturaId: number, customer: { nome: string; email: string; cpf_cnpj: string }) {
-    const fatura = await this.buscarFaturaDoRestaurante(restaurantId, faturaId);
-    if (fatura.status === 'paga') throw new BadRequestException('Fatura já está paga');
-    if (fatura.status === 'isenta' || fatura.status === 'cancelada') {
-      throw new BadRequestException('Esta fatura não pode ser paga');
-    }
-
-    // Reaproveita o QR já gerado pra essa fatura em vez de abrir ordem nova a cada clique
-    if (fatura.pix_code && fatura.pagbank_order_id) {
-      return { pix_code: fatura.pix_code, pix_qr_url: fatura.pix_qr_url, fatura_id: fatura.id };
-    }
-
+  private async clientPlataforma() {
     const { data: platData } = await this.supabase.client
       .from('platform_settings').select('config').eq('id', 1).maybeSingle();
     const platCfg = (platData?.config ?? {}) as Record<string, any>;
@@ -475,9 +492,45 @@ export class PlanosService {
       'http://localhost:3002/pagamentos/webhook';
     const webhookUrl = baseWebhook.replace('/pagamentos/webhook', '/planos/webhook');
 
+    return { client: new PagBankClient(token, sandbox), webhookUrl };
+  }
+
+  // Chave pública pro PagBank.js criptografar o cartão no navegador do dono
+  async buscarChavePublicaCartao() {
+    const { client } = await this.clientPlataforma();
+    try {
+      const resposta = await client.buscarChavePublica();
+      return { public_key: resposta.public_key };
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Falha ao obter chave pública do PagBank');
+    }
+  }
+
+  async pagarFatura(
+    restaurantId: number,
+    faturaId: number,
+    body: { nome: string; email: string; cpf_cnpj: string; metodo?: 'pix' | 'credit_card' | 'debit_card'; card_encrypted?: string; parcelas?: number },
+  ) {
+    const fatura = await this.buscarFaturaDoRestaurante(restaurantId, faturaId);
+    if (fatura.status === 'paga') throw new BadRequestException('Fatura já está paga');
+    if (fatura.status === 'isenta' || fatura.status === 'cancelada') {
+      throw new BadRequestException('Esta fatura não pode ser paga');
+    }
+
+    const metodo = body.metodo ?? 'pix';
+    if (metodo === 'credit_card' || metodo === 'debit_card') {
+      return this.pagarFaturaCartao(fatura, body, metodo);
+    }
+
+    // Reaproveita o QR já gerado pra essa fatura em vez de abrir ordem nova a cada clique
+    if (fatura.pix_code && fatura.pagbank_order_id) {
+      return { pix_code: fatura.pix_code, pix_qr_url: fatura.pix_qr_url, fatura_id: fatura.id };
+    }
+
+    const { client, webhookUrl } = await this.clientPlataforma();
+
     const valorCentavos = Math.round(fatura.valor * 100);
     const refId = `PLANO_${fatura.id}_${Date.now()}`;
-    const client = new PagBankClient(token, sandbox);
 
     let resposta: any;
     try {
@@ -485,9 +538,9 @@ export class PlanosService {
         reference_id: refId,
         valor_centavos: valorCentavos,
         customer: {
-          name: customer.nome,
-          email: customer.email,
-          tax_id: customer.cpf_cnpj.replace(/\D/g, ''),
+          name: body.nome,
+          email: body.email,
+          tax_id: body.cpf_cnpj.replace(/\D/g, ''),
         },
         itens: [{ name: `Assinatura — fatura #${fatura.id}`, quantity: 1, unit_amount: valorCentavos }],
         webhook_url: webhookUrl,
@@ -513,6 +566,60 @@ export class PlanosService {
     if (error) throw error;
 
     return { pix_code: pixCode, pix_qr_url: pixQrUrl, fatura_id: fatura.id };
+  }
+
+  // Cartão confirma na hora (sem espera de webhook) — diferente do Pix
+  private async pagarFaturaCartao(
+    fatura: any,
+    body: { nome: string; email: string; cpf_cnpj: string; card_encrypted?: string; parcelas?: number },
+    metodo: 'credit_card' | 'debit_card',
+  ) {
+    if (!body.card_encrypted) throw new BadRequestException('Dados do cartão ausentes');
+
+    const { client, webhookUrl } = await this.clientPlataforma();
+    const valorCentavos = Math.round(fatura.valor * 100);
+    const refId = `PLANO_${fatura.id}_${Date.now()}`;
+
+    let resposta: any;
+    try {
+      resposta = await client.criarOrdemCartao({
+        reference_id: refId,
+        valor_centavos: valorCentavos,
+        customer: {
+          name: body.nome,
+          email: body.email,
+          tax_id: body.cpf_cnpj.replace(/\D/g, ''),
+        },
+        itens: [{ name: `Assinatura — fatura #${fatura.id}`, quantity: 1, unit_amount: valorCentavos }],
+        card_encrypted: body.card_encrypted,
+        parcelas: metodo === 'credit_card' ? (body.parcelas ?? 1) : 1,
+        tipo: metodo === 'credit_card' ? 'CREDIT_CARD' : 'DEBIT_CARD',
+        webhook_url: webhookUrl,
+      });
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Falha ao processar cartão no PagBank');
+    }
+
+    const charge = resposta?.charges?.[0];
+    const pago = STATUS_PAGOS.includes(charge?.status);
+
+    const { error } = await this.supabase.client
+      .from('plano_faturas')
+      .update({
+        pagbank_order_id: resposta.id,
+        reference_id: refId,
+        status: pago ? 'paga' : fatura.status,
+        pago_em: pago ? new Date().toISOString() : null,
+        atualizado_em: new Date().toISOString(),
+      })
+      .eq('id', fatura.id);
+    if (error) throw error;
+
+    if (!pago) {
+      throw new BadRequestException(charge?.status === 'DECLINED' ? 'Cartão recusado' : 'Pagamento não aprovado, tente novamente');
+    }
+
+    return { pago: true, fatura_id: fatura.id };
   }
 
   async processarWebhook(evento: any) {
