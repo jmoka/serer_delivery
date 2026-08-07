@@ -104,6 +104,11 @@ export class InstalacoesService {
 
   // Chamado periodicamente pela própria instalação local (checkin) — identifica
   // pelo serial (não tem sessão/JWT, o serial é a credencial).
+  //
+  // Serial revogado responde 200 com bloqueado:true (não erro) — assim o
+  // cliente local distingue "revogado de propósito" (bloqueia na hora) de
+  // "central fora do ar/sem internet" (mantém último status, só o erro de
+  // fetch cai nesse segundo caso). Só serial que nunca existiu é erro de verdade.
   async checkin(serial: string) {
     const { data: instalacao, error } = await this.supabase.client
       .from('instalacoes_locais')
@@ -111,8 +116,17 @@ export class InstalacoesService {
       .eq('serial', serial)
       .maybeSingle();
     if (error) throw error;
-    if (!instalacao || !instalacao.ativo) {
-      throw new NotFoundException('Serial inválido ou revogado');
+    if (!instalacao) throw new NotFoundException('Serial inválido');
+
+    if (!instalacao.ativo) {
+      return {
+        bloqueado: true,
+        dias_atraso: 0,
+        fatura_pendente_id: null,
+        plano_nome: null,
+        proxima_cobranca: null,
+        revogado: true,
+      };
     }
 
     await this.supabase.client
