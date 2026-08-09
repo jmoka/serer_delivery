@@ -218,7 +218,9 @@ export class SalaoService {
 
   // Lança uma saída automática no caixa aberto do restaurante — usado pra registrar troco
   // dado e gorjeta paga em dinheiro, sem o caixa precisar lançar isso manualmente depois.
-  async registrarSaidaCaixa(restaurantId: number, descricao: string, valor: number, tipo: 'troco' | 'gorjeta' | 'estorno_pagamento') {
+  // `meio` default 'dinheiro' — troco devolvido via Pix (ver `troco_via_pix`) lança aqui
+  // com meio 'pix' pra não entrar na conta de espécie física (ver `saldoEspecieDisponivel`).
+  async registrarSaidaCaixa(restaurantId: number, descricao: string, valor: number, tipo: 'troco' | 'troco_pix' | 'gorjeta' | 'estorno_pagamento', meio: 'dinheiro' | 'pix' = 'dinheiro') {
     if (!(valor > 0)) return;
     const { data: caixa } = await this.supabase.client
       .from('caixas')
@@ -229,13 +231,13 @@ export class SalaoService {
     if (!caixa) return; // sem caixa aberto: melhor não travar o pagamento por isso
 
     const saidas = (caixa.saidas ?? []) as any[];
-    const nova = { descricao, valor, meio: 'dinheiro', tipo, criado_em: new Date().toISOString() };
+    const nova = { descricao, valor, meio, tipo, criado_em: new Date().toISOString() };
     await this.supabase.client.from('caixas').update({ saidas: [...saidas, nova] }).eq('id', caixa.id);
   }
 
   // Lança uma entrada automática no caixa aberto — usado pra registrar o dinheiro que o
   // cliente entregou de fato numa venda em espécie (não o valor da venda, o valor recebido).
-  async registrarEntradaCaixa(restaurantId: number, descricao: string, valor: number, tipo: string) {
+  async registrarEntradaCaixa(restaurantId: number, descricao: string, valor: number, tipo: string, meio: 'dinheiro' | 'pix' = 'dinheiro') {
     if (!(valor > 0)) return;
     const { data: caixa } = await this.supabase.client
       .from('caixas')
@@ -246,7 +248,7 @@ export class SalaoService {
     if (!caixa) return;
 
     const entradas = (caixa.entradas ?? []) as any[];
-    const nova = { descricao, valor, meio: 'dinheiro', tipo, criado_em: new Date().toISOString() };
+    const nova = { descricao, valor, meio, tipo, criado_em: new Date().toISOString() };
     await this.supabase.client.from('caixas').update({ entradas: [...entradas, nova] }).eq('id', caixa.id);
   }
 
@@ -258,13 +260,16 @@ export class SalaoService {
   async estornarPagamentoEmDinheiro(
     restaurantId: number,
     identificador: string,
-    pagamento: { forma_pagamento: string; valor: number; valor_recebido?: number | null; troco?: number | null },
+    pagamento: { forma_pagamento: string; valor: number; valor_recebido?: number | null; troco?: number | null; troco_via_pix?: boolean | null },
   ) {
     if (pagamento.forma_pagamento !== 'cash') return;
     const valorCreditado = pagamento.valor_recebido ?? pagamento.valor;
     await this.registrarSaidaCaixa(restaurantId, `Estorno pagamento removido - ${identificador}`, valorCreditado, 'estorno_pagamento');
     if ((pagamento.troco ?? 0) > 0) {
-      await this.registrarEntradaCaixa(restaurantId, `Estorno troco (pagamento removido) - ${identificador}`, pagamento.troco as number, 'estorno_troco');
+      // Troco devolvido via Pix nunca saiu da espécie física — o estorno credita de volta
+      // no mesmo meio que saiu, senão "inventa" dinheiro que nunca existiu no caixa físico.
+      const meio = pagamento.troco_via_pix ? 'pix' : 'dinheiro';
+      await this.registrarEntradaCaixa(restaurantId, `Estorno troco (pagamento removido) - ${identificador}`, pagamento.troco as number, 'estorno_troco', meio);
     }
   }
 
@@ -274,7 +279,7 @@ export class SalaoService {
   async estornarPagamentosDaComanda(restaurantId: number, comandaId: number, identificador: string) {
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('forma_pagamento, valor, valor_recebido, troco')
+      .select('forma_pagamento, valor, valor_recebido, troco, troco_via_pix')
       .eq('order_id', comandaId);
     for (const pagamento of (pagamentos ?? []) as any[]) {
       await this.estornarPagamentoEmDinheiro(restaurantId, identificador, pagamento);
@@ -312,6 +317,7 @@ export class SalaoService {
     valorRecebido?: number,
     identificador?: string,
     taxaCartaoValor?: number,
+    trocoViaPix = false,
   ) {
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
@@ -320,11 +326,12 @@ export class SalaoService {
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valor) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
       troco = parseFloat((valorRecebido - valor).toFixed(2));
-      if (troco > 0) {
+      // Troco via Pix não sai da espécie física do caixa — não precisa checar fundo.
+      if (troco > 0 && !trocoViaPix) {
         const saldoEspecie = await this.saldoEspecieDisponivel(restaurantId);
         if (saldoEspecie < troco) {
           throw new BadRequestException(
-            `Caixa não tem troco suficiente em espécie (disponível: R$ ${saldoEspecie.toFixed(2)}, necessário: R$ ${troco.toFixed(2)}). Registre uma Adição no caixa antes de finalizar esse pagamento.`,
+            `Caixa não tem troco suficiente em espécie (disponível: R$ ${saldoEspecie.toFixed(2)}, necessário: R$ ${troco.toFixed(2)}). Registre uma Adição no caixa antes de finalizar esse pagamento, ou marque "Troco via Pix".`,
           );
         }
       }
@@ -335,13 +342,18 @@ export class SalaoService {
       .insert({
         order_id: comandaId, valor, forma_pagamento: formaPagamento, origem,
         valor_recebido: valorRecebido ?? null, troco, taxa_cartao_valor: taxaCartaoValor || null,
+        troco_via_pix: !!(troco && troco > 0 && trocoViaPix),
       });
     if (error) throw error;
 
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       await this.registrarEntradaCaixa(restaurantId, `Venda em dinheiro${identificador ? ` - ${identificador}` : ''}`, valorRecebido, 'venda_dinheiro');
       if (troco && troco > 0) {
-        await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco');
+        if (trocoViaPix) {
+          await this.registrarSaidaCaixa(restaurantId, `Troco via Pix${identificador ? ` - ${identificador}` : ''}`, troco, 'troco_pix', 'pix');
+        } else {
+          await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco');
+        }
       }
     }
 
@@ -350,7 +362,7 @@ export class SalaoService {
 
   // Permissão default true (opt-out) — preserva o comportamento de quem já usava
   // isso sem restrição antes da permissão existir; dono desativa por garçom se quiser.
-  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string, podePagamentoParcial = true, valorRecebido?: number) {
+  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string, podePagamentoParcial = true, valorRecebido?: number, trocoViaPix = false) {
     if (!podePagamentoParcial) throw new ForbiddenException('Você não tem permissão para registrar pagamento parcial');
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
@@ -358,13 +370,13 @@ export class SalaoService {
     }
     const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
     const taxaCartaoValor = await this.calcularTaxaCartao(comanda.restaurant_id, valor, formaPagamento);
-    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador, taxaCartaoValor);
+    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador, taxaCartaoValor, trocoViaPix);
   }
 
   private async buscarPagamentoDoGarcom(comandaId: number, pagamentoId: number) {
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, origem, forma_pagamento, valor, valor_recebido, troco')
+      .select('id, origem, forma_pagamento, valor, valor_recebido, troco, troco_via_pix')
       .eq('id', pagamentoId)
       .eq('order_id', comandaId)
       .maybeSingle();
@@ -634,7 +646,7 @@ export class SalaoService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco')
+      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco, troco_via_pix')
       .eq('order_id', comandaId)
       .order('criado_em', { ascending: true });
     const saldo = await this.saldoDevedor(comandaId);
@@ -1025,8 +1037,9 @@ export class SalaoService {
       total: number;
       formaPagamento: string;
       trocoDado?: number;
+      trocoViaPix?: boolean;
     },
-    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number; valor_recebido?: number | null; troco?: number | null }[],
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number; valor_recebido?: number | null; troco?: number | null; troco_via_pix?: boolean | null }[],
   ): string {
     const fmt = (v?: number) => (v ?? 0).toFixed(2).replace('.', ',');
     const PAGAMENTO_LABEL: Record<string, string> = { pix: 'PIX', credit_card: 'Cartao', debit_card: 'Debito', cash: 'Dinheiro' };
@@ -1064,13 +1077,14 @@ export class SalaoService {
         const taxaP = p.taxa_cartao_valor ? ` + taxa R$ ${fmt(p.taxa_cartao_valor)}` : '';
         linhas.push(`${PAGAMENTO_LABEL[p.forma_pagamento] ?? p.forma_pagamento} (${origemLabel}): R$ ${fmt(p.valor + (p.taxa_cartao_valor ?? 0))}${taxaP}`);
         if (p.forma_pagamento === 'cash' && p.valor_recebido != null) {
-          linhas.push(`  Dinheiro: R$ ${fmt(p.valor_recebido)} - Troco: R$ ${fmt(p.troco ?? 0)}`);
+          const trocoLabel = p.troco_via_pix ? 'Troco (Pix)' : 'Troco';
+          linhas.push(`  Dinheiro: R$ ${fmt(p.valor_recebido)} - ${trocoLabel}: R$ ${fmt(p.troco ?? 0)}`);
         }
       }
     } else {
       linhas.push(`Pagamento: ${PAGAMENTO_LABEL[valores.formaPagamento] ?? valores.formaPagamento}`);
     }
-    if (valores.trocoDado) linhas.push(`Troco: R$ ${fmt(valores.trocoDado)}`);
+    if (valores.trocoDado) linhas.push(`${valores.trocoViaPix ? 'Troco (Pix)' : 'Troco'}: R$ ${fmt(valores.trocoDado)}`);
     linhas.push('--------------------------------');
     linhas.push('Obrigado pela preferencia!');
     return linhas.join('\n');
@@ -1083,8 +1097,8 @@ export class SalaoService {
     restaurantId: number,
     comanda: any,
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
-    valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; total: number; formaPagamento: string; trocoDado?: number },
-    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number; valor_recebido?: number | null; troco?: number | null }[],
+    valores: { subtotal: number; desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; total: number; formaPagamento: string; trocoDado?: number; trocoViaPix?: boolean },
+    pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number; valor_recebido?: number | null; troco?: number | null; troco_via_pix?: boolean | null }[],
   ): Promise<{ via: 'agente' } | { via: 'navegador' }> {
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')

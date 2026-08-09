@@ -1123,6 +1123,18 @@ export class RestauranteService {
       .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
     const especie_calculada = valor_inicial + entradas_especie - saidas_especie;
 
+    // Movimentos em Pix fora da venda em si — hoje só o troco devolvido via Pix (ver
+    // troco_via_pix em comanda_pagamentos/salao-pdv.service.ts), que sai do Pix do
+    // estabelecimento sem passar pela espécie física. Não tem "fundo inicial" em Pix —
+    // pix_calculado é só o líquido desses ajustes (normalmente negativo).
+    const saidas_pix = saidas
+      .filter((s: any) => s.meio === 'pix')
+      .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
+    const entradas_pix = entradas
+      .filter((e: any) => e.meio === 'pix')
+      .reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
+    const pix_calculado = entradas_pix - saidas_pix;
+
     // saldo (contábil) já conta a venda em dinheiro via total_vendas — as entradas/saídas
     // automáticas de venda_dinheiro/troco (ver registrarEntradaCaixa/registrarSaidaCaixa em
     // salao.service.ts) representam a MESMA venda no ledger físico do caixa. Somar
@@ -1155,6 +1167,9 @@ export class RestauranteService {
       especie_calculada,
       saidas_especie,
       entradas_especie,
+      pix_calculado,
+      saidas_pix,
+      entradas_pix,
       cash_recebido,
     };
   }

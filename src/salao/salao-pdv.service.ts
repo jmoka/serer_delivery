@@ -184,7 +184,7 @@ export class SalaoPdvService {
       .order('id', { ascending: true });
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco')
+      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco, troco_via_pix')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
     const saldo = await this.salaoService.saldoDevedor(id);
@@ -192,20 +192,20 @@ export class SalaoPdvService {
   }
 
   // Pagamento parcial registrado pelo caixa — mesma regra do garçom (não fecha sozinho).
-  async registrarPagamentoParcial(id: number, restaurantId: number, valor: number, formaPagamento: string, valorRecebido?: number) {
+  async registrarPagamentoParcial(id: number, restaurantId: number, valor: number, formaPagamento: string, valorRecebido?: number, trocoViaPix = false) {
     const comanda = await this.buscarComanda(id, restaurantId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
     const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
     const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
-    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador, taxaCartaoValor);
+    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador, taxaCartaoValor, trocoViaPix);
   }
 
   private async buscarPagamento(comandaId: number, pagamentoId: number) {
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, forma_pagamento, valor, valor_recebido, troco')
+      .select('id, forma_pagamento, valor, valor_recebido, troco, troco_via_pix')
       .eq('id', pagamentoId)
       .eq('order_id', comandaId)
       .maybeSingle();
@@ -293,6 +293,47 @@ export class SalaoPdvService {
     if (error) throw error;
 
     await this.salaoService.estornarPagamentoEmDinheiro(restaurantId, `Comanda #${comanda.numero_comanda ?? comandaId}`, pagamento);
+
+    return this.comandaDetalhe(comandaId, restaurantId);
+  }
+
+  // Exclusivo do estabelecimento: garçom pode ter fechado a comanda informando troco em
+  // dinheiro sem a opção de Pix, e o caixa quer corrigir depois (ex: caixa físico ficou
+  // sem fundo pra devolver aquele troco). Só mexe na forma do troco — valor/forma do
+  // pagamento em si ficam intactos.
+  async alterarTrocoPix(comandaId: number, restaurantId: number, pagamentoId: number, trocoViaPix: boolean) {
+    const comanda = await this.buscarComanda(comandaId, restaurantId);
+    const pagamento = await this.buscarPagamento(comandaId, pagamentoId);
+    if (pagamento.forma_pagamento !== 'cash' || !((pagamento.troco ?? 0) > 0)) {
+      throw new BadRequestException('Esse pagamento não tem troco em dinheiro pra alterar');
+    }
+    if (!!pagamento.troco_via_pix === trocoViaPix) {
+      return this.comandaDetalhe(comandaId, restaurantId);
+    }
+
+    await this.garantirCaixaAbertoDaComanda(comanda);
+
+    const troco = pagamento.troco as number;
+    if (!trocoViaPix) {
+      const saldoEspecie = await this.salaoService.saldoEspecieDisponivel(restaurantId);
+      if (saldoEspecie < troco) {
+        throw new BadRequestException(
+          `Caixa não tem troco suficiente em espécie (disponível: R$ ${saldoEspecie.toFixed(2)}, necessário: R$ ${troco.toFixed(2)}).`,
+        );
+      }
+    }
+
+    const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
+    // Estorna o troco no meio que ele saiu antes, lança de novo no meio novo.
+    await this.salaoService.registrarEntradaCaixa(
+      restaurantId, `Estorno troco (correção) - ${identificador}`, troco, 'estorno_troco', pagamento.troco_via_pix ? 'pix' : 'dinheiro',
+    );
+    await this.salaoService.registrarSaidaCaixa(
+      restaurantId, `Troco${trocoViaPix ? ' via Pix' : ''} (correção) - ${identificador}`, troco, trocoViaPix ? 'troco_pix' : 'troco', trocoViaPix ? 'pix' : 'dinheiro',
+    );
+
+    const { error } = await this.supabase.client.from('comanda_pagamentos').update({ troco_via_pix: trocoViaPix }).eq('id', pagamentoId);
+    if (error) throw error;
 
     return this.comandaDetalhe(comandaId, restaurantId);
   }
@@ -794,7 +835,7 @@ export class SalaoPdvService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco, troco_via_pix')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
 
@@ -869,7 +910,7 @@ export class SalaoPdvService {
   // do caixa do estabelecimento — não cobra na comanda nem entra no gorjeta_valor (que
   // alimenta o relatório de repasse do garçom, senão contaria a mesma gorjeta 2x: o
   // garçom já ficou com o dinheiro na mão, não tem o que repassar).
-  async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number, gorjetaDireta?: boolean) {
+  async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number, gorjetaDireta?: boolean, trocoViaPix = false) {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
     const comanda = await this.buscarComanda(id, restaurantId);
@@ -899,11 +940,12 @@ export class SalaoPdvService {
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valorACobrar) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
       troco = parseFloat((valorRecebido - valorACobrar).toFixed(2));
-      if (troco > 0) {
+      // Troco via Pix não sai da espécie física do caixa — não precisa checar fundo.
+      if (troco > 0 && !trocoViaPix) {
         const saldoEspecie = await this.salaoService.saldoEspecieDisponivel(restaurantId);
         if (saldoEspecie < troco) {
           throw new BadRequestException(
-            `Caixa não tem troco suficiente em espécie (disponível: R$ ${saldoEspecie.toFixed(2)}, necessário: R$ ${troco.toFixed(2)}). Registre uma Adição no caixa antes de finalizar esse pagamento.`,
+            `Caixa não tem troco suficiente em espécie (disponível: R$ ${saldoEspecie.toFixed(2)}, necessário: R$ ${troco.toFixed(2)}). Registre uma Adição no caixa antes de finalizar esse pagamento, ou marque "Troco via Pix".`,
           );
         }
       }
@@ -912,7 +954,13 @@ export class SalaoPdvService {
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
       await this.salaoService.registrarEntradaCaixa(restaurantId, `Venda em dinheiro - ${identificador}`, valorRecebido, 'venda_dinheiro');
-      if (troco && troco > 0) await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
+      if (troco && troco > 0) {
+        if (trocoViaPix) {
+          await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco via Pix - ${identificador}`, troco, 'troco_pix', 'pix');
+        } else {
+          await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
+        }
+      }
     }
 
     // Se a comanda ficou pendente (fiado) num caixa que já fechou, realoca pro caixa
@@ -962,7 +1010,7 @@ export class SalaoPdvService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco, troco_via_pix')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
 
@@ -987,6 +1035,7 @@ export class SalaoPdvService {
         total: totalGeralRecibo,
         formaPagamento,
         trocoDado: troco && troco > 0 ? troco : 0,
+        trocoViaPix,
       },
       pagamentos ?? [],
     );
@@ -994,7 +1043,7 @@ export class SalaoPdvService {
     return {
       ok: true, total: parseFloat(totalFinal.toFixed(2)), total_geral: totalGeralRecibo,
       taxa_cartao_valor: taxaCartaoTotalRecibo, valor_cobrado: valorACobrar,
-      troco, recibo, pagamentos: pagamentos ?? [],
+      troco, troco_via_pix: troco && troco > 0 ? trocoViaPix : false, recibo, pagamentos: pagamentos ?? [],
     };
   }
 
@@ -1010,7 +1059,7 @@ export class SalaoPdvService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco')
+      .select('valor, forma_pagamento, origem, taxa_cartao_valor, valor_recebido, troco, troco_via_pix')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
 
