@@ -517,8 +517,17 @@ export class SalaoPdvService {
   // garçom, que só mexe em item ainda não enviado (ver salao.service.ts).
   async editarItem(comandaId: number, restaurantId: number, itemId: number, body: { quantity?: number; observacao?: string }) {
     const comanda = await this.buscarComanda(comandaId, restaurantId);
-    if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
+    // Venda balcão só envia os itens pra cozinha/bar depois de paga (ver `adicionarItens`/
+    // `pagar`) — quando o item chega na Produção a comanda já está com status 'paga', então
+    // precisa liberar edição de observação mesmo paga (só pra venda balcão; quantidade
+    // continua travada, já foi cobrada).
+    const podeEditar = ['aberta', 'fechada_garcom'].includes(comanda.status)
+      || (comanda.is_venda_balcao && comanda.status === 'paga');
+    if (!podeEditar) {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
+    }
+    if (comanda.status === 'paga' && body.quantity !== undefined) {
+      throw new BadRequestException('Não é possível alterar quantidade de uma venda já finalizada');
     }
 
     const { data: item } = await this.supabase.client
@@ -539,9 +548,11 @@ export class SalaoPdvService {
       await this.estoque.ajustarPorDelta(item.product_id, item.quantity, body.quantity);
     }
 
-    const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
-    const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
-    await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', comandaId);
+    if (comanda.status !== 'paga') {
+      const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
+      const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+      await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', comandaId);
+    }
 
     return this.comandaDetalhe(comandaId, restaurantId);
   }
