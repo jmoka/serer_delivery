@@ -60,7 +60,19 @@ export class CategoriasService {
     return { tipos: data ?? [] };
   }
 
+  private async garantirNomeTipoUnico(name: string, ignorarId?: number) {
+    let query = this.supabase.client.from('establishment_types').select('id').ilike('name', name.trim());
+    if (ignorarId) query = query.neq('id', ignorarId);
+    const { data, error } = await query;
+    if (error) throw error;
+    if (data && data.length > 0) {
+      throw new ConflictException(`Já existe um tipo de estabelecimento chamado "${name.trim()}"`);
+    }
+  }
+
   async criarTipoEstabelecimento(body: { name: string; icon_name?: string }) {
+    await this.garantirNomeTipoUnico(body.name);
+
     const { data, error } = await this.supabase.client
       .from('establishment_types')
       .insert({ name: body.name, icon_name: body.icon_name ?? 'Store' })
@@ -72,6 +84,8 @@ export class CategoriasService {
   }
 
   async atualizarTipoEstabelecimento(id: number, body: { name?: string; icon_name?: string }) {
+    if (body.name !== undefined) await this.garantirNomeTipoUnico(body.name, id);
+
     const campos: Record<string, any> = {};
     if (body.name !== undefined) campos.name = body.name;
     if (body.icon_name !== undefined) campos.icon_name = body.icon_name;

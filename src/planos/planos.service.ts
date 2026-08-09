@@ -70,7 +70,19 @@ export class PlanosService {
     return data;
   }
 
+  private async garantirNomePlanoUnico(nome: string, ignorarId?: number) {
+    let query = this.supabase.client.from('planos').select('id').ilike('nome', nome.trim());
+    if (ignorarId) query = query.neq('id', ignorarId);
+    const { data, error } = await query;
+    if (error) throw error;
+    if (data && data.length > 0) {
+      throw new ConflictException(`Já existe um plano chamado "${nome.trim()}"`);
+    }
+  }
+
   async criarPlano(body: CriarPlanoDto) {
+    await this.garantirNomePlanoUnico(body.nome);
+
     const { data, error } = await this.supabase.client
       .from('planos')
       .insert({
@@ -92,6 +104,8 @@ export class PlanosService {
   }
 
   async atualizarPlano(id: number, body: AtualizarPlanoDto) {
+    if (body.nome !== undefined) await this.garantirNomePlanoUnico(body.nome, id);
+
     const campos: Record<string, any> = { updated_at: new Date().toISOString() };
     if (body.nome !== undefined) campos.nome = body.nome;
     if (body.valor !== undefined) campos.valor = body.valor;

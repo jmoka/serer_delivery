@@ -1,9 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 
 @Injectable()
 export class TagsService {
   constructor(private supabase: SupabaseService) {}
+
+  private async garantirNomeTagUnico(name: string, ignorarId?: number) {
+    let query = this.supabase.client.from('tags_catalogo').select('id').ilike('name', name.trim());
+    if (ignorarId) query = query.neq('id', ignorarId);
+    const { data, error } = await query;
+    if (error) throw error;
+    if (data && data.length > 0) {
+      throw new ConflictException(`Já existe uma tag chamada "${name.trim()}"`);
+    }
+  }
 
   async listar(apenasAtivas = true) {
     let q = this.supabase.client.from('tags_catalogo').select('*').order('ordem').order('name');
@@ -14,6 +24,8 @@ export class TagsService {
   }
 
   async criar(body: { name: string; slug: string; descricao?: string; is_auto?: boolean; ordem?: number }) {
+    await this.garantirNomeTagUnico(body.name);
+
     const { data, error } = await this.supabase.client
       .from('tags_catalogo')
       .insert({
@@ -31,6 +43,8 @@ export class TagsService {
   }
 
   async atualizar(id: number, body: Partial<{ name: string; descricao: string; ordem: number; ativo: boolean }>) {
+    if (body.name !== undefined) await this.garantirNomeTagUnico(body.name, id);
+
     const campos: any = {};
     if (body.name !== undefined) campos.name = body.name;
     if (body.descricao !== undefined) campos.descricao = body.descricao;
