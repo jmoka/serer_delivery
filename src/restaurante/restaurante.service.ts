@@ -674,7 +674,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, auto_atendimento_habilitado',
+        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -704,6 +704,7 @@ export class RestauranteService {
       taxa_cartao_percentual: parseFloat(data?.taxa_cartao_percentual ?? 0),
       salao_modo: data?.salao_modo ?? 'ambos',
       recibo_impressora_id: data?.recibo_impressora_id ?? null,
+      sangria_acrescimo_impressora_id: data?.sangria_acrescimo_impressora_id ?? null,
       auto_atendimento_habilitado: data?.auto_atendimento_habilitado ?? false,
     };
   }
@@ -728,6 +729,7 @@ export class RestauranteService {
       taxa_cartao_percentual?: number;
       salao_modo?: 'mesas' | 'comandas' | 'ambos';
       recibo_impressora_id?: number | null;
+      sangria_acrescimo_impressora_id?: number | null;
       auto_atendimento_habilitado?: boolean;
     },
   ) {
@@ -761,6 +763,7 @@ export class RestauranteService {
     if (body.taxa_cartao_percentual !== undefined) update.taxa_cartao_percentual = body.taxa_cartao_percentual;
     if (body.salao_modo !== undefined) update.salao_modo = body.salao_modo;
     if (body.recibo_impressora_id !== undefined) update.recibo_impressora_id = body.recibo_impressora_id;
+    if (body.sangria_acrescimo_impressora_id !== undefined) update.sangria_acrescimo_impressora_id = body.sangria_acrescimo_impressora_id;
     if (body.auto_atendimento_habilitado !== undefined) update.auto_atendimento_habilitado = body.auto_atendimento_habilitado;
 
     const { error } = await this.supabase.client
@@ -1448,12 +1451,59 @@ export class RestauranteService {
     return { caixa, pedidos: pedidos ?? [] };
   }
 
+  // Recibo de sangria/adição — mesmo mecanismo do recibo de venda (ver
+  // SalaoService.imprimirReciboSeConfigurado): impressora dedicada configurada em
+  // Config, senão devolve pro front cair no fallback de impressão do navegador.
+  private async imprimirReciboMovimento(
+    restaurantId: number,
+    tipo: 'Sangria' | 'Adição',
+    movimento: { descricao: string; valor: number; meio?: string },
+    nomeOperador?: string | null,
+  ): Promise<{ via: 'agente' } | { via: 'navegador' }> {
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('name, sangria_acrescimo_impressora_id')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    const impressoraId = (restaurante as any)?.sangria_acrescimo_impressora_id;
+    if (!impressoraId) return { via: 'navegador' };
+
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, nome_sistema')
+      .eq('id', impressoraId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!impressora?.nome_sistema) return { via: 'navegador' };
+
+    const fmt = (v: number) => v.toFixed(2).replace('.', ',');
+    const MEIO_LABEL: Record<string, string> = { dinheiro: 'Dinheiro', pix: 'PIX', transferencia: 'Transferência', cartao: 'Cartão' };
+    const conteudo = [
+      restaurante?.name ?? 'RESTAURANTE',
+      `RECIBO DE ${tipo.toUpperCase()}`,
+      new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      '--------------------------------',
+      `Descrição: ${movimento.descricao}`,
+      `Meio: ${MEIO_LABEL[movimento.meio ?? 'dinheiro'] ?? movimento.meio}`,
+      nomeOperador ? `Operador: ${nomeOperador}` : null,
+      '--------------------------------',
+      `Valor: R$ ${fmt(movimento.valor)}`,
+    ].filter((l): l is string => l !== null).join('\n');
+
+    await this.supabase.client.from('impressao_jobs').insert({
+      restaurant_id: restaurantId,
+      impressora_id: impressoraId,
+      conteudo,
+    });
+    return { via: 'agente' };
+  }
+
   async adicionarSaida(restaurantId: number, body: { descricao: string; valor: number; meio?: string }) {
     if (!body.valor || body.valor <= 0) throw new BadRequestException('Valor da saída deve ser maior que zero');
     if (!body.descricao?.trim()) throw new BadRequestException('Descrição da saída é obrigatória');
 
     const { data: caixa } = await this.supabase.client
-      .from('caixas').select('id, valor_inicial, entradas, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+      .from('caixas').select('id, nome_operador, valor_inicial, entradas, saidas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
     if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
 
     // Sangria em espécie não pode passar do que tem fisicamente no caixa — sangria em
@@ -1475,7 +1525,9 @@ export class RestauranteService {
     if (body.meio) nova.meio = body.meio;
     const { error } = await this.supabase.client.from('caixas').update({ saidas: [...saidas, nova] }).eq('id', caixa.id);
     if (error) throw error;
-    return { ...nova, caixa_id: caixa.id };
+
+    const recibo = await this.imprimirReciboMovimento(restaurantId, 'Sangria', nova, caixa.nome_operador);
+    return { ...nova, caixa_id: caixa.id, recibo };
   }
 
   // Remove uma saída específica do caixa (usado pro estorno automático de repasse de
@@ -1513,7 +1565,7 @@ export class RestauranteService {
     if (!body.descricao?.trim()) throw new BadRequestException('Descrição da entrada é obrigatória');
 
     const { data: caixa } = await this.supabase.client
-      .from('caixas').select('id, entradas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+      .from('caixas').select('id, nome_operador, entradas').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
     if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
 
     const entradas = (caixa.entradas ?? []) as any[];
@@ -1521,7 +1573,9 @@ export class RestauranteService {
     if (body.meio) nova.meio = body.meio;
     const { error } = await this.supabase.client.from('caixas').update({ entradas: [...entradas, nova] }).eq('id', caixa.id);
     if (error) throw error;
-    return nova;
+
+    const recibo = await this.imprimirReciboMovimento(restaurantId, 'Adição', nova, caixa.nome_operador);
+    return { ...nova, recibo };
   }
 
   async relatorioFretes(restaurantId: number, periodo: 'hoje' | 'semana' | 'mes' | 'ano' | 'tudo') {
