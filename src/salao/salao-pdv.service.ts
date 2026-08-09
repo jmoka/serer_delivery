@@ -503,7 +503,11 @@ export class SalaoPdvService {
     const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', id);
 
-    await this.salaoService.enviarItensComoRestaurante(id, comanda);
+    // Venda balcão só manda os itens pra cozinha/bar quando a venda é finalizada (ver
+    // `pagar`) — o cliente pode ficar montando o carrinho sem disparar preparo cedo demais.
+    if (!comanda.is_venda_balcao) {
+      await this.salaoService.enviarItensComoRestaurante(id, comanda);
+    }
     return this.comandaDetalhe(id, restaurantId);
   }
 
@@ -935,6 +939,12 @@ export class SalaoPdvService {
 
     if (comanda.mesa_id) {
       await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);
+    }
+
+    // Venda balcão segurou o envio dos itens até aqui (ver `adicionarItens`) — manda tudo
+    // pra cozinha/bar de uma vez agora que a venda foi finalizada.
+    if (comanda.is_venda_balcao) {
+      await this.salaoService.enviarItensComoRestaurante(id, comanda);
     }
 
     await this.lancarComissoes(comanda, subtotal, totalFinal);
