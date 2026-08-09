@@ -1,9 +1,25 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 
 @Injectable()
 export class CategoriasService {
   constructor(private supabase: SupabaseService) {}
+
+  private async garantirNomeGlobalUnico(name: string, ignorarId?: number) {
+    let query = this.supabase.client
+      .from('categories')
+      .select('id')
+      .is('restaurant_id', null)
+      .ilike('name', name.trim());
+
+    if (ignorarId) query = query.neq('id', ignorarId);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    if (data && data.length > 0) {
+      throw new ConflictException(`Já existe uma categoria chamada "${name.trim()}"`);
+    }
+  }
 
   async listarGlobais() {
     const { data, error } = await this.supabase.client
@@ -112,6 +128,8 @@ export class CategoriasService {
   }
 
   async criarGlobal(body: { name: string; icon_name: string; color_primary: string; color_secondary: string }) {
+    await this.garantirNomeGlobalUnico(body.name);
+
     const { data, error } = await this.supabase.client
       .from('categories')
       .insert({
@@ -140,6 +158,8 @@ export class CategoriasService {
   }
 
   async atualizarGlobal(id: number, body: { name?: string; icon_name?: string; color_primary?: string; color_secondary?: string }) {
+    if (body.name !== undefined) await this.garantirNomeGlobalUnico(body.name, id);
+
     const campos: Record<string, any> = { updated_at: new Date().toISOString() };
     if (body.name !== undefined) campos.name = body.name;
     if (body.icon_name !== undefined) campos.icon_name = body.icon_name;
