@@ -9,6 +9,9 @@ import { MotoboyService } from '../motoboy/motoboy.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService } from '../combos/combos.service';
 import { PlanosService } from '../planos/planos.service';
+import { RedisService } from '../redis/redis.service';
+
+const TTL_MINHA_EMPRESA = 15;
 
 @Injectable()
 export class RestauranteService {
@@ -22,9 +25,24 @@ export class RestauranteService {
     private estoque: EstoqueService,
     private combosService: CombosService,
     private planos: PlanosService,
+    private redis: RedisService,
   ) {}
 
+  // Cacheada porque o header do painel (menu lateral) monta 3 hooks que bateriam
+  // nessa rota em paralelo — cache-aside curto evita repetir as 3 queries a cada
+  // navegação entre páginas de /restaurante/*. Mesmo padrão do catálogo público
+  // (ver CatalogoController): sem invalidação manual, defasagem curta é aceitável.
   async minhaEmpresa(userId: string) {
+    const cacheKey = `restaurante:minha-empresa:${userId}`;
+    const cached = await this.redis.getJSON<any>(cacheKey);
+    if (cached) return cached;
+
+    const resultado = await this.buscarMinhaEmpresa(userId);
+    await this.redis.setJSON(cacheKey, resultado, TTL_MINHA_EMPRESA);
+    return resultado;
+  }
+
+  private async buscarMinhaEmpresa(userId: string) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
       .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, payment_config, comissao_pct, type_id, modulo_delivery, modulo_salao, auto_atendimento_habilitado, created_at')
