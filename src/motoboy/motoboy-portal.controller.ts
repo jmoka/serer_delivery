@@ -12,6 +12,11 @@ export class MotoboyPortalController {
     return this.service.infoMotoboy(req.motoboyId);
   }
 
+  @Post('solicitar-revisao')
+  solicitarRevisao(@Req() req: any) {
+    return this.service.solicitarRevisaoPlataforma(req.motoboyId);
+  }
+
   @Get('ganhos')
   ganhos(@Req() req: any) {
     return this.service.ganhosResumo(req.motoboyId);

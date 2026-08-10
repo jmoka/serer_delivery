@@ -35,4 +35,10 @@ export class UpdateConfigDto {
   @IsInt()
   @Min(0)
   plano_dias_tolerancia?: number;
+
+  // Quantas vezes um motoboy recusado pode pedir revisão do cadastro antes de travar
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  motoboy_limite_revisoes?: number;
 }

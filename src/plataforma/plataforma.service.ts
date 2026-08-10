@@ -106,6 +106,8 @@ export class PlataformaService {
       // Comissão padrão e tolerância de inadimplência de planos
       comissao_padrao_pct: cfg.comissao_padrao_pct ?? 5,
       plano_dias_tolerancia: cfg.plano_dias_tolerancia ?? 3,
+      // Quantas vezes um motoboy recusado pode pedir revisão do cadastro
+      motoboy_limite_revisoes: cfg.motoboy_limite_revisoes ?? 2,
     };
   }
 
@@ -117,6 +119,7 @@ export class PlataformaService {
     modo_individual_restaurant_id?: number | null;
     comissao_padrao_pct?: number;
     plano_dias_tolerancia?: number;
+    motoboy_limite_revisoes?: number;
   }) {
     const { data: atual } = await this.supabase.client
       .from('platform_settings')
@@ -147,6 +150,9 @@ export class PlataformaService {
     }
     if (body.plano_dias_tolerancia !== undefined) {
       novo.plano_dias_tolerancia = body.plano_dias_tolerancia;
+    }
+    if (body.motoboy_limite_revisoes !== undefined) {
+      novo.motoboy_limite_revisoes = body.motoboy_limite_revisoes;
     }
 
     const { error } = await this.supabase.client

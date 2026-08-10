@@ -18,6 +18,19 @@ export class MotoboyService {
     private salaoService: SalaoService,
   ) {}
 
+  // Antes de ver/solicitar vaga em qualquer estabelecimento, a plataforma
+  // (admin) precisa ter revisado e aprovado o cadastro do motoboy.
+  private async exigirAprovacaoPlataforma(motoboyId: number) {
+    const { data } = await this.supabase.client
+      .from('motoboys')
+      .select('status_plataforma')
+      .eq('id', motoboyId)
+      .maybeSingle();
+    if (data?.status_plataforma !== 'aprovado') {
+      throw new ForbiddenException('Seu cadastro ainda está em análise pela plataforma. Aguarde a aprovação pra ver os estabelecimentos.');
+    }
+  }
+
   private async exigirAfiliacaoAceita(motoboyId: number, restaurantId: number) {
     const { data } = await this.supabase.client
       .from('motoboy_estabelecimentos')
@@ -220,6 +233,8 @@ export class MotoboyService {
   // ── Lado motoboy: buscar/solicitar afiliação ───────────────────────
 
   async buscarEstabelecimentos(motoboyId: number, busca?: string) {
+    await this.exigirAprovacaoPlataforma(motoboyId);
+
     let query = this.supabase.client
       .from('restaurants')
       .select('id, name, address, logo_url')
@@ -246,6 +261,8 @@ export class MotoboyService {
   }
 
   async solicitarAfiliacao(motoboyId: number, restaurantId: number) {
+    await this.exigirAprovacaoPlataforma(motoboyId);
+
     const { data: existente } = await this.supabase.client
       .from('motoboy_estabelecimentos')
       .select('id, status')
@@ -703,10 +720,18 @@ export class MotoboyService {
     return { url: publicUrl };
   }
 
+  private async limiteRevisoesPlataforma(): Promise<number> {
+    const { data } = await this.supabase.client
+      .from('platform_settings').select('config').eq('id', 1).maybeSingle();
+    return (data?.config as Record<string, any>)?.motoboy_limite_revisoes ?? 2;
+  }
+
   async infoMotoboy(motoboyId: number) {
     const { data: mb } = await this.supabase.client
       .from('motoboys')
-      .select('id, name, phone, email, foto_perfil_url, precisa_completar_cadastro')
+      .select(
+        'id, name, phone, email, foto_perfil_url, precisa_completar_cadastro, status_plataforma, motivo_recusa_plataforma, revisoes_solicitadas',
+      )
       .eq('id', motoboyId)
       .maybeSingle();
     if (!mb) return null;
@@ -717,7 +742,40 @@ export class MotoboyService {
       ...mb,
       foto_perfil_url: await this.signedUrl(mb.foto_perfil_url),
       estabelecimentos: afiliacoes.filter((a: any) => a.status === 'aceito').map((a: any) => a.restaurant),
+      limite_revisoes_plataforma: await this.limiteRevisoesPlataforma(),
     };
+  }
+
+  // Motoboy recusado pede reavaliação — reabre como pendente. Limitado (config
+  // do admin) pra não virar loop infinito de recusa/revisão.
+  async solicitarRevisaoPlataforma(motoboyId: number) {
+    const { data: mb } = await this.supabase.client
+      .from('motoboys')
+      .select('status_plataforma, revisoes_solicitadas')
+      .eq('id', motoboyId)
+      .maybeSingle();
+    if (!mb) throw new NotFoundException('Motoboy não encontrado');
+    if (mb.status_plataforma !== 'recusado') {
+      throw new BadRequestException('Só é possível pedir revisão de um cadastro recusado');
+    }
+
+    const limite = await this.limiteRevisoesPlataforma();
+    if (mb.revisoes_solicitadas >= limite) {
+      throw new ForbiddenException('Limite de pedidos de revisão atingido. Entre em contato com o suporte.');
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('motoboys')
+      .update({
+        status_plataforma: 'pendente',
+        motivo_recusa_plataforma: null,
+        revisoes_solicitadas: mb.revisoes_solicitadas + 1,
+      })
+      .eq('id', motoboyId)
+      .select('id, status_plataforma, revisoes_solicitadas')
+      .maybeSingle();
+    if (error) throw error;
+    return data;
   }
 
   // ── Ganhos / comissões ───────────────────────────────────────────────
@@ -759,5 +817,68 @@ export class MotoboyService {
     const { data, error } = await query;
     if (error) throw error;
     return { historico: data ?? [] };
+  }
+
+  // ── Admin: aprovação de cadastro de motoboy pela plataforma ─────────
+
+  async listarMotoboysAdmin(status?: string) {
+    let query = this.supabase.client
+      .from('motoboys')
+      .select('id, name, phone, email, foto_perfil_url, status_plataforma, motivo_recusa_plataforma, aprovado_em, created_at')
+      .order('created_at', { ascending: false });
+    if (status) query = query.eq('status_plataforma', status);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return {
+      motoboys: await Promise.all(
+        (data ?? []).map(async (m: any) => ({ ...m, foto_perfil_url: await this.signedUrl(m.foto_perfil_url) })),
+      ),
+    };
+  }
+
+  async detalheMotoboyAdmin(motoboyId: number) {
+    const { data: mb, error } = await this.supabase.client
+      .from('motoboys')
+      .select(
+        'id, name, phone, email, foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url, status_plataforma, motivo_recusa_plataforma, aprovado_em, created_at, revisoes_solicitadas',
+      )
+      .eq('id', motoboyId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!mb) throw new NotFoundException('Motoboy não encontrado');
+
+    return {
+      ...mb,
+      foto_perfil_url: await this.signedUrl(mb.foto_perfil_url),
+      documento_frente_url: await this.signedUrl(mb.documento_frente_url),
+      documento_verso_url: await this.signedUrl(mb.documento_verso_url),
+      comprovante_endereco_url: await this.signedUrl(mb.comprovante_endereco_url),
+    };
+  }
+
+  async aprovarMotoboyAdmin(motoboyId: number) {
+    const { data, error } = await this.supabase.client
+      .from('motoboys')
+      .update({ status_plataforma: 'aprovado', motivo_recusa_plataforma: null, aprovado_em: new Date().toISOString() })
+      .eq('id', motoboyId)
+      .select('id, name, status_plataforma')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Motoboy não encontrado');
+    return data;
+  }
+
+  async recusarMotoboyAdmin(motoboyId: number, motivo?: string) {
+    const { data, error } = await this.supabase.client
+      .from('motoboys')
+      .update({ status_plataforma: 'recusado', motivo_recusa_plataforma: motivo ?? null, aprovado_em: null })
+      .eq('id', motoboyId)
+      .select('id, name, status_plataforma')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Motoboy não encontrado');
+    return data;
   }
 }

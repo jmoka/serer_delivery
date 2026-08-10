@@ -7,6 +7,7 @@ import { RestauranteMotoboysController } from './restaurante-motoboys.controller
 import { MotoboyPortalController } from './motoboy-portal.controller';
 import { MotoboyAuthController } from './motoboy-auth.controller';
 import { MotoboyEstabelecimentosController } from './motoboy-estabelecimentos.controller';
+import { MotoboyAdminController } from './motoboy-admin.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { SalaoModule } from '../salao/salao.module';
@@ -18,6 +19,7 @@ import { SalaoModule } from '../salao/salao.module';
     MotoboyPortalController,
     MotoboyAuthController,
     MotoboyEstabelecimentosController,
+    MotoboyAdminController,
   ],
   providers: [MotoboyService, MotoboyAuthService, ComissaoService, GeocodingService],
   exports: [MotoboyService, ComissaoService, GeocodingService],
