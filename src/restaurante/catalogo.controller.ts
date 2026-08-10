@@ -129,9 +129,11 @@ export class CatalogoController {
       restaurantes = restaurantes
         .map((r) => ({
           ...r,
+          // 3 casas decimais (precisão de metro) — raios pequenos (20m, 50m...)
+          // precisavam de mais que os 100m que 1 casa decimal dava.
           distancia_km:
             r.lat != null && r.lng != null
-              ? Math.round(haversineKm({ lat, lng }, { lat: r.lat, lng: r.lng }) * 10) / 10
+              ? Math.round(haversineKm({ lat, lng }, { lat: r.lat, lng: r.lng }) * 1000) / 1000
               : null,
         }))
         .filter((r) => raioKm == null || (r.distancia_km != null && r.distancia_km <= raioKm))
