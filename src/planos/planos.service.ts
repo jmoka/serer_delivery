@@ -338,15 +338,18 @@ export class PlanosService {
       ? new Date(assinatura.ultimo_periodo_faturado_fim)
       : null;
 
-    // Se já existe fatura pendente/vencida de QUALQUER período, "Renovar agora"
-    // não pode gerar outra — o dono tem que pagar a que já existe primeiro.
+    // Se já existe fatura pendente/vencida/isenta de QUALQUER período, "Renovar
+    // agora" não pode gerar outra. Isenta entra aqui também — senão clicar de
+    // novo (a fatura isenta não bloqueia "pendente/vencida") empurra a cobrança
+    // pro período seguinte a cada clique, gerando várias faturas de R$0 em
+    // sequência.
     let temPendenteAberta = false;
     if (forcar) {
       const { data: pendenteExistente, error: pendErroCheck } = await this.supabase.client
         .from('plano_faturas')
         .select('id')
         .eq('assinatura_id', assinatura.id)
-        .in('status', ['pendente', 'vencida'])
+        .in('status', ['pendente', 'vencida', 'isenta'])
         .is('plano_id_troca', null)
         .limit(1)
         .maybeSingle();
