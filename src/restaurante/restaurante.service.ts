@@ -45,7 +45,7 @@ export class RestauranteService {
   private async buscarMinhaEmpresa(userId: string) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, payment_config, comissao_pct, type_id, modulo_delivery, modulo_salao, auto_atendimento_habilitado, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, payment_config, comissao_pct, type_id, modulo_delivery, modulo_salao, auto_atendimento_habilitado, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -559,7 +559,7 @@ export class RestauranteService {
       .from('restaurants')
       .update(campos)
       .eq('id', restaurantId)
-      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, lat_ajustado_manualmente')
       .maybeSingle();
 
     if (error) {
@@ -574,7 +574,12 @@ export class RestauranteService {
     // "address" sozinho, que sem cidade/estado o Nominatim geocodificava impreciso/errado
     // (ex: rua comum sem contexto de cidade cai em outro município, filtro por raio nunca
     // encontrava o próprio restaurante). Nunca falha o save do endereço por causa disso.
-    if (body.address !== undefined || body.state !== undefined || body.city !== undefined || body.neighborhood !== undefined || body.cep !== undefined) {
+    // Pula se o dono já ajustou o pino manualmente no mapa — geocode automático não pode
+    // sobrescrever silenciosamente uma localização que ele calibrou de propósito.
+    if (
+      !data?.lat_ajustado_manualmente &&
+      (body.address !== undefined || body.state !== undefined || body.city !== undefined || body.neighborhood !== undefined || body.cep !== undefined)
+    ) {
       this.geocodificarEndereco(restaurantId, {
         address: data?.address ?? null,
         neighborhood: data?.neighborhood ?? null,
@@ -584,6 +589,36 @@ export class RestauranteService {
       }).catch(() => {});
     }
 
+    return data;
+  }
+
+  // Pino arrastado manualmente no mapa (ver EnderecoCard) — sobrescreve o geocode
+  // automático do Nominatim, que erra rooftop-level em endereço brasileiro fora de
+  // área bem mapeada. Fica marcado como ajuste manual: futuras edições de endereço
+  // não voltam a sobrescrever essa coordenada calibrada (ver updateEmpresa acima).
+  async atualizarLocalizacaoManual(restaurantId: number, lat: number, lng: number) {
+    if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat) || Number.isNaN(lng)) {
+      throw new BadRequestException('Latitude/longitude inválidas.');
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      throw new BadRequestException('Latitude/longitude fora do intervalo válido.');
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('restaurants')
+      .update({
+        lat,
+        lng,
+        lat_ajustado_manualmente: true,
+        geocode_falhou: false,
+        geocoded_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', restaurantId)
+      .select('id, lat, lng, lat_ajustado_manualmente')
+      .maybeSingle();
+
+    if (error) throw error;
     return data;
   }
 

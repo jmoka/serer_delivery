@@ -25,6 +25,11 @@ export class RestauranteController {
     return this.service.updateEmpresa(req.restaurantId, body);
   }
 
+  @Patch('minha-empresa/localizacao')
+  atualizarLocalizacaoManual(@Req() req: any, @Body() body: { lat: number; lng: number }) {
+    return this.service.atualizarLocalizacaoManual(req.restaurantId, body.lat, body.lng);
+  }
+
   @Patch('dominio')
   atualizarDominio(@Req() req: any, @Body() body: { custom_domain?: string | null }) {
     return this.service.atualizarDominio(req.restaurantId, body.custom_domain);
