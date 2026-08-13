@@ -200,12 +200,12 @@ VITE_SUPABASE_URL=<mesma Project URL do passo 1>
 VITE_SUPABASE_ANON_KEY=<anon key do passo 1>
 ```
 
-**Atenção — ponto pendente:** hoje o frontend chama o backend com caminhos relativos fixos (`fetch('/api/...')`), que só funcionam em desenvolvimento por causa do proxy do Vite. Em produção, com backend em domínio/porta separado, isso exige uma das duas soluções:
+Em produção, com backend em domínio/porta separado, o frontend precisa saber pra onde apontar as chamadas de API. Duas soluções possíveis:
 
 - Configurar um reverse proxy (nginx/Apache no cPanel ou na VPS) que roteie `/api/*` do domínio do frontend para o processo Node do backend (porta 3002); **ou**
-- Ajustar o frontend para usar uma URL de API absoluta configurável via variável de ambiente (ex. `VITE_API_URL`), ainda não implementado.
+- Ajustar o frontend para usar uma URL de API absoluta configurável via variável de ambiente — **já implementado** via `VITE_API_URL` no `.env` do frontend (raiz do projeto). Em produção, aponte para o domínio/URL da VPS (ex. `VITE_API_URL=https://app-desenvolvimento-server-delivery.ubjifz.easypanel.host`); deixe vazio em dev pra usar o proxy do Vite.
 
-Esse ajuste está registrado como pendência técnica e precisa ser resolvido antes do primeiro deploy real em produção.
+**Em desenvolvimento local**, `VITE_API_URL` (e `VITE_LAN_URL`, usado no QR code de acompanhamento do cliente) devem apontar para o **IP de rede local do PC** (ex. `http://192.168.x.x:3002`), não `localhost` — porque um celular ou outro dispositivo na mesma rede não alcança o `localhost` da máquina que está rodando o backend. Descubra o IP com `ipconfig` (Windows) e atualize o `.env` sempre que ele mudar (DHCP pode trocar o IP entre reinicializações, causando `net::ERR_CONNECTION_TIMED_OUT` se o `.env` ficar desatualizado).
 
 ---
 
