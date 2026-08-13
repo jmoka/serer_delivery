@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { CozinhaGuard } from '../auth/cozinha.guard';
 import { RestauranteService } from './restaurante.service';
 import { SalaoService } from '../salao/salao.service';
@@ -17,13 +17,19 @@ export class KdsPortalController {
 
   // Lista de impressoras/setores acessível pelo mesmo token de cozinha (sem precisar
   // de login de dono) — pra tela de Cozinha também poder listar/filtrar itens do salão.
+  // Se o token for de uma impressora específica, a sessão só enxerga aquele setor.
   @Get('impressoras')
-  impressoras(@Req() req: any) {
-    return this.impressorasService.listar(req.cozinhaRestaurantId);
+  async impressoras(@Req() req: any) {
+    const lista = await this.impressorasService.listar(req.cozinhaRestaurantId);
+    if (!req.cozinhaImpressoraId) return lista;
+    return (lista as any[]).filter((i) => i.id === req.cozinhaImpressoraId);
   }
 
   @Get('itens')
   itens(@Query('impressora_id', ParseIntPipe) impressoraId: number, @Req() req: any) {
+    if (req.cozinhaImpressoraId && req.cozinhaImpressoraId !== impressoraId) {
+      throw new ForbiddenException('Este token só tem acesso a este setor');
+    }
     return this.service.getKdsSetor(req.cozinhaRestaurantId, impressoraId);
   }
 

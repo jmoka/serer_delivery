@@ -17,7 +17,7 @@ export class ImpressorasService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome, setor, tipo_conexao, endereco, ativo, nome_sistema, created_at')
+      .select('id, nome, setor, tipo_conexao, endereco, ativo, nome_sistema, token, created_at')
       .eq('restaurant_id', restaurantId)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -70,5 +70,20 @@ export class ImpressorasService {
     const { error } = await this.supabase.client.from('impressoras').delete().eq('id', id);
     if (error) throw error;
     return { ok: true };
+  }
+
+  // Gera um token novo pra essa impressora/setor sem mexer no token das demais
+  // (cada tablet/tela de setor tem sua própria sessão de acesso ao KDS).
+  async renovarToken(id: number, restaurantId: number) {
+    await this.garantirPertence(id, restaurantId);
+    const novoToken = crypto.randomUUID();
+    const { data, error } = await this.supabase.client
+      .from('impressoras')
+      .update({ token: novoToken })
+      .eq('id', id)
+      .select('id, token')
+      .single();
+    if (error) throw error;
+    return data;
   }
 }

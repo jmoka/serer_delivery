@@ -17,10 +17,27 @@ export class CozinhaGuard implements CanActivate {
       .eq('cozinha_token', token)
       .maybeSingle();
 
-    if (!data) throw new UnauthorizedException('Token inválido');
+    if (data) {
+      request.cozinhaRestaurantId = data.id;
+      request.cozinhaRestaurantName = data.name;
+      return true;
+    }
 
-    request.cozinhaRestaurantId = data.id;
-    request.cozinhaRestaurantName = data.name;
+    // Token não é o geral da Cozinha — tenta como token individual de uma
+    // impressora/setor, aí a sessão fica restrita àquele setor só. FK precisa
+    // ser explícita: há mais de uma relação entre impressoras e restaurants
+    // (dono, recibo, sangria/acréscimo), o Supabase não consegue embutir sozinho.
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, restaurant_id, restaurants!impressoras_restaurant_id_fkey(name)')
+      .eq('token', token)
+      .maybeSingle();
+
+    if (!impressora) throw new UnauthorizedException('Token inválido');
+
+    request.cozinhaRestaurantId = impressora.restaurant_id;
+    request.cozinhaRestaurantName = (impressora as any).restaurants?.name;
+    request.cozinhaImpressoraId = impressora.id;
     return true;
   }
 }

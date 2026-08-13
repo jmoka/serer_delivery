@@ -41,4 +41,9 @@ export class RestauranteImpressorasController {
   testar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.agenteService.criarJobTeste(req.restaurantId, id);
   }
+
+  @Patch(':id/token')
+  renovarToken(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.renovarToken(id, req.restaurantId);
+  }
 }
