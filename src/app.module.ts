@@ -22,6 +22,7 @@ import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.modul
 import { PlanosModule } from './planos/planos.module';
 import { InstalacoesModule } from './instalacoes/instalacoes.module';
 import { LicencaModule } from './licenca/licenca.module';
+import { UsuariosModule } from './usuarios/usuarios.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { LicencaModule } from './licenca/licenca.module';
     PlanosModule,
     InstalacoesModule,
     LicencaModule,
+    UsuariosModule,
   ],
 })
 export class AppModule {}

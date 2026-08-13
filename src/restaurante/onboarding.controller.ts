@@ -4,6 +4,7 @@ import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { PlanosService } from '../planos/planos.service';
+import { UsuariosService } from '../usuarios/usuarios.service';
 
 @Controller('restaurante')
 export class OnboardingController {
@@ -11,6 +12,7 @@ export class OnboardingController {
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
     private planos: PlanosService,
+    private usuarios: UsuariosService,
   ) {}
 
   // Público (sem guard) — a wizard de cadastro mostra os planos antes do
@@ -18,6 +20,70 @@ export class OnboardingController {
   @Get('planos-disponiveis')
   planosDisponiveis() {
     return this.planos.listarPlanosAtivos('saas');
+  }
+
+  private normalizarDigitos(v?: string | null): string | null {
+    const d = (v ?? '').replace(/\D/g, '');
+    return d || null;
+  }
+
+  private normalizarEmail(v?: string | null): string | null {
+    const e = (v ?? '').trim().toLowerCase();
+    return e || null;
+  }
+
+  // Checa CNPJ/WhatsApp/email contra os demais restaurantes (excluindo o
+  // próprio, pra reenvio do mesmo formulário não acusar conflito consigo
+  // mesmo). CNPJ é opcional — null nunca conflita (UNIQUE do Postgres também
+  // trata assim).
+  private async checarDuplicados(
+    restaurantId: number,
+    valores: { cnpj: string | null; whatsapp: string | null; email: string | null },
+  ) {
+    const ors: string[] = [];
+    if (valores.cnpj) ors.push(`cnpj.eq.${valores.cnpj}`);
+    if (valores.whatsapp) ors.push(`whatsapp.eq.${valores.whatsapp}`);
+    if (valores.email) ors.push(`email.eq.${valores.email}`);
+    if (!ors.length) return { cnpj: false, whatsapp: false, email: false };
+
+    const { data, error } = await this.supabase.client
+      .from('restaurants')
+      .select('id, cnpj, whatsapp, email')
+      .or(ors.join(','))
+      .neq('id', restaurantId);
+    if (error) throw error;
+
+    const conflita = (campo: 'cnpj' | 'whatsapp' | 'email', valor: string | null) =>
+      !!valor && (data ?? []).some((r: any) => r[campo] === valor);
+
+    return {
+      cnpj: conflita('cnpj', valores.cnpj),
+      whatsapp: conflita('whatsapp', valores.whatsapp),
+      email: conflita('email', valores.email),
+    };
+  }
+
+  // Checagem em tempo real usada pela wizard (passos "business"/"contact")
+  // pra avisar de duplicidade assim que o usuário sai do campo, em vez de só
+  // no /finalizar (último passo) — bem tarde pra descobrir que o CNPJ digitado
+  // 3 passos atrás já está em uso.
+  @Post('verificar-disponibilidade')
+  @UseGuards(RestaurantOwnerGuard)
+  async verificarDisponibilidade(
+    @Req() req: any,
+    @Body() body: { cnpj?: string; whatsapp?: string; email?: string },
+  ) {
+    const restaurantId: number = req.restaurantId;
+    const duplicados = await this.checarDuplicados(restaurantId, {
+      cnpj: this.normalizarDigitos(body.cnpj),
+      whatsapp: this.normalizarDigitos(body.whatsapp),
+      email: this.normalizarEmail(body.email),
+    });
+    return {
+      cnpj_disponivel: !duplicados.cnpj,
+      whatsapp_disponivel: !duplicados.whatsapp,
+      email_disponivel: !duplicados.email,
+    };
   }
 
   // 1ª fase do cadastro: cria a loja só com nome + assinatura do plano
@@ -98,6 +164,11 @@ export class OnboardingController {
     }
 
     if (!status.fatura_pendente_id) {
+      // Assinou plano com trial (sem cobrança) — já vira dono aqui, sem esperar
+      // o resto da wizard (endereço, horários...). Restrito a precisaAssinar pra
+      // não elevar num reload de loja com assinatura cancelada (que também cai
+      // em fatura_pendente_id null, mas não é uma assinatura ativa de verdade).
+      if (precisaAssinar) await this.usuarios.sincronizarVinculoDono(restaurant.id, userId);
       return { restaurant, precisa_pagamento: false, fatura: null };
     }
 
@@ -122,10 +193,31 @@ export class OnboardingController {
       cep?: string;
       business_hours?: object;
       type_id?: number;
+      cnpj?: string;
+      whatsapp?: string;
+      email?: string;
     },
   ) {
     const restaurantId: number = req.restaurantId;
     const userId: string = req.userId;
+
+    const cnpjNorm = this.normalizarDigitos(body.cnpj);
+    const whatsappNorm = this.normalizarDigitos(body.whatsapp);
+    const emailNorm = this.normalizarEmail(body.email);
+
+    // Última barreira antes de gravar — a wizard já checou isso passo a passo
+    // (verificar-disponibilidade), mas dois cadastros concorrentes com o mesmo
+    // CNPJ/WhatsApp/email só se pegam aqui (e na UNIQUE constraint do banco).
+    const duplicados = await this.checarDuplicados(restaurantId, {
+      cnpj: cnpjNorm,
+      whatsapp: whatsappNorm,
+      email: emailNorm,
+    });
+    const mensagens: string[] = [];
+    if (duplicados.cnpj) mensagens.push('Este CNPJ já está cadastrado em outro estabelecimento.');
+    if (duplicados.whatsapp) mensagens.push('Este WhatsApp já está cadastrado em outro estabelecimento.');
+    if (duplicados.email) mensagens.push('Este email já está cadastrado em outro estabelecimento.');
+    if (mensagens.length) throw new BadRequestException(mensagens.join(' '));
 
     const campos: Record<string, any> = { updated_at: new Date().toISOString() };
     if (body.name !== undefined) campos.name = body.name;
@@ -136,6 +228,9 @@ export class OnboardingController {
     if (body.cep !== undefined) campos.cep = body.cep ? body.cep.replace(/\D/g, '') : null;
     if (body.business_hours !== undefined) campos.business_hours = body.business_hours;
     if (body.type_id !== undefined) campos.type_id = body.type_id;
+    if (body.cnpj !== undefined) campos.cnpj = cnpjNorm;
+    if (body.whatsapp !== undefined) campos.whatsapp = whatsappNorm;
+    if (body.email !== undefined) campos.email = emailNorm;
 
     const { data: restaurant, error } = await this.supabase.client
       .from('restaurants')
@@ -143,7 +238,14 @@ export class OnboardingController {
       .eq('id', restaurantId)
       .select()
       .single();
-    if (error) throw error;
+    if (error) {
+      // Última rede de segurança contra corrida (dois cadastros com o mesmo
+      // CNPJ/WhatsApp/email confirmando entre a checagem acima e este update).
+      if ((error as any).code === '23505') {
+        throw new BadRequestException('CNPJ, WhatsApp ou email já cadastrado em outro estabelecimento.');
+      }
+      throw error;
+    }
 
     // Geocodifica em background (best-effort) — sem isso o restaurante nunca aparece no
     // filtro por raio/km da home até o dono re-salvar o endereço em Config manualmente.
@@ -159,11 +261,10 @@ export class OnboardingController {
       }).catch(() => {});
     }
 
-    // Eleva role para restaurant_owner (service_role bypassa RLS)
-    await this.supabase.client
-      .from('user_profiles')
-      .update({ role: 'restaurant_owner', updated_at: new Date().toISOString() })
-      .eq('id', userId);
+    // Eleva role para restaurant_owner — propaga erro em vez de engolir, senão
+    // o endpoint responde 200 mesmo com o vínculo quebrado (causa raiz de um
+    // bug em produção onde o dono nunca via o botão do painel).
+    await this.usuarios.sincronizarVinculoDono(restaurantId, userId);
 
     return { restaurant };
   }

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase/supabase.service';
+import { UsuariosService } from '../usuarios/usuarios.service';
 import { PagBankClient } from '../pagamentos/pagbank.client';
 import { CriarPlanoDto } from './dto/criar-plano.dto';
 import { AtualizarPlanoDto } from './dto/atualizar-plano.dto';
@@ -34,7 +35,25 @@ export class PlanosService {
   constructor(
     private supabase: SupabaseService,
     private config: ConfigService,
+    private usuarios: UsuariosService,
   ) {}
+
+  // Eleva o dono da loja assim que um pagamento (ou trial sem cobrança) é
+  // confirmado — não espera o resto da wizard de cadastro (endereço, horários
+  // etc.) ser preenchido. Sem isso, um dono que pagou mas fechou o navegador
+  // antes do último passo da wizard nunca ganhava o painel. Idempotente e
+  // seguro de chamar em toda fatura paga, inclusive renovação.
+  private async elevarDonoSeNecessario(restaurantId: number | null | undefined) {
+    if (!restaurantId) return;
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('user_id')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    if (restaurante?.user_id) {
+      await this.usuarios.sincronizarVinculoDono(restaurantId, restaurante.user_id);
+    }
+  }
 
   // ── CRUD de planos ──────────────────────────────────────────────
 
@@ -574,6 +593,10 @@ export class PlanosService {
       .single();
     if (error) throw error;
     if (!data) throw new NotFoundException('Fatura não encontrada');
+
+    await this.aplicarTrocaSeNecessario(data);
+    await this.elevarDonoSeNecessario(data.restaurant_id);
+
     return data;
   }
 
@@ -722,6 +745,7 @@ export class PlanosService {
     }
 
     await this.aplicarTrocaSeNecessario(fatura);
+    await this.elevarDonoSeNecessario(fatura.restaurant_id);
 
     return { pago: true, fatura_id: fatura.id };
   }
@@ -753,6 +777,7 @@ export class PlanosService {
       .eq('id', fatura.id);
 
     await this.aplicarTrocaSeNecessario(fatura);
+    await this.elevarDonoSeNecessario(fatura.restaurant_id);
 
     return { processado: true, fatura_id: fatura.id };
   }

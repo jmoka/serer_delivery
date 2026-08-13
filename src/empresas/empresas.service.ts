@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { UsuariosService } from '../usuarios/usuarios.service';
 
 @Injectable()
 export class EmpresasService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private usuarios: UsuariosService,
+  ) {}
 
   private gerarSlug(name: string): string {
     return name.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').trim();
@@ -91,8 +95,16 @@ export class EmpresasService {
     modulo_delivery: boolean;
     modulo_salao: boolean;
   }>) {
-    const payload: Record<string, any> = { ...body, updated_at: new Date().toISOString() };
-    if ('user_id' in payload && !payload.user_id) payload.user_id = null;
+    const { user_id, ...resto } = body;
+
+    // Delega ao serviço central pra manter user_profiles.role sincronizado
+    // com o vínculo — editar só restaurants.user_id aqui deixava o dono sem
+    // acesso ao painel mesmo com o vínculo "correto" no banco.
+    if ('user_id' in body) {
+      await this.usuarios.sincronizarVinculoDono(id, user_id || null);
+    }
+
+    const payload: Record<string, any> = { ...resto, updated_at: new Date().toISOString() };
 
     const { data, error } = await this.supabase.client
       .from('restaurants')
