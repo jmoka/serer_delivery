@@ -111,6 +111,11 @@ export class RestauranteController {
     return this.service.criarProduto(req.restaurantId, body);
   }
 
+  @Post('produtos/importar')
+  importarProdutos(@Req() req: any, @Body() body: { produtos: any[] }) {
+    return this.service.importarProdutos(req.restaurantId, body?.produtos);
+  }
+
   @Patch('produtos/:id')
   editarProduto(
     @Param('id', ParseIntPipe) id: number,

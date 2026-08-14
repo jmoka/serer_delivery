@@ -246,6 +246,104 @@ export class RestauranteService {
     return data;
   }
 
+  // Importação em massa via JSON. Duplicado = mesmo nome (sem diferenciar
+  // maiúscula/minúscula) já cadastrado nesta loja, ou repetido dentro do
+  // próprio arquivo — nesses casos o item é ignorado, não dá erro geral.
+  async importarProdutos(restaurantId: number, itens: any[]) {
+    if (!Array.isArray(itens) || itens.length === 0) {
+      throw new BadRequestException('Envie uma lista de produtos');
+    }
+
+    const { data: existentes, error: erroExistentes } = await this.supabase.client
+      .from('products').select('name').eq('restaurant_id', restaurantId);
+    if (erroExistentes) throw erroExistentes;
+    const nomesExistentes = new Set((existentes ?? []).map((p: any) => String(p.name).trim().toLowerCase()));
+
+    const { data: categoriasProprias, error: erroCategoriasProprias } = await this.supabase.client
+      .from('categories').select('id, name').eq('restaurant_id', restaurantId);
+    if (erroCategoriasProprias) throw erroCategoriasProprias;
+    const { data: categoriasGlobais, error: erroCategoriasGlobais } = await this.supabase.client
+      .from('categories').select('id, name').is('restaurant_id', null);
+    if (erroCategoriasGlobais) throw erroCategoriasGlobais;
+
+    const categoriaPorNome = new Map<string, number>();
+    [...(categoriasProprias ?? []), ...(categoriasGlobais ?? [])].forEach((c: any) => {
+      const chave = String(c.name).trim().toLowerCase();
+      if (!categoriaPorNome.has(chave)) categoriaPorNome.set(chave, c.id);
+    });
+
+    const importados: string[] = [];
+    const ignorados: { name: string; motivo: string }[] = [];
+
+    for (const item of itens ?? []) {
+      const nome = String(item?.name ?? '').trim();
+      if (!nome) {
+        ignorados.push({ name: String(item?.name ?? '(sem nome)'), motivo: 'nome ausente' });
+        continue;
+      }
+      const chaveNome = nome.toLowerCase();
+      if (nomesExistentes.has(chaveNome)) {
+        ignorados.push({ name: nome, motivo: 'já existe um produto com esse nome' });
+        continue;
+      }
+      const preco = Number(item?.price);
+      if (item?.price == null || Number.isNaN(preco)) {
+        ignorados.push({ name: nome, motivo: 'preço inválido' });
+        continue;
+      }
+      const nomeCategoria = String(item?.category ?? item?.categoria ?? '').trim();
+      if (!nomeCategoria) {
+        ignorados.push({ name: nome, motivo: 'categoria ausente' });
+        continue;
+      }
+
+      let categoryId = categoriaPorNome.get(nomeCategoria.toLowerCase());
+      if (categoryId == null) {
+        const { data: novaCategoria, error: erroCategoria } = await this.supabase.client
+          .from('categories').insert({ name: nomeCategoria, restaurant_id: restaurantId }).select('id').single();
+        if (erroCategoria) {
+          ignorados.push({ name: nome, motivo: 'não foi possível criar a categoria' });
+          continue;
+        }
+        categoryId = novaCategoria.id;
+        categoriaPorNome.set(nomeCategoria.toLowerCase(), categoryId as number);
+      }
+
+      try {
+        await this.planos.verificarLimiteProdutos(restaurantId);
+      } catch {
+        ignorados.push({ name: nome, motivo: 'limite de produtos do plano atingido' });
+        continue;
+      }
+
+      const { error } = await this.supabase.client.from('products').insert({
+        name: nome,
+        description: item?.description ?? null,
+        price: preco,
+        preco_promo: item?.preco_promo != null ? Number(item.preco_promo) : null,
+        image_url: item?.image_url ?? null,
+        category_id: categoryId,
+        restaurant_id: restaurantId,
+        tags: Array.isArray(item?.tags) ? item.tags : [],
+        destaque: !!item?.destaque,
+        quantidade_estoque: item?.quantidade_estoque != null ? Number(item.quantidade_estoque) : 0,
+        preco_custo: item?.preco_custo != null ? Number(item.preco_custo) : 0,
+        quantidade_minima: item?.quantidade_minima != null ? Number(item.quantidade_minima) : 0,
+        is_active: true,
+      });
+
+      if (error) {
+        ignorados.push({ name: nome, motivo: 'erro ao salvar' });
+        continue;
+      }
+
+      nomesExistentes.add(chaveNome);
+      importados.push(nome);
+    }
+
+    return { total: itens.length, importados: importados.length, nomes_importados: importados, ignorados };
+  }
+
   async editarProduto(produtoId: number, restaurantId: number, body: any) {
     await this.verificarProdutoDoRestaurante(produtoId, restaurantId);
 
