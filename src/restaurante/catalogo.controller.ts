@@ -86,7 +86,8 @@ export class CatalogoController {
       .from('restaurants')
       .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, aparencia, frete_motoboy, lat, lng')
       .not('slug', 'is', null)
-      .eq('bloqueado', false);
+      .eq('bloqueado', false)
+      .eq('modulo_delivery', true);
 
     if (query.state) q = q.ilike('state', query.state);
     if (query.city) q = q.ilike('city', query.city);
@@ -158,7 +159,8 @@ export class CatalogoController {
       .from('restaurants')
       .select('state, city, neighborhood')
       .not('slug', 'is', null)
-      .eq('bloqueado', false);
+      .eq('bloqueado', false)
+      .eq('modulo_delivery', true);
     if (error) throw error;
 
     const vistos = new Set<string>();
@@ -185,7 +187,8 @@ export class CatalogoController {
       .from('restaurants')
       .select('id, name, logo_url, slug, aparencia, frete_motoboy')
       .not('slug', 'is', null)
-      .eq('bloqueado', false);
+      .eq('bloqueado', false)
+      .eq('modulo_delivery', true);
 
     if (!restaurantes?.length) return { produtos: [] };
 
@@ -227,7 +230,8 @@ export class CatalogoController {
       .from('restaurants')
       .select('id, name, logo_url, slug, aparencia, frete_motoboy')
       .not('slug', 'is', null)
-      .eq('bloqueado', false);
+      .eq('bloqueado', false)
+      .eq('modulo_delivery', true);
 
     if (!restaurantes?.length) return { combos: [] };
 
@@ -274,7 +278,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery')
       .eq('custom_domain', dominio)
       .maybeSingle();
 
@@ -292,7 +296,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery')
       .eq('slug', slug)
       .maybeSingle();
 
