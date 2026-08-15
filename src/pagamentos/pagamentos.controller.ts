@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { PagamentosService } from './pagamentos.service';
 import { JwtGuard } from '../auth/jwt.guard';
 
@@ -14,8 +14,9 @@ export class PagamentosController {
       order_id: number;
       customer: { name: string; email: string; tax_id: string };
     },
+    @Req() req: any,
   ) {
-    return this.service.criarPix(body);
+    return this.service.criarPix(body, req.userId);
   }
 
   // Cliente paga com cartão (token encrypted via PagBank.js no frontend)
@@ -29,8 +30,9 @@ export class PagamentosController {
       parcelas?: number;
       tipo?: 'CREDIT_CARD' | 'DEBIT_CARD';
     },
+    @Req() req: any,
   ) {
-    return this.service.criarCartao(body);
+    return this.service.criarCartao(body, req.userId);
   }
 
   // Consulta pagamentos de um pedido

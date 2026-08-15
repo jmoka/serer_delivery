@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PagBankClient } from './pagbank.client';
@@ -112,8 +112,11 @@ export class PagamentosService {
   async criarPix(body: {
     order_id: number;
     customer: { name: string; email: string; tax_id: string };
-  }) {
+  }, callerUserId: string) {
     const pedido = await this.buscarPedido(body.order_id);
+    if (pedido.user_id !== callerUserId) {
+      throw new ForbiddenException('Este pedido não pertence a você');
+    }
 
     if (pedido.status !== 'pending') {
       throw new BadRequestException('Pedido não está pendente de pagamento');
@@ -174,8 +177,11 @@ export class PagamentosService {
     card_encrypted: string;
     parcelas?: number;
     tipo?: 'CREDIT_CARD' | 'DEBIT_CARD';
-  }) {
+  }, callerUserId: string) {
     const pedido = await this.buscarPedido(body.order_id);
+    if (pedido.user_id !== callerUserId) {
+      throw new ForbiddenException('Este pedido não pertence a você');
+    }
 
     if (pedido.status !== 'pending') {
       throw new BadRequestException('Pedido não está pendente de pagamento');
