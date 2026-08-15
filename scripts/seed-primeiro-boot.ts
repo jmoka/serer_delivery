@@ -1,6 +1,7 @@
 // Roda UMA VEZ na primeira instalação em máquina de cliente: cria dados mínimos
 // pro sistema funcionar de cara (admin, dono de restaurante teste, cliente teste,
-// produtos, impressora, garçom). Idempotente — se o admin de teste já existe, não faz nada.
+// produtos, plano+assinatura, impressora, garçom). Idempotente — se o admin de
+// teste já existe, não faz nada.
 //
 // Uso: npm run seed:primeiro-boot   (dentro de server_delivery, com .env configurado)
 import 'dotenv/config';
@@ -120,6 +121,56 @@ async function main() {
     },
   ]);
   if (produtosErro) throw produtosErro;
+
+  console.log('Criando plano e assinatura de teste...');
+  const NOME_PLANO_TESTE = 'Plano Teste';
+  let { data: planoTeste, error: planoBuscaErro } = await supabase
+    .from('planos')
+    .select('id, inclui_delivery, inclui_salao')
+    .eq('nome', NOME_PLANO_TESTE)
+    .maybeSingle();
+  if (planoBuscaErro) throw planoBuscaErro;
+
+  if (!planoTeste) {
+    const { data: planoCriado, error: planoCriaErro } = await supabase
+      .from('planos')
+      .insert({
+        nome: NOME_PLANO_TESTE,
+        valor: 49.9,
+        periodicidade: 'mensal',
+        tipo: 'saas',
+        trial_dias: 30,
+        ativo: true,
+        inclui_delivery: true,
+        inclui_salao: true,
+      })
+      .select('id, inclui_delivery, inclui_salao')
+      .single();
+    if (planoCriaErro) throw planoCriaErro;
+    planoTeste = planoCriado;
+  }
+
+  const agora = new Date();
+  const trialFim = new Date(agora);
+  trialFim.setDate(trialFim.getDate() + 30);
+
+  const { error: assinaturaErro } = await supabase.from('assinaturas').insert({
+    restaurant_id: restauranteId,
+    plano_id: planoTeste.id,
+    status: 'trial',
+    data_inicio: agora.toISOString(),
+    trial_fim: trialFim.toISOString(),
+    ultimo_periodo_faturado_fim: trialFim.toISOString(),
+  });
+  if (assinaturaErro) throw assinaturaErro;
+
+  // Reflete o que atribuirAssinatura() faria em produção (ver PlanosService) —
+  // sem isso a loja de teste some do marketplace (filtro modulo_delivery=true).
+  const { error: moduloErro } = await supabase
+    .from('restaurants')
+    .update({ modulo_delivery: planoTeste.inclui_delivery, modulo_salao: planoTeste.inclui_salao })
+    .eq('id', restauranteId);
+  if (moduloErro) throw moduloErro;
 
   console.log('Criando impressora de teste...');
   const { error: impressoraErro } = await supabase.from('impressoras').insert({
