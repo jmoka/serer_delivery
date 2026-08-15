@@ -624,9 +624,17 @@ export class RestauranteService {
 
     if (!cr) throw new NotFoundException('Cliente não encontrado neste restaurante');
 
+    // body é Partial<{...}> — tipo TS puro, não classe validada — nunca
+    // repassar cru pro .update() (mesmo padrão de fix já usado em B2/B7/B10).
+    const campos: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (body.name !== undefined) campos.name = body.name;
+    if (body.email !== undefined) campos.email = body.email;
+    if (body.phone_e164 !== undefined) campos.phone_e164 = body.phone_e164;
+    if (body.notes !== undefined) campos.notes = body.notes;
+
     const { data, error } = await this.supabase.client
       .from('customers')
-      .update({ ...body, updated_at: new Date().toISOString() })
+      .update(campos)
       .eq('id', clienteId)
       .select()
       .single();
@@ -805,6 +813,13 @@ export class RestauranteService {
     return (data?.aparencia ?? {}) as Record<string, any>;
   }
 
+  // Campos aceitos no blob JSONB `aparencia` — controller expõe body: any
+  // (chamado também internamente com literais como { aberto }), então nunca
+  // fazer merge cru: um campo extra no JSON vira config persistida sem controle.
+  private static readonly CAMPOS_APARENCIA = [
+    'logo_url', 'descricao', 'background_url', 'background_color', 'banner_url', 'carousel_images', 'aberto',
+  ] as const;
+
   async updateAparencia(restaurantId: number, body: Record<string, any>) {
     const { data: atual } = await this.supabase.client
       .from('restaurants')
@@ -812,7 +827,11 @@ export class RestauranteService {
       .eq('id', restaurantId)
       .maybeSingle();
 
-    const nova = { ...(atual?.aparencia ?? {}), ...body };
+    const campos: Record<string, any> = {};
+    for (const campo of RestauranteService.CAMPOS_APARENCIA) {
+      if (body[campo] !== undefined) campos[campo] = body[campo];
+    }
+    const nova = { ...(atual?.aparencia ?? {}), ...campos };
 
     const { error } = await this.supabase.client
       .from('restaurants')

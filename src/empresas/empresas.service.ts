@@ -97,16 +97,24 @@ export class EmpresasService {
     modulo_delivery: boolean;
     modulo_salao: boolean;
   }>) {
-    const { user_id, ...resto } = body;
-
     // Delega ao serviço central pra manter user_profiles.role sincronizado
     // com o vínculo — editar só restaurants.user_id aqui deixava o dono sem
     // acesso ao painel mesmo com o vínculo "correto" no banco.
     if ('user_id' in body) {
-      await this.usuarios.sincronizarVinculoDono(id, user_id || null);
+      await this.usuarios.sincronizarVinculoDono(id, body.user_id || null);
     }
 
-    const payload: Record<string, any> = { ...resto, updated_at: new Date().toISOString() };
+    // body vem de @Body() body: any no controller — nunca repassar cru pro
+    // .update() (mesmo padrão de fix já usado em B2/B7/B10).
+    const payload: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (body.name !== undefined) payload.name = body.name;
+    if (body.address !== undefined) payload.address = body.address;
+    if (body.logo_url !== undefined) payload.logo_url = body.logo_url;
+    if (body.comissao_pct !== undefined) payload.comissao_pct = body.comissao_pct;
+    if (body.business_hours !== undefined) payload.business_hours = body.business_hours;
+    if (body.payment_config !== undefined) payload.payment_config = body.payment_config;
+    if (body.modulo_delivery !== undefined) payload.modulo_delivery = body.modulo_delivery;
+    if (body.modulo_salao !== undefined) payload.modulo_salao = body.modulo_salao;
 
     const { data, error } = await this.supabase.client
       .from('restaurants')
