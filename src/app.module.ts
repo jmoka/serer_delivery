@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { join } from 'path';
 import { SupabaseModule } from './supabase/supabase.module';
+import { CommonModule } from './common/common.module';
 import { RedisModule } from './redis/redis.module';
 import { EstoqueModule } from './estoque/estoque.module';
 import { CombosModule } from './combos/combos.module';
@@ -35,6 +36,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
       ],
     }),
     SupabaseModule,
+    CommonModule,
     RedisModule,
     EstoqueModule,
     CombosModule,

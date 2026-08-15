@@ -3,6 +3,7 @@ import { AppModule } from './app.module';
 import { McpService } from './mcp/mcp.service';
 import { ValidationPipe } from '@nestjs/common';
 import { json } from 'express';
+import { CorsOriginsService } from './common/cors-origins.service';
 
 async function bootstrap() {
   const isMcpMode = process.env.MCP_MODE === 'stdio';
@@ -15,7 +16,18 @@ async function bootstrap() {
   }
 
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
+
+  const corsOrigins = app.get(CorsOriginsService);
+  app.enableCors({
+    origin: async (origin, callback) => {
+      if (!origin) return callback(null, true); // server-to-server, sem browser
+      const ok = await corsOrigins.estaPermitida(origin);
+      // callback(null, false) nega sem levantar erro — resposta segue normal,
+      // só sem os headers Access-Control-*, e o browser bloqueia no cliente.
+      callback(null, ok);
+    },
+    credentials: true,
+  });
   // Uploads de foto/documento do motoboy vêm em base64 no corpo JSON — acima do default (~100kb)
   app.use(json({ limit: '12mb' }));
   // Valida e sanitiza todos os DTOs globalmente — nunca confiar só no frontend

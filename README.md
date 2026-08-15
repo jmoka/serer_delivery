@@ -183,7 +183,10 @@ PAGBANK_TOKEN=<token de produção do PagBank>
 PAGBANK_SANDBOX=false
 PAGBANK_WEBHOOK_URL=https://SEU_DOMINIO/pagamentos/webhook
 REDIS_URL=redis://default:SENHA@HOST_INTERNO:6379
+APP_ALLOWED_ORIGINS=app.seudominio.com,outro-dominio-da-plataforma.com
 ```
+
+`APP_ALLOWED_ORIGINS` é a allowlist de CORS (`CorsOriginsService`, `src/common/`) — domínios "base" da plataforma (app principal, painéis), separados por vírgula, sem protocolo. **Não** inclui os domínios White Label por loja (`restaurants.custom_domain`) — esses o serviço já busca direto do banco (só lojas com `custom_domain_status` aprovado), com cache de 60s. Sem essa variável configurada em produção, só as lojas com domínio próprio conseguem chamar a API pelo navegador — o próprio app principal ficaria bloqueado pelo CORS.
 
 Rodar com `npm run start:prod` (idealmente atrás de um process manager como PM2, para reiniciar sozinho em caso de queda):
 

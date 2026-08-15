@@ -38,8 +38,8 @@ export class PagamentosController {
   // Consulta pagamentos de um pedido
   @Get('pedido/:id')
   @UseGuards(JwtGuard)
-  buscarPorPedido(@Param('id', ParseIntPipe) id: number) {
-    return this.service.buscarPorPedido(id);
+  buscarPorPedido(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.buscarPorPedido(id, req.userId, req.userRole);
   }
 
   // Webhook PagBank — sem auth (PagBank não envia token)

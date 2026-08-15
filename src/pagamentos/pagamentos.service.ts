@@ -245,7 +245,12 @@ export class PagamentosService {
     };
   }
 
-  async buscarPorPedido(orderId: number) {
+  async buscarPorPedido(orderId: number, callerUserId: string, callerRole: string) {
+    const pedido = await this.buscarPedido(orderId);
+    if (callerRole !== 'admin' && pedido.user_id !== callerUserId) {
+      throw new ForbiddenException('Você não tem acesso a este pedido');
+    }
+
     const { data, error } = await this.supabase.client
       .from('pagamentos')
       .select('id, tipo, status, valor, pix_code, pix_qr_url, pagbank_order_id, pago_em, criado_em')

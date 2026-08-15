@@ -55,9 +55,21 @@ export class ImpressorasService {
 
   async atualizar(id: number, restaurantId: number, body: Partial<ImpressoraBody>) {
     await this.garantirPertence(id, restaurantId);
+
+    // Nunca repassar o body cru pro .update() — ImpressoraBody é interface, não
+    // DTO validado, então um campo extra (ex. restaurant_id, token) no corpo da
+    // requisição iria direto pro banco. Whitelist campo a campo, igual a criar().
+    const campos: Record<string, any> = {};
+    if (body.nome !== undefined) campos.nome = body.nome;
+    if (body.setor !== undefined) campos.setor = body.setor;
+    if (body.tipo_conexao !== undefined) campos.tipo_conexao = body.tipo_conexao;
+    if (body.endereco !== undefined) campos.endereco = body.endereco;
+    if (body.ativo !== undefined) campos.ativo = body.ativo;
+    if (body.nome_sistema !== undefined) campos.nome_sistema = body.nome_sistema;
+
     const { data, error } = await this.supabase.client
       .from('impressoras')
-      .update(body)
+      .update(campos)
       .eq('id', id)
       .select()
       .single();

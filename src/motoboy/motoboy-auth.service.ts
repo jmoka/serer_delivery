@@ -8,6 +8,12 @@ import { SupabaseJwtService } from '../auth/supabase-jwt.service';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // igual ao expiresIn do JWT
 
+// identificador/email/phone entram direto num filtro .or() do PostgREST — sem
+// validar formato, um valor com vírgula/parênteses injeta cláusulas extras
+// no filtro (ex. ",id.gt.0").
+const EMAIL_RE = /^[^\s,()]+@[^\s,()]+\.[^\s,()]+$/;
+const PHONE_RE = /^\+?[0-9]{8,15}$/;
+
 export interface CadastroMotoboyBody {
   name: string;
   phone: string;
@@ -108,6 +114,8 @@ export class MotoboyAuthService {
   async cadastro(body: CadastroMotoboyBody) {
     if (!body.email && !body.phone) throw new BadRequestException('Informe telefone ou e-mail');
     if (!body.password || body.password.length < 6) throw new BadRequestException('Senha deve ter no mínimo 6 caracteres');
+    if (body.email && !EMAIL_RE.test(body.email)) throw new BadRequestException('E-mail inválido');
+    if (body.phone && !PHONE_RE.test(body.phone)) throw new BadRequestException('Telefone inválido');
 
     const { data: existente } = await this.supabase.client
       .from('motoboys')
@@ -149,6 +157,10 @@ export class MotoboyAuthService {
   }
 
   async login(identificador: string, password: string) {
+    if (!EMAIL_RE.test(identificador) && !PHONE_RE.test(identificador)) {
+      throw new UnauthorizedException('Credenciais inválidas');
+    }
+
     const { data: motoboy } = await this.supabase.client
       .from('motoboys')
       .select('id, password_hash, is_active')
