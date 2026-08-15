@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { join } from 'path';
 import { SupabaseModule } from './supabase/supabase.module';
 import { CommonModule } from './common/common.module';
@@ -35,6 +37,10 @@ import { UsuariosModule } from './usuarios/usuarios.module';
         '.env',
       ],
     }),
+    // Limite padrão de toda a API (ver POLITICAS.md do vault de segurança:
+    // "API: 100 requisições por minuto"). Endpoints de login/cadastro usam
+    // @Throttle com limite mais apertado (ver motoboy-auth/garcom-auth).
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     SupabaseModule,
     CommonModule,
     RedisModule,
@@ -59,5 +65,6 @@ import { UsuariosModule } from './usuarios/usuarios.module';
     LicencaModule,
     UsuariosModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

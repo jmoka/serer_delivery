@@ -3,6 +3,7 @@ import { AppModule } from './app.module';
 import { McpService } from './mcp/mcp.service';
 import { ValidationPipe } from '@nestjs/common';
 import { json } from 'express';
+import helmet from 'helmet';
 import { CorsOriginsService } from './common/cors-origins.service';
 
 async function bootstrap() {
@@ -16,6 +17,7 @@ async function bootstrap() {
   }
 
   const app = await NestFactory.create(AppModule);
+  app.use(helmet());
 
   const corsOrigins = app.get(CorsOriginsService);
   app.enableCors({

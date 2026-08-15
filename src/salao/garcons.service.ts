@@ -36,7 +36,7 @@ export class GarconsService {
 
   async criar(restaurantId: number, body: CriarGarcomBody) {
     if (!body.nome) throw new BadRequestException('Nome é obrigatório');
-    if (!body.senha || body.senha.length < 4) throw new BadRequestException('Senha deve ter no mínimo 4 caracteres');
+    if (!body.senha || body.senha.length < 8) throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
 
     const passwordHash = await bcrypt.hash(body.senha, 10);
     let loginKey = this.gerarLoginKey();
@@ -110,7 +110,7 @@ export class GarconsService {
       };
     }
     if (body.senha) {
-      if (body.senha.length < 4) throw new BadRequestException('Senha deve ter no mínimo 4 caracteres');
+      if (body.senha.length < 8) throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
       update.password_hash = await bcrypt.hash(body.senha, 10);
     }
 

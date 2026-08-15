@@ -35,7 +35,14 @@ export class ProdutosController {
   @Patch('produtos/:id')
   atualizar(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: any,
+    @Body() body: Partial<{
+      name: string;
+      description: string;
+      price: number;
+      image_url: string;
+      category_id: number;
+      impressora_id: number | null;
+    }>,
   ) {
     return this.service.atualizar(id, body);
   }

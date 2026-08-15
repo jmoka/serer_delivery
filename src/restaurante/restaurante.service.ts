@@ -43,9 +43,11 @@ export class RestauranteService {
   }
 
   private async buscarMinhaEmpresa(userId: string) {
+    // payment_config nunca sai daqui em claro — tem rota própria mascarada
+    // (GET /restaurante/config, ver getConfig() nesta mesma classe).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, payment_config, comissao_pct, type_id, modulo_delivery, modulo_salao, auto_atendimento_habilitado, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, auto_atendimento_habilitado, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 

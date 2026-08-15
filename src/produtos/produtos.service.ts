@@ -74,9 +74,20 @@ export class ProdutosService {
     category_id: number;
     impressora_id: number | null;
   }>) {
+    // body vem de @Body() body: any no controller (admin-only, mas ainda assim
+    // nunca repassar cru) — whitelist campo a campo, igual ao padrão usado em
+    // impressoras.service.ts atualizar().
+    const campos: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (body.name !== undefined) campos.name = body.name;
+    if (body.description !== undefined) campos.description = body.description;
+    if (body.price !== undefined) campos.price = body.price;
+    if (body.image_url !== undefined) campos.image_url = body.image_url;
+    if (body.category_id !== undefined) campos.category_id = body.category_id;
+    if (body.impressora_id !== undefined) campos.impressora_id = body.impressora_id;
+
     const { data, error } = await this.supabase.client
       .from('products')
-      .update({ ...body, updated_at: new Date().toISOString() })
+      .update(campos)
       .eq('id', id)
       .select()
       .single();

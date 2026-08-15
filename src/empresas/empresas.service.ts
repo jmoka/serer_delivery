@@ -25,9 +25,11 @@ export class EmpresasService {
   }
 
   async buscar(id: number) {
+    // payment_config nunca sai daqui em claro — tem rota própria mascarada
+    // (GET /empresas/:id/config, ver empresas.controller.ts).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, payment_config, comissao_pct, user_id, slug, modulo_delivery, modulo_salao, created_at')
+      .select('id, name, address, logo_url, business_hours, comissao_pct, user_id, slug, modulo_delivery, modulo_salao, created_at')
       .eq('id', id)
       .maybeSingle();
 

@@ -113,7 +113,7 @@ export class MotoboyAuthService {
 
   async cadastro(body: CadastroMotoboyBody) {
     if (!body.email && !body.phone) throw new BadRequestException('Informe telefone ou e-mail');
-    if (!body.password || body.password.length < 6) throw new BadRequestException('Senha deve ter no mínimo 6 caracteres');
+    if (!body.password || body.password.length < 8) throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
     if (body.email && !EMAIL_RE.test(body.email)) throw new BadRequestException('E-mail inválido');
     if (body.phone && !PHONE_RE.test(body.phone)) throw new BadRequestException('Telefone inválido');
 
@@ -178,7 +178,7 @@ export class MotoboyAuthService {
 
   // Motoboys antigos (criados antes do login por senha) — completam cadastro usando o token legado.
   async completarCadastro(motoboyId: number, body: CadastroMotoboyBody) {
-    if (!body.password || body.password.length < 6) throw new BadRequestException('Senha deve ter no mínimo 6 caracteres');
+    if (!body.password || body.password.length < 8) throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
 
     const passwordHash = await bcrypt.hash(body.password, 10);
 

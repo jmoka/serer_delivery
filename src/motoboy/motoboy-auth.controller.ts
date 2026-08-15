@@ -1,4 +1,5 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { MotoboyAuthService } from './motoboy-auth.service';
 import type { CadastroMotoboyBody } from './motoboy-auth.service';
 import { MotoboyGuard } from '../auth/motoboy.guard';
@@ -7,11 +8,15 @@ import { MotoboyGuard } from '../auth/motoboy.guard';
 export class MotoboyAuthController {
   constructor(private service: MotoboyAuthService) {}
 
+  // Cadastro: 10 por hora (ver POLITICAS.md do vault de segurança)
+  @Throttle({ default: { limit: 10, ttl: 3_600_000 } })
   @Post('cadastro')
   cadastro(@Body() body: CadastroMotoboyBody) {
     return this.service.cadastro(body);
   }
 
+  // Login: 5 tentativas por minuto (ver POLITICAS.md do vault de segurança)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   login(@Body() body: { identificador: string; password: string }) {
     return this.service.login(body.identificador, body.password);
