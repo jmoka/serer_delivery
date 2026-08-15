@@ -121,7 +121,19 @@ export class PedidosService {
     return { pedidos: data, total: data?.length ?? 0 };
   }
 
-  async buscar(id: number) {
+  // Uso público (controller) — exige provar posse do pedido (admin ou dono).
+  async buscar(id: number, callerUserId: string, callerRole: string) {
+    const resultado = await this.buscarBruto(id);
+    if (callerRole !== 'admin' && resultado.pedido.user_id !== callerUserId) {
+      throw new ForbiddenException('Você não tem acesso a este pedido');
+    }
+    return resultado;
+  }
+
+  // Uso interno — quem chama já validou a posse por outro caminho (ex.:
+  // RestauranteService.buscarPedidoDoRestaurante() confere restaurant_id logo
+  // em seguida). Nunca expor direto num controller sem checagem de posse.
+  async buscarBruto(id: number) {
     const { data: pedido, error } = await this.supabase.client
       .from('orders')
       .select('id, total, troco_para, frete_cobrado, entrega_pagamento, status, payment_method, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
@@ -145,7 +157,7 @@ export class PedidosService {
         .eq('id', pedido.restaurant_id)
         .maybeSingle(),
       pedido.motoboy_id
-        ? this.supabase.client.from('motoboys').select('id, name, phone, access_token').eq('id', pedido.motoboy_id).maybeSingle()
+        ? this.supabase.client.from('motoboys').select('id, name, phone').eq('id', pedido.motoboy_id).maybeSingle()
         : Promise.resolve({ data: null }),
       this.supabase.client.from('pagamentos').select('id, valor, tipo, status').eq('order_id', id).eq('status', 'paid').maybeSingle(),
     ]);

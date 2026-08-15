@@ -253,14 +253,7 @@ export class PagamentosService {
   async processarWebhook(evento: any) {
     const payload = evento?.data ?? evento;
     const pagbankOrderId: string = payload?.id ?? payload?.reference_id;
-    const charges: any[] = payload?.charges ?? [];
-    const payments: any[] = payload?.payments ?? [];
-
-    const detalhe = charges[0] ?? payments[0];
-    if (!detalhe) return { ignorado: true };
-
-    const statusPagbank: string = detalhe?.status ?? payload?.status ?? '';
-    const pago = STATUS_PAGOS.includes(statusPagbank);
+    if (!pagbankOrderId) return { ignorado: true };
 
     const { data: pagamento } = await this.supabase.client
       .from('pagamentos')
@@ -270,6 +263,24 @@ export class PagamentosService {
 
     if (!pagamento) return { ignorado: true, motivo: 'pagamento não encontrado' };
     if (pagamento.status === 'paid') return { ignorado: true, motivo: 'já processado' };
+
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('restaurant_id')
+      .eq('id', pagamento.order_id)
+      .maybeSingle();
+    if (!pedido) return { ignorado: true, motivo: 'pedido não encontrado' };
+
+    // PagBank não assina notificações — nunca confiar no status vindo no corpo
+    // do POST. Reconsulta a ordem direto na API do PagBank e decide a partir
+    // dessa resposta autoritativa (evita marcar "pago" via webhook forjado).
+    const { client } = await this.getPagBankClient(pedido.restaurant_id);
+    const ordemReal = await client.buscarOrdem(pagbankOrderId);
+    const detalhe = ordemReal?.charges?.[0] ?? ordemReal?.payments?.[0];
+    if (!detalhe) return { ignorado: true };
+
+    const statusPagbank: string = detalhe?.status ?? '';
+    const pago = STATUS_PAGOS.includes(statusPagbank);
 
     const novoStatus = pago ? 'paid' : statusPagbank === 'DECLINED' ? 'declined' : pagamento.status;
 

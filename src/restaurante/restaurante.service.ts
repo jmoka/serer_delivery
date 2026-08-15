@@ -2361,7 +2361,7 @@ export class RestauranteService {
   }
 
   async buscarPedidoDoRestaurante(restaurantId: number, pedidoId: number) {
-    const resultado = await this.pedidos.buscar(pedidoId);
+    const resultado = await this.pedidos.buscarBruto(pedidoId);
     if (resultado.pedido.restaurant_id !== restaurantId) {
       throw new NotFoundException('Pedido não encontrado neste restaurante');
     }

@@ -2,6 +2,7 @@ import { Body, Controller, Get, Patch, Post, Req, UploadedFile, UseGuards, UseIn
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtGuard } from '../auth/jwt.guard';
 import { PerfilService } from './perfil.service';
+import { UpdatePerfilDto } from './dto/update-perfil.dto';
 
 @Controller('perfil')
 @UseGuards(JwtGuard)
@@ -14,10 +15,7 @@ export class PerfilController {
   }
 
   @Patch()
-  update(
-    @Req() req: any,
-    @Body() body: { name?: string; phone_e164?: string; address_json?: Record<string, any> },
-  ) {
+  update(@Req() req: any, @Body() body: UpdatePerfilDto) {
     return this.service.updateMeuPerfil(req.userId, body);
   }
 

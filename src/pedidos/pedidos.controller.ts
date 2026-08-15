@@ -42,8 +42,8 @@ export class PedidosController {
   // Admin ou dono do pedido
   @Get(':id')
   @UseGuards(JwtGuard)
-  buscar(@Param('id', ParseIntPipe) id: number) {
-    return this.service.buscar(id);
+  buscar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.buscar(id, req.userId, req.userRole);
   }
 
   // Cliente autenticado cria pedido

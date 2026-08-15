@@ -753,14 +753,7 @@ export class PlanosService {
   async processarWebhook(evento: any) {
     const payload = evento?.data ?? evento;
     const pagbankOrderId: string = payload?.id ?? payload?.reference_id;
-    const charges: any[] = payload?.charges ?? [];
-    const payments: any[] = payload?.payments ?? [];
-
-    const detalhe = charges[0] ?? payments[0];
-    if (!detalhe) return { ignorado: true };
-
-    const statusPagbank: string = detalhe?.status ?? payload?.status ?? '';
-    if (!STATUS_PAGOS.includes(statusPagbank)) return { ignorado: true };
+    if (!pagbankOrderId) return { ignorado: true };
 
     const { data: fatura } = await this.supabase.client
       .from('plano_faturas')
@@ -770,6 +763,17 @@ export class PlanosService {
 
     if (!fatura) return { ignorado: true, motivo: 'fatura não encontrada' };
     if (fatura.status === 'paga') return { ignorado: true, motivo: 'já processado' };
+
+    // PagBank não assina notificações — nunca confiar no status vindo no corpo
+    // do POST. Reconsulta a ordem direto na API do PagBank (mesma correção
+    // aplicada em pagamentos.service.ts) antes de marcar a fatura como paga.
+    const { client } = await this.clientPlataforma();
+    const ordemReal = await client.buscarOrdem(pagbankOrderId);
+    const detalhe = ordemReal?.charges?.[0] ?? ordemReal?.payments?.[0];
+    if (!detalhe) return { ignorado: true };
+
+    const statusPagbank: string = detalhe?.status ?? '';
+    if (!STATUS_PAGOS.includes(statusPagbank)) return { ignorado: true };
 
     await this.supabase.client
       .from('plano_faturas')
