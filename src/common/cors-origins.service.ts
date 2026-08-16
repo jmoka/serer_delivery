@@ -47,4 +47,12 @@ export class CorsOriginsService {
     }
     return this.cache.origens.has(dominio);
   }
+
+  // Domínio "base" da plataforma (app principal/dev, vem de APP_ALLOWED_ORIGINS) —
+  // não é White Label de nenhuma loja específica, é compartilhado por todas.
+  // Usado por RestaurantOwnerGuard pra não confundir "acesso pelo domínio principal"
+  // com "acesso pelo domínio custom de outra loja".
+  ehDominioBase(origin: string): boolean {
+    return this.origensBase().includes(normalizarDominio(origin));
+  }
 }
