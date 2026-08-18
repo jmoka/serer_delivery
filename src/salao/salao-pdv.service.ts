@@ -97,12 +97,7 @@ export class SalaoPdvService {
     const nomeCompleto = userData?.user?.user_metadata?.name as string | undefined;
     const abertoPorNome = nomeCompleto?.trim().split(' ')[0] || null;
 
-    const inicioDoDia = new Date();
-    inicioDoDia.setHours(0, 0, 0, 0);
-    const { count } = await this.supabase.client
-      .from('orders').select('id', { count: 'exact', head: true })
-      .eq('restaurant_id', restaurantId).eq('canal', 'presencial').gte('created_at', inicioDoDia.toISOString());
-    const numeroComanda = (count ?? 0) + 1;
+    const numeroComanda = await this.proximoNumeroComanda(restaurantId);
 
     const { data: comanda, error } = await this.supabase.client
       .from('orders')
@@ -127,6 +122,18 @@ export class SalaoPdvService {
     }
 
     return this.comandaDetalhe(comanda.id, restaurantId);
+  }
+
+  // Numeração diária compartilhada por mesa/comanda avulsa e venda balcão — mesmo
+  // contador (ver abrirComanda e abrirVendaBalcao), pra todo ticket impresso ter um
+  // número único no dia e poder ser buscado pelo código de barras da comanda.
+  private async proximoNumeroComanda(restaurantId: number): Promise<number> {
+    const inicioDoDia = new Date();
+    inicioDoDia.setHours(0, 0, 0, 0);
+    const { count } = await this.supabase.client
+      .from('orders').select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId).eq('canal', 'presencial').gte('created_at', inicioDoDia.toISOString());
+    return (count ?? 0) + 1;
   }
 
   async comandasAbertas(restaurantId: number) {
@@ -350,6 +357,7 @@ export class SalaoPdvService {
     const { data: userData } = await this.supabase.client.auth.admin.getUserById(userId);
     const nomeCompleto = userData?.user?.user_metadata?.name as string | undefined;
     const abertoPorNome = nomeCompleto?.trim().split(' ')[0] || null;
+    const numeroComanda = await this.proximoNumeroComanda(restaurantId);
 
     const { data: venda, error } = await this.supabase.client
       .from('orders')
@@ -362,6 +370,7 @@ export class SalaoPdvService {
         caixa_id: caixaAberto.id,
         is_venda_balcao: true,
         aberto_por_nome: abertoPorNome,
+        numero_comanda: numeroComanda,
       })
       .select('id')
       .single();

@@ -970,9 +970,32 @@ export class SalaoService {
     return texto.normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '');
   }
 
+  // Código de barras CODE128 (subset C — só dígitos, mais compacto) via comando ESC/POS
+  // "GS k" no formato de tamanho explícito (m=73), sem terminador NUL — mesma restrição do
+  // Postgres TEXT que já vale pro resto do ticket (ver MARCADOR_NEGRITO_OFF acima). O valor
+  // codificado é o número da comanda com zero-padding par (Subset C exige par de dígitos),
+  // igual ao usado no fallback de navegador (ver barcodeValue em utils/printComanda.js) —
+  // assim o leitor devolve o mesmo texto pra buscar a comanda em qualquer um dos dois casos.
+  // Obs: formato validado contra a spec ESC/POS padrão (Epson TM/clones); não testado ainda
+  // em impressora física — se algum modelo não reconhecer, o pior caso é essas linhas saírem
+  // como lixo no papel, sem afetar o resto do ticket.
+  private gerarBarcodeEscPos(numeroComanda: number): string {
+    let codigo = String(numeroComanda).padStart(8, '0');
+    if (codigo.length % 2 !== 0) codigo = '0' + codigo;
+
+    const GS_HRI_ABAIXO = '\x1d\x48\x02'; // GS H 2 — texto legível impresso abaixo do código
+    const GS_ALTURA = '\x1d\x68\x50'; // GS h 80 — altura em pontos
+    const GS_LARGURA = '\x1d\x77\x02'; // GS w 2 — largura do módulo (fina, cabe no papel de 58/80mm)
+    const dados = `{C${codigo}`; // {C = seleciona Code Set C (numérico) do CODE128
+    const GS_BARCODE = '\x1d\x6b\x49' + String.fromCharCode(dados.length) + dados; // GS k 73 n [dados]
+
+    return GS_HRI_ABAIXO + GS_ALTURA + GS_LARGURA + GS_BARCODE;
+  }
+
   formatarTicketTexto(
     setor: string,
     comanda: {
+      numero_comanda?: number | null;
       mesas?: { numero: number; nome: string | null } | null;
       cliente_mesa_nome?: string | null;
       cliente_mesa_telefone?: string | null;
@@ -998,6 +1021,10 @@ export class SalaoService {
         this.removerAcentos(`Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}`),
       );
     }
+    // Impressora térmica só alimenta o papel pra frente (não tem como "voltar" pra
+    // desenhar ao lado do título) — diferente do ticket de navegador, aqui o código de
+    // barras fica empilhado logo no topo, não lado a lado.
+    if (comanda.numero_comanda) linhas.push(this.gerarBarcodeEscPos(comanda.numero_comanda));
     if (comanda.garcons?.nome) linhas.push(this.removerAcentos(`Garcom: ${comanda.garcons.nome}`));
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(`Cliente: ${comanda.cliente_mesa_nome}`));
     if (comanda.cliente_mesa_telefone) linhas.push(`Whatsapp: ${comanda.cliente_mesa_telefone}`);
@@ -1023,6 +1050,7 @@ export class SalaoService {
   formatarReciboTexto(
     restauranteNome: string,
     comanda: {
+      numero_comanda?: number | null;
       mesas?: { numero: number; nome: string | null } | null;
       mesa_id?: number | null;
       cliente_mesa_nome?: string | null;
@@ -1051,6 +1079,7 @@ export class SalaoService {
     linhas.push(this.removerAcentos(restauranteNome ?? 'RESTAURANTE'));
     linhas.push('RECIBO DE PAGAMENTO');
     linhas.push(comanda.mesa_id ? this.removerAcentos(`Mesa ${comanda.mesas?.numero ?? comanda.mesa_id}`) : 'Venda balcao');
+    if (comanda.numero_comanda) linhas.push(this.gerarBarcodeEscPos(comanda.numero_comanda));
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
     linhas.push(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }));
     linhas.push('--------------------------------');
@@ -1130,7 +1159,7 @@ export class SalaoService {
   // cliente (QR, sem login) só pode solicitar conferência, nunca gerar isso direto.
   formatarConferenciaTexto(
     restauranteNome: string,
-    comanda: { mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null; garcons?: { nome: string } | null },
+    comanda: { numero_comanda?: number | null; mesas?: { numero: number; nome: string | null } | null; cliente_mesa_nome?: string | null; garcons?: { nome: string } | null },
     itens: { product_name?: string; quantity: number; unit_price?: number }[],
     valores: { desconto?: number; acrescimo?: number; gorjeta?: number; taxaCartao?: number; formaPagamento?: string },
     pagamentos?: { valor: number; forma_pagamento: string; origem: string; taxa_cartao_valor?: number }[],
@@ -1147,6 +1176,7 @@ export class SalaoService {
     if (comanda.mesas) {
       linhas.push(this.removerAcentos(`Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}`));
     }
+    if (comanda.numero_comanda) linhas.push(this.gerarBarcodeEscPos(comanda.numero_comanda));
     if (comanda.cliente_mesa_nome) linhas.push(this.removerAcentos(comanda.cliente_mesa_nome));
     if (comanda.garcons?.nome) linhas.push(this.removerAcentos(`Garcom: ${comanda.garcons.nome}`));
     linhas.push(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }));
