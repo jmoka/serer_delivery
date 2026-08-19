@@ -519,51 +519,60 @@ export class SalaoService {
   }
 
   async minhasComandas(garcomId: number) {
+    const CAMPOS = 'id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at, conferencia_solicitada_em, conferencia_vista_garcom_em, ultimo_pedido_cliente_em';
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at, conferencia_solicitada_em, conferencia_vista_garcom_em, ultimo_pedido_cliente_em')
+      .select(CAMPOS)
       .eq('garcom_id', garcomId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
       .order('created_at', { ascending: false });
     if (error) throw error;
-    return data;
+
+    // Comanda já paga mas com item ainda não entregue continua na lista — cliente pode
+    // pagar adiantado e só receber o prato depois (ver `pagar`), então o garçom não pode
+    // perder de vista o que ainda falta levar só porque o caixa já cobrou.
+    const { data: itensPendentes } = await this.supabase.client
+      .from('order_items')
+      .select(`order_id, orders!inner(${CAMPOS}, garcom_id, canal)`)
+      .eq('orders.garcom_id', garcomId)
+      .eq('orders.canal', 'presencial')
+      .eq('orders.status', 'paga')
+      .in('status', ['preparando', 'pronto'])
+      .eq('entregue_garcom', false);
+
+    const pagasComPendencia = new Map<number, any>();
+    for (const i of (itensPendentes ?? []) as any[]) {
+      if (i.orders && !pagasComPendencia.has(i.orders.id)) pagasComPendencia.set(i.orders.id, i.orders);
+    }
+
+    return [...(data ?? []), ...pagasComPendencia.values()];
   }
 
-  // Itens prontos pra buscar, das comandas abertas desse garçom — o portal dele faz
-  // polling nisso pra tocar o alarme sonoro (ver useNotificacaoSonora no front).
+  // Itens prontos pra buscar, desse garçom — o portal dele faz polling nisso pra tocar
+  // o alarme sonoro (ver useNotificacaoSonora no front). Não filtra por status da
+  // comanda (aberta/fechada_garcom/paga) de propósito: cliente pode pagar adiantado e
+  // só receber o prato depois (ver `pagar`, que não exige entrega confirmada pra
+  // fechar) — o alerta tem que continuar tocando até o garçom confirmar a entrega,
+  // mesmo com a comanda já paga.
   async itensProntos(garcomId: number) {
-    const { data: comandas } = await this.supabase.client
-      .from('orders')
-      .select('id, numero_comanda, mesa_id, cliente_mesa_nome, mesas(numero, nome)')
-      .eq('garcom_id', garcomId)
-      .eq('canal', 'presencial')
-      .in('status', ['aberta', 'fechada_garcom']);
-
-    const comandaIds = (comandas ?? []).map((c: any) => c.id);
-    if (!comandaIds.length) return [];
-
-    const comandaMap = new Map((comandas ?? []).map((c: any) => [c.id, c]));
-
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('id, order_id, quantity, products(name)')
-      .in('order_id', comandaIds)
+      .select('id, order_id, quantity, products(name), orders!inner(garcom_id, canal, numero_comanda, mesa_id, cliente_mesa_nome, mesas(numero, nome))')
+      .eq('orders.garcom_id', garcomId)
+      .eq('orders.canal', 'presencial')
       .eq('status', 'pronto')
       .eq('entregue_garcom', false);
 
-    return (itens ?? []).map((i: any) => {
-      const comanda = comandaMap.get(i.order_id);
-      return {
-        item_id: i.id,
-        order_id: i.order_id,
-        numero_comanda: comanda?.numero_comanda ?? i.order_id,
-        mesa: comanda?.mesas ? `Mesa ${comanda.mesas.numero}${comanda.mesas.nome ? ' - ' + comanda.mesas.nome : ''}` : null,
-        cliente: comanda?.cliente_mesa_nome ?? null,
-        product_name: i.products?.name,
-        quantity: i.quantity,
-      };
-    });
+    return (itens ?? []).map((i: any) => ({
+      item_id: i.id,
+      order_id: i.order_id,
+      numero_comanda: i.orders?.numero_comanda ?? i.order_id,
+      mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+      cliente: i.orders?.cliente_mesa_nome ?? null,
+      product_name: i.products?.name,
+      quantity: i.quantity,
+    }));
   }
 
   // Fila de preparo do restaurante inteiro (não só as comandas do garçom logado) — o
@@ -1334,7 +1343,7 @@ export class SalaoService {
   async reimprimirItem(itemId: number, restaurantId: number) {
     const { data: item } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, observacao, impressora_id, order_id, products(name, description), orders(id, restaurant_id, mesas(numero, nome), cliente_mesa_nome, cliente_mesa_telefone, garcons(nome))')
+      .select('id, quantity, observacao, impressora_id, order_id, products(name, description), orders(id, restaurant_id, numero_comanda, mesas(numero, nome), cliente_mesa_nome, cliente_mesa_telefone, garcons(nome))')
       .eq('id', itemId)
       .maybeSingle();
     if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
@@ -1382,6 +1391,11 @@ export class SalaoService {
       .select('id, status, entregue_garcom')
       .eq('order_id', comandaId);
     if (!itens?.length) throw new BadRequestException('Comanda sem itens não pode ser fechada');
+
+    const temItemNaoEnviado = itens.some((i) => i.status === 'pendente');
+    if (temItemNaoEnviado) {
+      throw new BadRequestException('Tem item ainda não enviado pra produção: envie os itens antes de fechar a comanda');
+    }
 
     const temEntregaPendente = itens.some((i) => ['preparando', 'pronto'].includes(i.status) && !i.entregue_garcom);
     if (temEntregaPendente) {

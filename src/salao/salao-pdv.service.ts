@@ -553,12 +553,19 @@ export class SalaoPdvService {
     const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', id);
 
-    // Venda balcão só manda os itens pra cozinha/bar quando a venda é finalizada (ver
-    // `pagar`) — o cliente pode ficar montando o carrinho sem disparar preparo cedo demais.
-    if (!comanda.is_venda_balcao) {
-      await this.salaoService.enviarItensComoRestaurante(id, comanda);
-    }
+    // Item fica pendente até o operador confirmar com "Enviar novos itens" (ver
+    // enviarItensPendentes) — evita que a cozinha veja e logo em seguida perca um item
+    // que foi corrigido/apagado por engano na hora do lançamento. Venda balcão segue o
+    // mesmo caminho e só dispara o envio de fato lá no pagamento (ver `pagar`).
     return this.comandaDetalhe(id, restaurantId);
+  }
+
+  // Botão "Enviar novos itens" do caixa/balcão — mesma ideia do garçom (enviarItens em
+  // salao.service.ts), só que sem exigir garcom_id. Fechar/pagar a comanda com item ainda
+  // pendente é bloqueado (ver `pagar`), então esse é o único jeito de mandar pra produção.
+  async enviarItensPendentes(id: number, restaurantId: number) {
+    const comanda = await this.buscarComanda(id, restaurantId);
+    return this.salaoService.enviarItensComoRestaurante(id, comanda);
   }
 
   // Estabelecimento pode remover qualquer item (pendente ou já enviado) — diferente do
@@ -927,7 +934,13 @@ export class SalaoPdvService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
 
-    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price, products(name)').eq('order_id', id);
+    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price, status, products(name)').eq('order_id', id);
+    // Venda balcão é a exceção: ali todo item fica pendente de propósito até esse exato
+    // pagamento (ver `adicionarItens`), que é quem dispara o envio — não bloqueia. Comanda
+    // normal já deveria ter mandado tudo antes via "Enviar novos itens".
+    if (!comanda.is_venda_balcao && (itens ?? []).some((i: any) => i.status === 'pendente')) {
+      throw new BadRequestException('Tem item ainda não enviado pra produção: envie os itens antes de fechar a comanda');
+    }
     const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     const totalFinal = subtotal - (comanda.desconto_valor ?? 0) + (comanda.acrescimo_valor ?? 0);
 

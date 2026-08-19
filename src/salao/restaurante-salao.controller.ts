@@ -84,6 +84,11 @@ export class RestauranteSalaoController {
     return this.service.adicionarItens(id, req.restaurantId, body.itens);
   }
 
+  @Post('comandas/:id/enviar')
+  enviarItensPendentes(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.enviarItensPendentes(id, req.restaurantId);
+  }
+
   @Patch('comandas/:id/itens/:itemId')
   editarItem(
     @Param('id', ParseIntPipe) id: number,
