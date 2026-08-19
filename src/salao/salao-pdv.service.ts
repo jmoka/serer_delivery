@@ -383,9 +383,11 @@ export class SalaoPdvService {
   // enviado pra produção (enviado/preparando/pronto) e ainda não entregue (entregue_garcom
   // cobre delivery de garçom E balcão, já que balcão não tem garçom envolvido). Agrupa por
   // comanda pra chamar o cliente uma vez só mesmo com itens de setores diferentes
-  // (cozinha+bar). Comanda fica com status 'preparando' até TODOS os itens ficarem
-  // 'pronto' — só aí vira 'pronto' e entra no ciclo de chamada (bipe/flash) da tela.
-  // Ordenada pela hora do primeiro item enviado, então reflete a ordem real dos pedidos.
+  // (cozinha+bar). Comanda começa 'aguardando' (nenhum item ainda iniciado), vira
+  // 'preparando' assim que qualquer item entra em preparo, e só vira 'pronto' quando
+  // TODOS os itens ficarem prontos — aí sim entra no ciclo de chamada (bipe/flash) da
+  // tela. Ordenada pela hora do primeiro item enviado, então reflete a ordem real dos
+  // pedidos.
   //
   // Identificação na tela: NUNCA o nome de quem abriu a venda (o operador/caixa) — o
   // cliente não faz ideia de quem é o caixa. Usa o número da comanda (sempre visível,
@@ -422,10 +424,11 @@ export class SalaoPdvService {
       if (i.enviado_em < c.enviado_em) c.enviado_em = i.enviado_em;
     }
 
-    const fila = [...porComanda.values()].map((c) => ({
-      ...c,
-      status: c.itens.every((item: any) => item.status === 'pronto') ? 'pronto' : 'preparando',
-    }));
+    const fila = [...porComanda.values()].map((c) => {
+      const todosProntos = c.itens.every((item: any) => item.status === 'pronto');
+      const nenhumIniciado = c.itens.every((item: any) => item.status === 'enviado');
+      return { ...c, status: todosProntos ? 'pronto' : nenhumIniciado ? 'aguardando' : 'preparando' };
+    });
     fila.sort((a, b) => a.enviado_em.localeCompare(b.enviado_em));
 
     return { fila };
