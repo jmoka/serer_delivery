@@ -8,6 +8,8 @@ export interface ImpressoraBody {
   endereco?: string;
   ativo?: boolean;
   nome_sistema?: string;
+  ponto_preparo?: boolean;
+  icone?: string;
 }
 
 @Injectable()
@@ -17,7 +19,7 @@ export class ImpressorasService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome, setor, tipo_conexao, endereco, ativo, nome_sistema, token, created_at')
+      .select('id, nome, setor, tipo_conexao, endereco, ativo, nome_sistema, token, ponto_preparo, icone, created_at')
       .eq('restaurant_id', restaurantId)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -36,6 +38,8 @@ export class ImpressorasService {
         tipo_conexao: body.tipo_conexao ?? 'rede',
         endereco: body.endereco ?? null,
         nome_sistema: body.nome_sistema ?? null,
+        ponto_preparo: body.ponto_preparo ?? false,
+        icone: body.icone ?? 'ChefHat',
       })
       .select()
       .single();
@@ -66,6 +70,8 @@ export class ImpressorasService {
     if (body.endereco !== undefined) campos.endereco = body.endereco;
     if (body.ativo !== undefined) campos.ativo = body.ativo;
     if (body.nome_sistema !== undefined) campos.nome_sistema = body.nome_sistema;
+    if (body.ponto_preparo !== undefined) campos.ponto_preparo = body.ponto_preparo;
+    if (body.icone !== undefined) campos.icone = body.icone;
 
     const { data, error } = await this.supabase.client
       .from('impressoras')
