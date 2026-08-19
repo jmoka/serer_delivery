@@ -815,15 +815,29 @@ export class SalaoPdvService {
       throw new BadRequestException('Só é possível cancelar comandas abertas ou aguardando pagamento');
     }
 
+    if (comanda.mesa_id) {
+      await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);
+    }
+
+    // Comanda vazia (nunca teve produto lançado, ex: mesa aberta e fechada sem pedir
+    // nada) não deixa rastro nenhum — apaga a linha inteira em vez de só marcar
+    // 'canceled', pra não acumular lixo no histórico/relatórios.
+    const { count } = await this.supabase.client
+      .from('order_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('order_id', id);
+    if (!count) {
+      const { error } = await this.supabase.client.from('orders').delete().eq('id', id);
+      if (error) throw error;
+      return { ok: true, deletada: true };
+    }
+
     const { error } = await this.supabase.client.from('orders').update({ status: 'canceled' }).eq('id', id);
     if (error) throw error;
 
     await this.estoque.restaurarItensDoPedido(id);
     await this.salaoService.estornarPagamentosDaComanda(restaurantId, id, `Comanda #${comanda.numero_comanda ?? id} (cancelada)`);
 
-    if (comanda.mesa_id) {
-      await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);
-    }
     return { ok: true };
   }
 
