@@ -379,40 +379,56 @@ export class SalaoPdvService {
     return this.comandaDetalhe(venda.id, restaurantId);
   }
 
-  // Painel de chamada (Salão): lista comandas de venda balcão com ao menos 1 item
-  // 'pronto' ainda não entregue (entregue_garcom cobre delivery de garçom E balcão,
-  // já que balcão não tem garçom envolvido). Agrupa por comanda pra chamar o cliente
-  // uma vez só mesmo com itens de setores diferentes (cozinha+bar).
+  // Painel de chamada (Salão): lista comandas de venda balcão com ao menos 1 item já
+  // enviado pra produção (enviado/preparando/pronto) e ainda não entregue (entregue_garcom
+  // cobre delivery de garçom E balcão, já que balcão não tem garçom envolvido). Agrupa por
+  // comanda pra chamar o cliente uma vez só mesmo com itens de setores diferentes
+  // (cozinha+bar). Comanda fica com status 'preparando' até TODOS os itens ficarem
+  // 'pronto' — só aí vira 'pronto' e entra no ciclo de chamada (bipe/flash) da tela.
+  // Ordenada pela hora do primeiro item enviado, então reflete a ordem real dos pedidos.
+  //
+  // Identificação na tela: NUNCA o nome de quem abriu a venda (o operador/caixa) — o
+  // cliente não faz ideia de quem é o caixa. Usa o número da comanda (sempre visível,
+  // impresso no ticket que o cliente fica com a mão) + o nome do cliente quando ele
+  // informa (ver editarClienteComandaSalao); sem nome, mostra só o número.
   async filaChamadaBalcao(restaurantId: number) {
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, status, pronto_em, entregue_garcom, order_id, products(name), orders!inner(id, restaurant_id, is_venda_balcao, aberto_por_nome, chamado_count, ultima_chamada_em)')
+      .select('id, product_id, quantity, status, enviado_em, pronto_em, entregue_garcom, order_id, products(name), orders!inner(id, restaurant_id, is_venda_balcao, numero_comanda, cliente_mesa_nome, chamado_count, ultima_chamada_em)')
       .eq('orders.restaurant_id', restaurantId)
       .eq('orders.is_venda_balcao', true)
-      .eq('status', 'pronto')
+      .in('status', ['enviado', 'preparando', 'pronto'])
       .eq('entregue_garcom', false)
-      .order('pronto_em', { ascending: true });
+      .order('enviado_em', { ascending: true });
     if (error) throw error;
 
     const porComanda = new Map<number, any>();
     for (const i of itens as any[]) {
       const o = i.orders;
       if (!porComanda.has(o.id)) {
+        const nomeCliente = o.cliente_mesa_nome && o.cliente_mesa_nome !== 'Venda balcão' ? o.cliente_mesa_nome : null;
+        const identificacao = o.numero_comanda ? `Nº ${o.numero_comanda}` : 'Balcão';
         porComanda.set(o.id, {
           order_id: o.id,
-          cliente: o.aberto_por_nome ?? 'Balcão',
+          cliente: nomeCliente ? `${identificacao} - ${nomeCliente}` : identificacao,
           chamado_count: o.chamado_count ?? 0,
           ultima_chamada_em: o.ultima_chamada_em,
-          pronto_em: i.pronto_em,
+          enviado_em: i.enviado_em,
           itens: [],
         });
       }
       const c = porComanda.get(o.id);
-      c.itens.push({ id: i.id, product_name: i.products?.name, quantity: i.quantity });
-      if (i.pronto_em < c.pronto_em) c.pronto_em = i.pronto_em;
+      c.itens.push({ id: i.id, product_name: i.products?.name, quantity: i.quantity, status: i.status });
+      if (i.enviado_em < c.enviado_em) c.enviado_em = i.enviado_em;
     }
 
-    return { fila: [...porComanda.values()].sort((a, b) => a.pronto_em.localeCompare(b.pronto_em)) };
+    const fila = [...porComanda.values()].map((c) => ({
+      ...c,
+      status: c.itens.every((item: any) => item.status === 'pronto') ? 'pronto' : 'preparando',
+    }));
+    fila.sort((a, b) => a.enviado_em.localeCompare(b.enviado_em));
+
+    return { fila };
   }
 
   // Incrementa o contador de chamados (bipe+pisca) — chamado pelo front a cada ciclo
