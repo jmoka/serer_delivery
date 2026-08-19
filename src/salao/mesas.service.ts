@@ -79,4 +79,25 @@ export class MesasService {
     if (error) throw error;
     return { ok: true };
   }
+
+  // Remove todas as mesas livres de uma vez (botão "Limpar mesas"). Mesas ocupadas/em
+  // atendimento são puladas, igual à regra individual do remover() acima — nunca some
+  // uma mesa com comanda aberta debaixo do garçom.
+  async removerTodas(restaurantId: number) {
+    const { data: mesas, error } = await this.supabase.client
+      .from('mesas')
+      .select('id, status')
+      .eq('restaurant_id', restaurantId);
+    if (error) throw error;
+
+    const livres = (mesas ?? []).filter((m: any) => m.status === 'livre').map((m: any) => m.id);
+    const bloqueadas = (mesas ?? []).length - livres.length;
+
+    if (livres.length) {
+      const { error: delError } = await this.supabase.client.from('mesas').delete().in('id', livres);
+      if (delError) throw delError;
+    }
+
+    return { removidas: livres.length, bloqueadas };
+  }
 }

@@ -22,6 +22,11 @@ export class RestauranteMesasController {
     return this.service.criarEmLote(req.restaurantId, body.de, body.ate);
   }
 
+  @Delete('todas')
+  removerTodas(@Req() req: any) {
+    return this.service.removerTodas(req.restaurantId);
+  }
+
   @Delete(':id')
   remover(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.remover(id, req.restaurantId);
