@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
@@ -37,6 +37,27 @@ export class MotoboyAuthService {
     private config: ConfigService,
     private supabaseJwt: SupabaseJwtService,
   ) {}
+
+  // Motoboy e dono de estabelecimento precisam ser contas separadas — barra
+  // ANTES de criar/vincular qualquer coisa (senão fica cadastro de motoboy
+  // órfão se a checagem só rodasse dentro de vincularContaCliente). Regra
+  // espelhada em OnboardingController.registrarInicial.
+  private async exigirContaSemRestaurante(supabaseAccessToken?: string) {
+    if (!supabaseAccessToken) return;
+
+    const verified = await this.supabaseJwt.verificar(supabaseAccessToken);
+    const userId = verified?.sub;
+    if (!userId) return;
+
+    const { data } = await this.supabase.client
+      .from('restaurants')
+      .select('id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (data) {
+      throw new ForbiddenException('Esta conta já é de um estabelecimento. Cadastre-se como motoboy usando outra conta.');
+    }
+  }
 
   // Se veio um token de cliente logado, vincula o motoboy a essa conta e
   // promove user_profiles.role pra 'motoboy' — a pessoa deixa de contar como
@@ -112,6 +133,8 @@ export class MotoboyAuthService {
   }
 
   async cadastro(body: CadastroMotoboyBody) {
+    await this.exigirContaSemRestaurante(body.supabase_access_token);
+
     if (!body.email && !body.phone) throw new BadRequestException('Informe telefone ou e-mail');
     if (!body.password || body.password.length < 8) throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
     if (body.email && !EMAIL_RE.test(body.email)) throw new BadRequestException('E-mail inválido');
@@ -178,6 +201,8 @@ export class MotoboyAuthService {
 
   // Motoboys antigos (criados antes do login por senha) — completam cadastro usando o token legado.
   async completarCadastro(motoboyId: number, body: CadastroMotoboyBody) {
+    await this.exigirContaSemRestaurante(body.supabase_access_token);
+
     if (!body.password || body.password.length < 8) throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
 
     const passwordHash = await bcrypt.hash(body.password, 10);

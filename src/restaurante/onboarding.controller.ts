@@ -110,6 +110,18 @@ export class OnboardingController {
       if (!body.name?.trim()) throw new BadRequestException('Nome do estabelecimento é obrigatório.');
       if (!body.plano_id) throw new BadRequestException('Selecione um plano para continuar.');
 
+      // Motoboy e dono de estabelecimento precisam ser contas separadas — essa
+      // conta já está vinculada a um cadastro de motoboy (ver regra espelhada em
+      // MotoboyAuthService.exigirContaSemRestaurante).
+      const { data: motoboyVinculado } = await this.supabase.client
+        .from('motoboys')
+        .select('id')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (motoboyVinculado) {
+        throw new BadRequestException('Esta conta já está cadastrada como motoboy. Cadastre o estabelecimento usando outra conta.');
+      }
+
       const slug = body.name.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').trim();
 
       const { data: novo, error } = await this.supabase.client
