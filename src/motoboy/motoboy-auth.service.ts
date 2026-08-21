@@ -11,8 +11,8 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // igual ao expiresIn do JWT
 // identificador/email/phone entram direto num filtro .or() do PostgREST — sem
 // validar formato, um valor com vírgula/parênteses injeta cláusulas extras
 // no filtro (ex. ",id.gt.0").
-const EMAIL_RE = /^[^\s,()]+@[^\s,()]+\.[^\s,()]+$/;
-const PHONE_RE = /^\+?[0-9]{8,15}$/;
+export const EMAIL_RE = /^[^\s,()]+@[^\s,()]+\.[^\s,()]+$/;
+export const PHONE_RE = /^\+?[0-9]{8,15}$/;
 
 export interface CadastroMotoboyBody {
   name: string;

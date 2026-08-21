@@ -1,9 +1,18 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { SupabaseService } from '../supabase/supabase.service';
 import { ComissaoService } from './comissao.service';
 import { GeocodingService } from './geocoding.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { SalaoService } from '../salao/salao.service';
+import { EMAIL_RE, PHONE_RE } from './motoboy-auth.service';
+
+export interface MotoboyPeloRestauranteBody {
+  name?: string;
+  phone?: string;
+  email?: string;
+  password?: string;
+}
 
 const DOC_BUCKET = 'motoboy-documentos';
 const SIGNED_URL_TTL = 60 * 10; // 10 min
@@ -34,12 +43,13 @@ export class MotoboyService {
   private async exigirAfiliacaoAceita(motoboyId: number, restaurantId: number) {
     const { data } = await this.supabase.client
       .from('motoboy_estabelecimentos')
-      .select('id')
+      .select('id, bloqueado')
       .eq('motoboy_id', motoboyId)
       .eq('restaurant_id', restaurantId)
       .eq('status', 'aceito')
       .maybeSingle();
     if (!data) throw new ForbiddenException('Motoboy não está afiliado a este estabelecimento');
+    if (data.bloqueado) throw new ForbiddenException('Motoboy está bloqueado neste estabelecimento');
   }
 
   // Estabelecimento que optou por entregar por conta própria não deve aparecer
@@ -67,7 +77,7 @@ export class MotoboyService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')
-      .select('motoboy:motoboys(id, name, phone, foto_perfil_url, active_session_id, session_expires_at)')
+      .select('bloqueado, motoboy:motoboys(id, name, phone, foto_perfil_url, active_session_id, session_expires_at, criado_por_restaurant_id)')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'aceito');
     if (error) throw error;
@@ -80,10 +90,131 @@ export class MotoboyService {
           ...resto,
           foto_perfil_url: await this.signedUrl(resto.foto_perfil_url),
           sessao_ativa: !!active_session_id && !!session_expires_at && new Date(session_expires_at).getTime() > agora,
+          bloqueado: row.bloqueado,
+          gerenciado_por_mim: resto.criado_por_restaurant_id === restaurantId,
         };
       }),
     );
     return { motoboys };
+  }
+
+  // Cadastro direto: o próprio estabelecimento registra um motoboy seu, sem
+  // passar pelo autocadastro do app + aprovação da plataforma + solicitação de
+  // afiliação — já nasce aprovado e afiliado (o restaurante está vouching por ele).
+  async criarPeloRestaurante(restaurantId: number, body: MotoboyPeloRestauranteBody) {
+    this.validarDadosMotoboy(body, { exigirNome: true, exigirContato: true, exigirSenha: true });
+
+    const { data: existente } = await this.supabase.client
+      .from('motoboys')
+      .select('id')
+      .or(`email.eq.${body.email ?? ''},phone.eq.${body.phone ?? ''}`)
+      .maybeSingle();
+    if (existente) throw new ConflictException('Já existe um cadastro de motoboy com este telefone ou e-mail');
+
+    const passwordHash = await bcrypt.hash(body.password!, 10);
+    const agora = new Date().toISOString();
+
+    const { data: motoboy, error } = await this.supabase.client
+      .from('motoboys')
+      .insert({
+        name: body.name!.trim(),
+        phone: body.phone || null,
+        email: body.email || null,
+        password_hash: passwordHash,
+        precisa_completar_cadastro: false,
+        status_plataforma: 'aprovado',
+        aprovado_em: agora,
+        criado_por_restaurant_id: restaurantId,
+      })
+      .select('id, name, phone, email')
+      .single();
+    if (error) throw error;
+
+    const { error: afilError } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .insert({ motoboy_id: motoboy.id, restaurant_id: restaurantId, status: 'aceito', solicitado_em: agora, respondido_em: agora });
+    if (afilError) throw afilError;
+
+    return { ...motoboy, criado_por_restaurant_id: restaurantId, bloqueado: false, sessao_ativa: false, gerenciado_por_mim: true };
+  }
+
+  private validarDadosMotoboy(
+    body: MotoboyPeloRestauranteBody,
+    opts: { exigirNome: boolean; exigirContato: boolean; exigirSenha: boolean },
+  ) {
+    if (opts.exigirNome && !body.name?.trim()) throw new BadRequestException('Informe o nome do motoboy');
+    if (opts.exigirContato && !body.phone && !body.email) throw new BadRequestException('Informe telefone ou e-mail');
+    if (body.email && !EMAIL_RE.test(body.email)) throw new BadRequestException('E-mail inválido');
+    if (body.phone && !PHONE_RE.test(body.phone)) throw new BadRequestException('Telefone inválido');
+    if (opts.exigirSenha && (!body.password || body.password.length < 8)) {
+      throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
+    }
+    if (!opts.exigirSenha && body.password && body.password.length < 8) {
+      throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
+    }
+  }
+
+  private async exigirMotoboyGerenciadoPeloRestaurante(motoboyId: number, restaurantId: number) {
+    const { data: mb } = await this.supabase.client
+      .from('motoboys')
+      .select('id, criado_por_restaurant_id')
+      .eq('id', motoboyId)
+      .maybeSingle();
+    if (!mb) throw new NotFoundException('Motoboy não encontrado');
+    if (mb.criado_por_restaurant_id !== restaurantId) {
+      throw new ForbiddenException('Essa ação só é permitida em motoboys cadastrados diretamente por este estabelecimento');
+    }
+  }
+
+  async editarPeloRestaurante(motoboyId: number, restaurantId: number, body: MotoboyPeloRestauranteBody) {
+    await this.exigirMotoboyGerenciadoPeloRestaurante(motoboyId, restaurantId);
+    this.validarDadosMotoboy(body, { exigirNome: false, exigirContato: false, exigirSenha: false });
+
+    const campos: Record<string, any> = {};
+    if (body.name !== undefined) campos.name = body.name.trim();
+    if (body.phone !== undefined) campos.phone = body.phone || null;
+    if (body.email !== undefined) campos.email = body.email || null;
+    if (body.password) campos.password_hash = await bcrypt.hash(body.password, 10);
+    if (Object.keys(campos).length === 0) return { ok: true };
+
+    const { error } = await this.supabase.client.from('motoboys').update(campos).eq('id', motoboyId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Excluir de verdade só é seguro sem histórico de entregas (motoboy_comissoes
+  // referencia motoboy_id com ON DELETE CASCADE — apagaria ganhos já registrados).
+  // Com histórico, orientar a bloquear em vez de excluir.
+  async excluirPeloRestaurante(motoboyId: number, restaurantId: number) {
+    await this.exigirMotoboyGerenciadoPeloRestaurante(motoboyId, restaurantId);
+
+    const { count } = await this.supabase.client
+      .from('motoboy_comissoes')
+      .select('id', { count: 'exact', head: true })
+      .eq('motoboy_id', motoboyId);
+    if ((count ?? 0) > 0) {
+      throw new BadRequestException('Este motoboy já tem entregas registradas — bloqueie em vez de excluir, pra não perder o histórico.');
+    }
+
+    const { error } = await this.supabase.client.from('motoboys').delete().eq('id', motoboyId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Pausa o motoboy pra este restaurante (não pega/recebe pedidos daqui) sem
+  // desfazer a afiliação — diferente de removerAfiliacao, que exige nova solicitação.
+  async bloquearAfiliacao(motoboyId: number, restaurantId: number, bloqueado: boolean) {
+    const { data, error } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .update({ bloqueado, updated_at: new Date().toISOString() })
+      .eq('motoboy_id', motoboyId)
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aceito')
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Afiliação não encontrada');
+    return { ok: true, bloqueado };
   }
 
   async listarSolicitacoes(restaurantId: number, status: 'pendente' | 'aceito' | 'recusado' = 'pendente') {
