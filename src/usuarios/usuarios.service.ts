@@ -70,7 +70,7 @@ export class UsuariosService {
   async listar(params: { busca?: string; role?: string; page: number; limit: number }) {
     let query = this.supabase.client
       .from('user_profiles')
-      .select('id, name, email, role, must_change_password, created_at', { count: 'exact' })
+      .select('id, name, email, role, phone_e164, bloqueado, must_change_password, created_at', { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (params.role) query = query.eq('role', params.role);
@@ -137,6 +137,127 @@ export class UsuariosService {
       acao: body.email && body.senha ? 'trocar_email_e_senha' : body.email ? 'trocar_email' : 'trocar_senha',
       // nunca logar a senha em texto/hash — só metadados
       detalhes: { email_anterior: perfilAntes.email, email_novo: body.email ?? null, senha_alterada: !!body.senha },
+    });
+
+    return { sucesso: true };
+  }
+
+  private static readonly ROLES_VALIDOS = ['admin', 'restaurant_owner', 'customer', 'motoboy'];
+
+  async editar(
+    adminUserId: string,
+    targetUserId: string,
+    body: { name?: string; role?: string; phone_e164?: string },
+  ) {
+    if (body.role && !UsuariosService.ROLES_VALIDOS.includes(body.role)) {
+      throw new BadRequestException('Papel inválido.');
+    }
+
+    const { data: perfilAntes } = await this.supabase.client
+      .from('user_profiles')
+      .select('name, role, phone_e164')
+      .eq('id', targetUserId)
+      .maybeSingle();
+    if (!perfilAntes) throw new NotFoundException('Usuário não encontrado.');
+
+    if (body.role && body.role !== perfilAntes.role && targetUserId === adminUserId) {
+      throw new BadRequestException('Você não pode alterar seu próprio papel.');
+    }
+
+    const payload: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (body.name !== undefined) payload.name = body.name.trim() || null;
+    if (body.role !== undefined) payload.role = body.role;
+    if (body.phone_e164 !== undefined) payload.phone_e164 = body.phone_e164.trim() || null;
+
+    const { data, error } = await this.supabase.client
+      .from('user_profiles')
+      .update(payload)
+      .eq('id', targetUserId)
+      .select('id, name, email, role, phone_e164, bloqueado, must_change_password, created_at')
+      .single();
+    if (error) throw error;
+
+    // Mantém user_metadata.role do JWT sincronizado — é o que os guards
+    // (JwtGuard) leem pra decidir req.userRole sem consultar o banco.
+    if (body.role && body.role !== perfilAntes.role) {
+      await this.supabase.client.auth.admin.updateUserById(targetUserId, {
+        user_metadata: { role: body.role },
+      });
+    }
+
+    await this.supabase.client.from('admin_audit_log').insert({
+      admin_user_id: adminUserId,
+      target_user_id: targetUserId,
+      acao: 'editar_usuario',
+      detalhes: { antes: perfilAntes, depois: body },
+    });
+
+    return data;
+  }
+
+  async bloquear(adminUserId: string, targetUserId: string, bloqueado: boolean) {
+    if (bloqueado && targetUserId === adminUserId) {
+      throw new BadRequestException('Você não pode bloquear sua própria conta.');
+    }
+
+    const { data: perfilAntes } = await this.supabase.client
+      .from('user_profiles')
+      .select('email')
+      .eq('id', targetUserId)
+      .maybeSingle();
+    if (!perfilAntes) throw new NotFoundException('Usuário não encontrado.');
+
+    // ban_duration impede novos logins/refresh no Supabase Auth. Sessões já
+    // emitidas (access token de curta duração) continuam válidas até expirar
+    // ou tentar renovar — mesmo trade-off já aceito em outros pontos do app
+    // (ver revogação de licença), não vale o custo de checar isso em toda
+    // request autenticada.
+    const { error: eBan } = await this.supabase.client.auth.admin.updateUserById(targetUserId, {
+      ban_duration: bloqueado ? '876000h' : 'none',
+    });
+    if (eBan) throw eBan;
+
+    const { data, error } = await this.supabase.client
+      .from('user_profiles')
+      .update({ bloqueado, updated_at: new Date().toISOString() })
+      .eq('id', targetUserId)
+      .select('id, name, email, role, bloqueado')
+      .single();
+    if (error) throw error;
+
+    await this.supabase.client.from('admin_audit_log').insert({
+      admin_user_id: adminUserId,
+      target_user_id: targetUserId,
+      acao: bloqueado ? 'bloquear_usuario' : 'desbloquear_usuario',
+      detalhes: { email: perfilAntes.email },
+    });
+
+    return data;
+  }
+
+  async excluir(adminUserId: string, targetUserId: string) {
+    if (targetUserId === adminUserId) {
+      throw new BadRequestException('Você não pode excluir sua própria conta.');
+    }
+
+    const { data: perfilAntes } = await this.supabase.client
+      .from('user_profiles')
+      .select('email, role')
+      .eq('id', targetUserId)
+      .maybeSingle();
+    if (!perfilAntes) throw new NotFoundException('Usuário não encontrado.');
+
+    // Exclui em auth.users; user_profiles tem FK ON DELETE CASCADE (some
+    // junto). Restaurantes vinculados não são apagados — restaurants.user_id
+    // é ON DELETE SET NULL, então a loja fica sem dono, não é destruída.
+    const { error } = await this.supabase.client.auth.admin.deleteUser(targetUserId);
+    if (error) throw error;
+
+    await this.supabase.client.from('admin_audit_log').insert({
+      admin_user_id: adminUserId,
+      target_user_id: null,
+      acao: 'excluir_usuario',
+      detalhes: { usuario_excluido_id: targetUserId, email: perfilAntes.email, role: perfilAntes.role },
     });
 
     return { sucesso: true };
