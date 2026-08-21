@@ -11,6 +11,26 @@ export class PerfilService {
     private geocoding: GeocodingService,
   ) {}
 
+  // Cobre o caso de alguém ter uma conta de motoboy (tabela própria, sem vínculo
+  // via user_id) com o MESMO email de uma conta comum no Supabase Auth — duas
+  // identidades separadas que coincidem só no email. isMotoboy() no frontend só
+  // enxerga role='motoboy' via user_profiles, então não pega esse caso.
+  async ehMotoboy(userId: string): Promise<boolean> {
+    const { data: up } = await this.supabase.client
+      .from('user_profiles')
+      .select('email')
+      .eq('id', userId)
+      .maybeSingle();
+    if (!up?.email) return false;
+
+    const { data } = await this.supabase.client
+      .from('motoboys')
+      .select('id')
+      .ilike('email', up.email)
+      .maybeSingle();
+    return !!data;
+  }
+
   async getMeuPerfil(userId: string) {
     const { data } = await this.supabase.client
       .from('customers')
