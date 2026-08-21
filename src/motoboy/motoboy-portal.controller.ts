@@ -12,6 +12,11 @@ export class MotoboyPortalController {
     return this.service.infoMotoboy(req.motoboyId);
   }
 
+  @Patch('me')
+  atualizarMe(@Body() body: { name?: string; phone?: string; foto_perfil?: string }, @Req() req: any) {
+    return this.service.atualizarPerfilMotoboy(req.motoboyId, body);
+  }
+
   @Post('solicitar-revisao')
   solicitarRevisao(@Req() req: any) {
     return this.service.solicitarRevisaoPlataforma(req.motoboyId);

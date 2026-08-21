@@ -1,5 +1,4 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
 import { SupabaseService } from '../supabase/supabase.service';
 import { ComissaoService } from './comissao.service';
 import { GeocodingService } from './geocoding.service';
@@ -77,19 +76,17 @@ export class MotoboyService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')
-      .select('bloqueado, motoboy:motoboys(id, name, phone, foto_perfil_url, active_session_id, session_expires_at, criado_por_restaurant_id)')
+      .select('bloqueado, motoboy:motoboys(id, name, phone, foto_perfil_url, criado_por_restaurant_id)')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'aceito');
     if (error) throw error;
 
-    const agora = Date.now();
     const motoboys = await Promise.all(
       (data ?? []).map(async (row: any) => {
-        const { active_session_id, session_expires_at, ...resto } = row.motoboy ?? {};
+        const resto = row.motoboy ?? {};
         return {
           ...resto,
           foto_perfil_url: await this.signedUrl(resto.foto_perfil_url),
-          sessao_ativa: !!active_session_id && !!session_expires_at && new Date(session_expires_at).getTime() > agora,
           bloqueado: row.bloqueado,
           gerenciado_por_mim: resto.criado_por_restaurant_id === restaurantId,
         };
@@ -101,8 +98,10 @@ export class MotoboyService {
   // Cadastro direto: o próprio estabelecimento registra um motoboy seu, sem
   // passar pelo autocadastro do app + aprovação da plataforma + solicitação de
   // afiliação — já nasce aprovado e afiliado (o restaurante está vouching por ele).
+  // Cria uma conta Supabase Auth de verdade (não mais password_hash local) —
+  // e-mail é obrigatório porque é a identidade de login.
   async criarPeloRestaurante(restaurantId: number, body: MotoboyPeloRestauranteBody) {
-    this.validarDadosMotoboy(body, { exigirNome: true, exigirContato: true, exigirSenha: true });
+    this.validarDadosMotoboy(body, { exigirNome: true, exigirEmail: true, exigirSenha: true });
 
     const { data: existente } = await this.supabase.client
       .from('motoboys')
@@ -111,16 +110,28 @@ export class MotoboyService {
       .maybeSingle();
     if (existente) throw new ConflictException('Já existe um cadastro de motoboy com este telefone ou e-mail');
 
-    const passwordHash = await bcrypt.hash(body.password!, 10);
+    const { data: criado, error: authError } = await this.supabase.client.auth.admin.createUser({
+      email: body.email,
+      password: body.password,
+      email_confirm: true,
+      user_metadata: { name: body.name, role: 'motoboy' },
+    });
+    if (authError) {
+      if (authError.status === 422 || authError.message?.toLowerCase().includes('already')) {
+        throw new ConflictException('Já existe uma conta com este e-mail');
+      }
+      throw authError;
+    }
+
     const agora = new Date().toISOString();
 
     const { data: motoboy, error } = await this.supabase.client
       .from('motoboys')
       .insert({
+        user_id: criado.user.id,
         name: body.name!.trim(),
         phone: body.phone || null,
-        email: body.email || null,
-        password_hash: passwordHash,
+        email: body.email,
         precisa_completar_cadastro: false,
         status_plataforma: 'aprovado',
         aprovado_em: agora,
@@ -140,10 +151,10 @@ export class MotoboyService {
 
   private validarDadosMotoboy(
     body: MotoboyPeloRestauranteBody,
-    opts: { exigirNome: boolean; exigirContato: boolean; exigirSenha: boolean },
+    opts: { exigirNome: boolean; exigirEmail: boolean; exigirSenha: boolean },
   ) {
     if (opts.exigirNome && !body.name?.trim()) throw new BadRequestException('Informe o nome do motoboy');
-    if (opts.exigirContato && !body.phone && !body.email) throw new BadRequestException('Informe telefone ou e-mail');
+    if (opts.exigirEmail && !body.email) throw new BadRequestException('Informe o e-mail do motoboy');
     if (body.email && !EMAIL_RE.test(body.email)) throw new BadRequestException('E-mail inválido');
     if (body.phone && !PHONE_RE.test(body.phone)) throw new BadRequestException('Telefone inválido');
     if (opts.exigirSenha && (!body.password || body.password.length < 8)) {
@@ -157,27 +168,69 @@ export class MotoboyService {
   private async exigirMotoboyGerenciadoPeloRestaurante(motoboyId: number, restaurantId: number) {
     const { data: mb } = await this.supabase.client
       .from('motoboys')
-      .select('id, criado_por_restaurant_id')
+      .select('id, user_id, email, criado_por_restaurant_id')
       .eq('id', motoboyId)
       .maybeSingle();
     if (!mb) throw new NotFoundException('Motoboy não encontrado');
     if (mb.criado_por_restaurant_id !== restaurantId) {
       throw new ForbiddenException('Essa ação só é permitida em motoboys cadastrados diretamente por este estabelecimento');
     }
+    return mb;
   }
 
   async editarPeloRestaurante(motoboyId: number, restaurantId: number, body: MotoboyPeloRestauranteBody) {
-    await this.exigirMotoboyGerenciadoPeloRestaurante(motoboyId, restaurantId);
-    this.validarDadosMotoboy(body, { exigirNome: false, exigirContato: false, exigirSenha: false });
+    const mb = await this.exigirMotoboyGerenciadoPeloRestaurante(motoboyId, restaurantId);
+    this.validarDadosMotoboy(body, { exigirNome: false, exigirEmail: false, exigirSenha: false });
+
+    // Senha/e-mail agora vivem no Supabase Auth — troca via admin API. Quando o
+    // e-mail muda, o trigger sync_user_profile_email já mantém motoboys.email
+    // sincronizado (dispara em AFTER UPDATE OF email ON auth.users).
+    if (mb.user_id && (body.password || (body.email && body.email !== mb.email))) {
+      const payload: Record<string, any> = {};
+      if (body.password) payload.password = body.password;
+      if (body.email && body.email !== mb.email) {
+        payload.email = body.email;
+        payload.email_confirm = true;
+      }
+      const { error: authError } = await this.supabase.client.auth.admin.updateUserById(mb.user_id, payload);
+      if (authError) throw authError;
+    }
 
     const campos: Record<string, any> = {};
     if (body.name !== undefined) campos.name = body.name.trim();
     if (body.phone !== undefined) campos.phone = body.phone || null;
-    if (body.email !== undefined) campos.email = body.email || null;
-    if (body.password) campos.password_hash = await bcrypt.hash(body.password, 10);
+    // E-mail só é escrito aqui se o motoboy não tem user_id (nunca migrou pro
+    // Supabase Auth) — senão o trigger acima já cuida disso.
+    if (!mb.user_id && body.email !== undefined) campos.email = body.email || null;
     if (Object.keys(campos).length === 0) return { ok: true };
 
     const { error } = await this.supabase.client.from('motoboys').update(campos).eq('id', motoboyId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Link de definir/redefinir senha (pra copiar/mandar por WhatsApp) — gerado
+  // via Admin API, não depende do envio de e-mail do Supabase.
+  async gerarLinkRedefinicaoSenha(motoboyId: number, restaurantId: number, redirectTo?: string) {
+    const mb = await this.exigirMotoboyGerenciadoPeloRestaurante(motoboyId, restaurantId);
+    if (!mb.user_id) throw new NotFoundException('Este motoboy ainda não tem conta migrada — edite e informe um e-mail primeiro.');
+
+    const { data, error } = await this.supabase.client.auth.admin.generateLink({
+      type: 'recovery',
+      email: mb.email,
+      options: redirectTo ? { redirectTo } : undefined,
+    });
+    if (error) throw error;
+    return { link: data.properties.action_link };
+  }
+
+  // Mesmo mecanismo que o cliente já usa em "esqueci minha senha" — sem mailer
+  // próprio, reaproveita o e-mail nativo do Supabase Auth.
+  async enviarLinkRedefinicaoSenhaPorEmail(motoboyId: number, restaurantId: number, redirectTo?: string) {
+    const mb = await this.exigirMotoboyGerenciadoPeloRestaurante(motoboyId, restaurantId);
+    if (!mb.user_id) throw new NotFoundException('Este motoboy ainda não tem conta migrada — edite e informe um e-mail primeiro.');
+
+    const { error } = await this.supabase.client.auth.resetPasswordForEmail(mb.email, redirectTo ? { redirectTo } : undefined);
     if (error) throw error;
     return { ok: true };
   }
@@ -335,17 +388,6 @@ export class MotoboyService {
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new NotFoundException('Afiliação não encontrada');
-    return { ok: true };
-  }
-
-  // Libera o motoboy pra logar em outro dispositivo, encerrando a sessão travada.
-  async forcarLogout(motoboyId: number, restaurantId: number) {
-    await this.exigirAfiliacaoAceita(motoboyId, restaurantId);
-    const { error } = await this.supabase.client
-      .from('motoboys')
-      .update({ active_session_id: null, session_expires_at: null })
-      .eq('id', motoboyId);
-    if (error) throw error;
     return { ok: true };
   }
 
@@ -875,6 +917,39 @@ export class MotoboyService {
       estabelecimentos: afiliacoes.filter((a: any) => a.status === 'aceito').map((a: any) => a.restaurant),
       limite_revisoes_plataforma: await this.limiteRevisoesPlataforma(),
     };
+  }
+
+  // Perfil próprio (nome/telefone/foto) — e-mail não é editável por aqui, é a
+  // identidade de login (Supabase Auth); troca de e-mail passa por
+  // authService.updateEmail no frontend, e o trigger sync_user_profile_email
+  // mantém motoboys.email em dia.
+  async atualizarPerfilMotoboy(motoboyId: number, body: { name?: string; phone?: string; foto_perfil?: string }) {
+    if (body.phone && !PHONE_RE.test(body.phone)) throw new BadRequestException('Telefone inválido');
+
+    const campos: Record<string, any> = {};
+    if (body.name !== undefined) {
+      if (!body.name.trim()) throw new BadRequestException('Nome não pode ficar em branco');
+      campos.name = body.name.trim();
+    }
+    if (body.phone !== undefined) campos.phone = body.phone || null;
+    if (body.foto_perfil) {
+      const matches = body.foto_perfil.match(/^data:([\w/+-]+);base64,(.+)$/);
+      const mimeType = matches ? matches[1] : 'image/jpeg';
+      const raw = matches ? matches[2] : body.foto_perfil;
+      const buffer = Buffer.from(raw, 'base64');
+      const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+      const path = `${motoboyId}/foto-perfil-${Date.now()}.${ext}`;
+      const { error: uploadError } = await this.supabase.client.storage
+        .from(DOC_BUCKET)
+        .upload(path, buffer, { contentType: mimeType, upsert: true });
+      if (uploadError) throw uploadError;
+      campos.foto_perfil_url = path;
+    }
+    if (Object.keys(campos).length === 0) return this.infoMotoboy(motoboyId);
+
+    const { error } = await this.supabase.client.from('motoboys').update(campos).eq('id', motoboyId);
+    if (error) throw error;
+    return this.infoMotoboy(motoboyId);
   }
 
   // Motoboy recusado pede reavaliação — reabre como pendente. Limitado (config

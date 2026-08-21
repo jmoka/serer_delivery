@@ -65,9 +65,23 @@ export class RestauranteMotoboysController {
     return this.service.removerAfiliacao(motoboyId, req.restaurantId);
   }
 
-  @Post(':motoboyId/forcar-logout')
-  forcarLogout(@Param('motoboyId', ParseIntPipe) motoboyId: number, @Req() req: any) {
-    return this.service.forcarLogout(motoboyId, req.restaurantId);
+  // redirectTo dinâmico a partir de quem chamou (mesmo padrão de RestaurantOwnerGuard
+  // lendo Origin/Referer) — sem isso, cai no Site URL padrão do projeto Supabase.
+  private redirectToDoRequest(req: any): string | undefined {
+    const origem = req.headers['origin'] || req.headers['referer'];
+    if (!origem) return undefined;
+    const base = String(origem).replace(/\/$/, '');
+    return `${base}/reset-password`;
+  }
+
+  @Post(':motoboyId/gerar-link-senha')
+  gerarLinkSenha(@Param('motoboyId', ParseIntPipe) motoboyId: number, @Req() req: any) {
+    return this.service.gerarLinkRedefinicaoSenha(motoboyId, req.restaurantId, this.redirectToDoRequest(req));
+  }
+
+  @Post(':motoboyId/enviar-link-senha-email')
+  enviarLinkSenhaEmail(@Param('motoboyId', ParseIntPipe) motoboyId: number, @Req() req: any) {
+    return this.service.enviarLinkRedefinicaoSenhaPorEmail(motoboyId, req.restaurantId, this.redirectToDoRequest(req));
   }
 
   @Patch(':pedidoId/atribuir')

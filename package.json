@@ -13,6 +13,7 @@
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
     "seed:primeiro-boot": "ts-node scripts/seed-primeiro-boot.ts",
+    "backfill:motoboys-auth": "ts-node scripts/backfill-motoboys-supabase-auth.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"
