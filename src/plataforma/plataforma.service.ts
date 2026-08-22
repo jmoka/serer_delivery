@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { DEFAULT_APARENCIA_MARKETPLACE } from './aparencia-marketplace.constants';
+
+const BUCKET_PLATAFORMA = 'restaurante-imagens';
 
 @Injectable()
 export class PlataformaService {
@@ -108,7 +111,36 @@ export class PlataformaService {
       plano_dias_tolerancia: cfg.plano_dias_tolerancia ?? 3,
       // Quantas vezes um motoboy recusado pode pedir revisão do cadastro
       motoboy_limite_revisoes: cfg.motoboy_limite_revisoes ?? 2,
+      // Branding do marketplace público (/menu-catalog-product-browse)
+      aparencia_marketplace: { ...DEFAULT_APARENCIA_MARKETPLACE, ...(cfg.aparencia_marketplace ?? {}) },
     };
+  }
+
+  // Mesma forma de getConfig(), mas só o subconjunto seguro pra expor sem auth
+  // (sem tokens/segredos) — usado pela rota pública GET /r/branding.
+  async getBrandingPublico() {
+    const { data } = await this.supabase.client
+      .from('platform_settings')
+      .select('config')
+      .eq('id', 1)
+      .maybeSingle();
+
+    const cfg = (data?.config ?? {}) as Record<string, any>;
+    return { ...DEFAULT_APARENCIA_MARKETPLACE, ...(cfg.aparencia_marketplace ?? {}) };
+  }
+
+  async uploadImagem(folder: string, file: Express.Multer.File) {
+    const ext = (file.originalname.split('.').pop() ?? 'jpg').toLowerCase();
+    const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+    const { error } = await this.supabase.client.storage
+      .from(BUCKET_PLATAFORMA)
+      .upload(path, file.buffer, { cacheControl: '3600', upsert: false, contentType: file.mimetype });
+
+    if (error) throw error;
+
+    const { data } = this.supabase.client.storage.from(BUCKET_PLATAFORMA).getPublicUrl(path);
+    return { url: data.publicUrl };
   }
 
   async updateConfig(body: {
@@ -120,6 +152,7 @@ export class PlataformaService {
     comissao_padrao_pct?: number;
     plano_dias_tolerancia?: number;
     motoboy_limite_revisoes?: number;
+    aparencia_marketplace?: Record<string, any>;
   }) {
     const { data: atual } = await this.supabase.client
       .from('platform_settings')
@@ -153,6 +186,12 @@ export class PlataformaService {
     }
     if (body.motoboy_limite_revisoes !== undefined) {
       novo.motoboy_limite_revisoes = body.motoboy_limite_revisoes;
+    }
+    if (body.aparencia_marketplace !== undefined) {
+      novo.aparencia_marketplace = {
+        ...(cfg.aparencia_marketplace ?? DEFAULT_APARENCIA_MARKETPLACE),
+        ...body.aparencia_marketplace,
+      };
     }
 
     const { error } = await this.supabase.client

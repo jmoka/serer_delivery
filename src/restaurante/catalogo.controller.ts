@@ -5,6 +5,7 @@ import { RedisService } from '../redis/redis.service';
 import { haversineKm } from '../common/geo.util';
 import { normalizarDominio } from '../common/dominio.util';
 import { CombosService } from '../combos/combos.service';
+import { DEFAULT_APARENCIA_MARKETPLACE } from '../plataforma/aparencia-marketplace.constants';
 import * as os from 'os';
 
 const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active, quantidade_estoque';
@@ -23,6 +24,19 @@ export class CatalogoController {
     private combosService: CombosService,
     private redis: RedisService,
   ) {}
+
+  // Público — branding do marketplace (logo/hero/cores) editado em /admin/aparencia.
+  @Get('branding')
+  async getBranding() {
+    const { data } = await this.supabase.client
+      .from('platform_settings')
+      .select('config')
+      .eq('id', 1)
+      .maybeSingle();
+
+    const cfg = (data?.config ?? {}) as Record<string, any>;
+    return { ...DEFAULT_APARENCIA_MARKETPLACE, ...(cfg.aparencia_marketplace ?? {}) };
+  }
 
   @Get('acesso')
   async getAcesso() {

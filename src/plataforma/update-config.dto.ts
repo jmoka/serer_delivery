@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class UpdateConfigDto {
   @IsOptional()
@@ -41,4 +41,10 @@ export class UpdateConfigDto {
   @IsInt()
   @Min(0)
   motoboy_limite_revisoes?: number;
+
+  // Branding do marketplace público (/menu-catalog-product-browse) — validação
+  // solta aqui, o whitelisting real de chaves é feito no service.
+  @IsOptional()
+  @IsObject()
+  aparencia_marketplace?: Record<string, any>;
 }

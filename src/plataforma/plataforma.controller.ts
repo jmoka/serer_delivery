@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import * as os from 'os';
 import { PlataformaService } from './plataforma.service';
 import { AdminGuard } from '../auth/admin.guard';
@@ -17,6 +18,12 @@ export class PlataformaController {
   @Patch('config')
   updateConfig(@Body() body: UpdateConfigDto) {
     return this.service.updateConfig(body);
+  }
+
+  @Post('upload')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  upload(@UploadedFile() file: Express.Multer.File, @Query('folder') folder = 'plataforma') {
+    return this.service.uploadImagem(folder, file);
   }
 
   @Get('rede')
