@@ -1011,7 +1011,7 @@ export class RestauranteService {
     const limiteProntos = inicioDoDia.toISOString();
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, garcom_nao_entregou, garcom_indo_buscar, ordem_fila, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, garcom_nao_entregou, garcom_indo_buscar, ordem_fila, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, total, payment_method, created_at, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .or(`status.in.(enviado,preparando),and(status.eq.pronto,pronto_em.gte.${limiteProntos})`)
       .order('ordem_fila', { ascending: true, nullsFirst: false })
@@ -1062,6 +1062,11 @@ export class RestauranteService {
           motoboy_lat: i.orders?.motoboy_lat ?? null,
           motoboy_lng: i.orders?.motoboy_lng ?? null,
           delivery_occurrence: i.orders?.delivery_occurrence ?? null,
+          // Total/forma de pagamento/criação do PEDIDO (não do item) — só relevante pra
+          // delivery/balcão, pra card agrupado por pedido mostrar o mesmo resumo da Cozinha.
+          pedido_total: i.orders?.total ?? null,
+          pedido_payment_method: i.orders?.payment_method ?? null,
+          pedido_created_at: i.orders?.created_at ?? null,
         };
       }),
     };
@@ -1091,7 +1096,7 @@ export class RestauranteService {
   async marcarItemPronto(itemId: number, restaurantId: number) {
     const { data: item } = await this.supabase.client
       .from('order_items')
-      .select('id, order_id, orders(restaurant_id)')
+      .select('id, order_id, orders(restaurant_id, canal, status)')
       .eq('id', itemId)
       .maybeSingle();
 
@@ -1101,6 +1106,26 @@ export class RestauranteService {
 
     const { error } = await this.supabase.client.from('order_items').update({ status: 'pronto', pronto_em: new Date().toISOString() }).eq('id', itemId);
     if (error) throw error;
+
+    // Pedido de delivery/balcão pode ter itens em praças diferentes (ex: lanche na
+    // Cozinha, bebida no Drinks) — cada praça só controla o status dos seus próprios
+    // itens. O pedido inteiro só vira 'ready' (libera pro motoboy) quando TODAS as
+    // praças envolvidas já marcaram seus itens como prontos, pra não liberar comida
+    // que ainda não saiu de outra praça. Comanda de salão não usa esse status
+    // ('aberta'/'paga', não 'ready'), então só entra aqui fora do canal presencial.
+    const pedido = (item as any).orders;
+    if (pedido?.canal !== 'presencial' && ['confirmed', 'preparing'].includes(pedido?.status)) {
+      const { data: itensRestantes } = await this.supabase.client
+        .from('order_items')
+        .select('id, status')
+        .eq('order_id', item.order_id)
+        .neq('status', 'cancelado');
+      const todosProntos = (itensRestantes ?? []).length > 0 && (itensRestantes ?? []).every((i: any) => i.status === 'pronto');
+      if (todosProntos) {
+        await this.supabase.client.from('orders').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', item.order_id);
+      }
+    }
+
     return { ok: true };
   }
 
