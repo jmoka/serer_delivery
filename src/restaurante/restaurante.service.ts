@@ -1474,24 +1474,26 @@ export class RestauranteService {
       .eq('restaurant_id', restaurantId)
       .neq('status', 'livre');
 
-    const temPendencias = (pedidosAbertos ?? []).length > 0 || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0;
+    // Itens de comanda/venda balcão ainda não prontos, sem restringir pelo status da comanda
+    // (aberta/fechada_garcom) — uma venda balcão já paga (status 'paga') continua com o item
+    // 'enviado'/'preparando' até a cozinha terminar, e essa pendência real (comida não pronta,
+    // cliente esperando no balcão) não deve depender de a comanda ainda estar em aberto. Mesmo
+    // filtro (canal presencial, sem restrição de orders.status) que a tela da Cozinha já usa.
+    const { data: itensEmPreparo } = await this.supabase.client
+      .from('order_items')
+      .select('id, order_id, quantity, status, products(name), orders!inner(restaurant_id, canal, numero_comanda, mesa_id, cliente_mesa_nome, is_venda_balcao, mesas(numero, nome))')
+      .eq('orders.restaurant_id', restaurantId)
+      .eq('orders.canal', 'presencial')
+      .in('status', ['enviado', 'preparando']);
+
+    const temPendencias = (pedidosAbertos ?? []).length > 0 || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0 || (itensEmPreparo ?? []).length > 0;
 
     if (temPendencias && !body?.permitir_pendencias) {
       // Recorte de "ainda em produção" dentro das pendências acima — pedidos delivery/balcão
-      // parados em 'confirmed' (Aguardando Preparo) ou 'preparing' (Em Preparo), e itens de
-      // comanda ainda não marcados 'pronto' (enviado ou preparando). É só informativo pro
-      // operador decidir o que avançar antes de fechar; não muda o bloqueio em si (que
-      // continua sendo pedidosAbertos/comandasAbertas/mesasAbertas).
+      // parados em 'confirmed' (Aguardando Preparo) ou 'preparing' (Em Preparo). É só informativo
+      // pro operador decidir o que avançar antes de fechar; itens_em_preparo (acima) já é, por si
+      // só, motivo de bloqueio (ver temPendencias).
       const pedidosEmPreparo = (pedidosAbertos ?? []).filter((p: any) => p.status === 'confirmed' || p.status === 'preparing');
-
-      const idsComandasAbertas = (comandasAbertas ?? []).map((c: any) => c.id);
-      const { data: itensEmPreparo } = idsComandasAbertas.length
-        ? await this.supabase.client
-            .from('order_items')
-            .select('id, order_id, quantity, status, products(name), orders(numero_comanda, mesa_id, cliente_mesa_nome, mesas(numero, nome))')
-            .in('order_id', idsComandasAbertas)
-            .in('status', ['enviado', 'preparando'])
-        : { data: [] as any[] };
 
       throw new ConflictException({
         message: 'Existem pendências em aberto: feche os pedidos, comandas e mesas antes de fechar o caixa',
@@ -1542,7 +1544,7 @@ export class RestauranteService {
         status: 'fechado', fechado_em, resumo, destinacao_fechamento,
         fechado_com_pendencias: temPendencias,
         pendencias_fechamento: temPendencias
-          ? { pedidos: pedidosAbertos ?? [], comandas: comandasAbertas ?? [], mesas: mesasAbertas ?? [] }
+          ? { pedidos: pedidosAbertos ?? [], comandas: comandasAbertas ?? [], mesas: mesasAbertas ?? [], itens_em_preparo: itensEmPreparo ?? [] }
           : null,
       })
       .eq('id', caixa.id);
