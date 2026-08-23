@@ -1452,15 +1452,19 @@ export class RestauranteService {
 
     if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
 
+    // Escopado por restaurant_id (não caixa_id) — igual mesasAbertas abaixo. Uma comanda/pedido
+    // deixado pendente num fechamento anterior ("fiado, cobrado no próximo caixa aberto") continua
+    // com caixa_id apontando pro caixa antigo já fechado; filtrar por caixa_id do caixa atual fazia
+    // essas pendências carregadas ficarem invisíveis pra sempre nos fechamentos seguintes.
     const { data: pedidosAbertos } = await this.supabase.client
       .from('orders').select('id, status, total')
-      .eq('caixa_id', caixa.id)
+      .eq('restaurant_id', restaurantId)
       .in('status', this.STATUS_ABERTOS);
 
     const { data: comandasAbertas } = await this.supabase.client
       .from('orders')
       .select('id, status, mesa_id, mesas(numero, nome)')
-      .eq('caixa_id', caixa.id)
+      .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', this.COMANDA_STATUS_ABERTOS);
 
