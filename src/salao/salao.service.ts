@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { SupabaseService } from '../supabase/supabase.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
+import { GarcomTurnoService } from './garcom-turno.service';
 
 export interface AbrirComandaBody {
   mesa_id?: number;
@@ -22,6 +23,7 @@ export class SalaoService {
     private supabase: SupabaseService,
     private estoque: EstoqueService,
     private combosService: CombosService,
+    private garcomTurno: GarcomTurnoService,
   ) {}
 
   async mesas(restaurantId: number) {
@@ -460,6 +462,10 @@ export class SalaoService {
     if (!body.cliente_nome || !body.cliente_telefone) {
       throw new BadRequestException('Nome e telefone do cliente são obrigatórios');
     }
+
+    // Primeira comanda do garçom abre a sessão de trabalho dele automaticamente — sem
+    // ação nenhuma do lado dele. Não bloqueia nem interfere na abertura da comanda em si.
+    await this.garcomTurno.garantirTurnoAberto(garcomId, restaurantId);
 
     let mesa: { id: number } | null = null;
     if (body.mesa_id) {

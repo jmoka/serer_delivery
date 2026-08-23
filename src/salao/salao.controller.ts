@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { GarcomGuard } from '../auth/garcom.guard';
 import { GarcomAuthService } from './garcom-auth.service';
+import { GarcomTurnoService } from './garcom-turno.service';
 import { SalaoService } from './salao.service';
 import type { AbrirComandaBody, ItemComandaBody } from './salao.service';
 
@@ -10,6 +11,7 @@ export class SalaoController {
   constructor(
     private service: SalaoService,
     private authService: GarcomAuthService,
+    private turnoService: GarcomTurnoService,
   ) {}
 
   @Get('me')
@@ -26,6 +28,29 @@ export class SalaoController {
   @Post('logout')
   logout(@Req() req: any) {
     return this.authService.logout(req.garcomId);
+  }
+
+  @Get('turno')
+  async turnoAtivo(@Req() req: any) {
+    const turno = await this.turnoService.turnoAtivo(req.garcomId);
+    if (!turno) return { turno: null, resumo: null };
+    const resumo = await this.turnoService.resumoTurno(req.garcomId, req.garcomRestaurantId, turno.aberto_em, new Date().toISOString());
+    return { turno, resumo };
+  }
+
+  @Get('turno/preview-encerramento')
+  previewEncerramento(@Req() req: any) {
+    return this.turnoService.previewEncerramento(req.garcomId, req.garcomRestaurantId);
+  }
+
+  @Post('turno/encerrar')
+  encerrarTurno(@Body() body: { conferido: boolean; observacao?: string }, @Req() req: any) {
+    return this.turnoService.encerrarTurno(req.garcomId, req.garcomRestaurantId, body);
+  }
+
+  @Get('turnos')
+  historicoTurnos(@Query('de') de: string, @Query('ate') ate: string, @Req() req: any) {
+    return this.turnoService.historicoTurnos(req.garcomId, de, ate);
   }
 
   @Get('mesas')

@@ -2243,7 +2243,18 @@ export class RestauranteService {
       })
       .sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
 
-    return { garcons: Array.from(porGarcom.values()), vendas };
+    // Sessões (turnos) de trabalho fechadas no período — pra tela do dono mostrar se o
+    // garçom já conferiu/aceitou os valores daquele intervalo (ver garcom-turno.service.ts).
+    const { data: turnos } = await this.supabase.client
+      .from('garcom_turnos')
+      .select('id, garcom_id, aberto_em, fechado_em, resumo, conferido_pelo_garcom, observacao_garcom')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'fechado')
+      .gte('fechado_em', de)
+      .lte('fechado_em', ate)
+      .order('fechado_em', { ascending: false });
+
+    return { garcons: Array.from(porGarcom.values()), vendas, turnos: turnos ?? [] };
   }
 
   // Dono clica "Marcar como pago" na linha do garçom, pro período em foco no relatório —

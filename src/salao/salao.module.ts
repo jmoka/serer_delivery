@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SalaoService } from './salao.service';
 import { SalaoController } from './salao.controller';
 import { GarcomAuthService } from './garcom-auth.service';
+import { GarcomTurnoService } from './garcom-turno.service';
 import { GarcomAuthController } from './garcom-auth.controller';
 import { GarconsService } from './garcons.service';
 import { RestauranteGarconsController } from './restaurante-garcons.controller';
@@ -30,7 +31,7 @@ import { AgenteImpressaoModule } from '../agente-impressao/agente-impressao.modu
     MesaAcompanharController,
     AutoAtendimentoController,
   ],
-  providers: [SalaoService, GarcomAuthService, GarconsService, ImpressorasService, SalaoPdvService, MesasService, AutoAtendimentoService],
-  exports: [SalaoService, GarconsService, ImpressorasService, SalaoPdvService, MesasService, AutoAtendimentoService],
+  providers: [SalaoService, GarcomAuthService, GarcomTurnoService, GarconsService, ImpressorasService, SalaoPdvService, MesasService, AutoAtendimentoService],
+  exports: [SalaoService, GarcomTurnoService, GarconsService, ImpressorasService, SalaoPdvService, MesasService, AutoAtendimentoService],
 })
 export class SalaoModule {}
