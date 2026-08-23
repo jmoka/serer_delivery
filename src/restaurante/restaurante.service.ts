@@ -1473,6 +1473,22 @@ export class RestauranteService {
     const temPendencias = (pedidosAbertos ?? []).length > 0 || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0;
 
     if (temPendencias && !body?.permitir_pendencias) {
+      // Recorte de "ainda em produção" dentro das pendências acima — pedidos delivery/balcão
+      // parados em 'confirmed' (Aguardando Preparo) ou 'preparing' (Em Preparo), e itens de
+      // comanda ainda não marcados 'pronto' (enviado ou preparando). É só informativo pro
+      // operador decidir o que avançar antes de fechar; não muda o bloqueio em si (que
+      // continua sendo pedidosAbertos/comandasAbertas/mesasAbertas).
+      const pedidosEmPreparo = (pedidosAbertos ?? []).filter((p: any) => p.status === 'confirmed' || p.status === 'preparing');
+
+      const idsComandasAbertas = (comandasAbertas ?? []).map((c: any) => c.id);
+      const { data: itensEmPreparo } = idsComandasAbertas.length
+        ? await this.supabase.client
+            .from('order_items')
+            .select('id, order_id, quantity, status, products(name), orders(numero_comanda, mesa_id, cliente_mesa_nome, mesas(numero, nome))')
+            .in('order_id', idsComandasAbertas)
+            .in('status', ['enviado', 'preparando'])
+        : { data: [] as any[] };
+
       throw new ConflictException({
         message: 'Existem pendências em aberto: feche os pedidos, comandas e mesas antes de fechar o caixa',
         pedidos_abertos: pedidosAbertos?.length ?? 0,
@@ -1481,6 +1497,8 @@ export class RestauranteService {
         comandas: comandasAbertas ?? [],
         mesas_abertas: mesasAbertas?.length ?? 0,
         mesas: mesasAbertas ?? [],
+        pedidos_em_preparo: pedidosEmPreparo,
+        itens_em_preparo: itensEmPreparo ?? [],
       });
     }
 
