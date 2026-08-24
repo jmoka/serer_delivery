@@ -199,7 +199,7 @@ export class CatalogoController {
 
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, logo_url, slug, aparencia, frete_motoboy')
+      .select('id, name, logo_url, slug, aparencia, frete_motoboy, pagamento_manual, payment_config')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
       .eq('modulo_delivery', true);
@@ -207,7 +207,7 @@ export class CatalogoController {
     if (!restaurantes?.length) return { produtos: [] };
 
     const restIds = restaurantes.map((r) => r.id);
-    const restMap = Object.fromEntries(restaurantes.map((r) => [r.id, r]));
+    const restMap = Object.fromEntries(restaurantes.map((r) => [r.id, this.exporPagamentoPublico(r)]));
 
     // Busca diretamente por restaurant_id (não depende de category chain)
     const { data: produtos, error } = await this.supabase.client
@@ -242,7 +242,7 @@ export class CatalogoController {
 
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, logo_url, slug, aparencia, frete_motoboy')
+      .select('id, name, logo_url, slug, aparencia, frete_motoboy, pagamento_manual, payment_config')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
       .eq('modulo_delivery', true);
@@ -250,7 +250,7 @@ export class CatalogoController {
     if (!restaurantes?.length) return { combos: [] };
 
     const restIds = restaurantes.map((r) => r.id);
-    const restMap = Object.fromEntries(restaurantes.map((r) => [r.id, r]));
+    const restMap = Object.fromEntries(restaurantes.map((r) => [r.id, this.exporPagamentoPublico(r)]));
 
     const { data: combos, error } = await this.supabase.client
       .from('combos')
@@ -292,7 +292,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, pagamento_manual, payment_config')
       .eq('custom_domain', dominio)
       .maybeSingle();
 
@@ -310,7 +310,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, pagamento_manual, payment_config')
       .eq('slug', slug)
       .maybeSingle();
 
@@ -320,7 +320,17 @@ export class CatalogoController {
     return resultado;
   }
 
-  private async montarCardapio(restaurante: any) {
+  // payment_config nunca sai em claro (token PagBank etc) — só a chave PIX é pública,
+  // e só quando o restaurante está em modo manual (checkout gera o QR local com ela).
+  private exporPagamentoPublico(r: any) {
+    const chave_pix = r.pagamento_manual ? (r.payment_config?.chave_pix ?? null) : null;
+    const { payment_config, ...resto } = r;
+    return { ...resto, chave_pix };
+  }
+
+  private async montarCardapio(restauranteRaw: any) {
+    const restaurante = this.exporPagamentoPublico(restauranteRaw);
+
     // Categorias do restaurante (próprias + globais para exibição)
     const { data: categorias } = await this.supabase.client
       .from('categories')

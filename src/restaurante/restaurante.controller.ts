@@ -66,6 +66,11 @@ export class RestauranteController {
     return this.service.atualizarStatusPedido(id, req.restaurantId, body.status);
   }
 
+  @Patch('pedidos/:id/marcar-pago')
+  marcarPago(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.marcarPedidoPago(id, req.restaurantId);
+  }
+
   @Patch('pedidos/:id/entregar-proprio')
   entregarProprio(
     @Param('id', ParseIntPipe) id: number,

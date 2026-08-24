@@ -89,4 +89,15 @@ export class PedidosController {
   cancelar(@Param('id', ParseIntPipe) id: number) {
     return this.service.cancelar(id);
   }
+
+  // Cliente anexa comprovante do PIX manual (foto tirada no checkout)
+  @Post(':id/comprovante')
+  @UseGuards(JwtGuard)
+  uploadComprovante(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { base64: string },
+    @Req() req: any,
+  ) {
+    return this.service.uploadComprovanteCliente(id, req.userId, body.base64);
+  }
 }

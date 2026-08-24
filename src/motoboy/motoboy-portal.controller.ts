@@ -73,7 +73,7 @@ export class MotoboyPortalController {
   @Post('pedidos/:id/entregar')
   entregar(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { entrega_pagamento?: { metodo: string; dinheiro?: number; pix?: number } },
+    @Body() body: { entrega_pagamento?: { metodo: string; dinheiro?: number; pix?: number; cartao?: number } },
     @Req() req: any,
   ) {
     return this.service.confirmarEntrega(id, req.motoboyId, body?.entrega_pagamento);

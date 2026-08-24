@@ -489,7 +489,7 @@ export class MotoboyService {
     const { data, error } = await this.supabase.client
       .from('orders')
       .select(
-        'id, total, troco_para, status, payment_method, restaurant_id, created_at, updated_at, motoboy_lat, motoboy_lng, customer_id, delivery_notes, delivery_occurrence',
+        'id, total, troco_para, status, payment_method, restaurant_id, created_at, updated_at, motoboy_lat, motoboy_lng, customer_id, delivery_notes, delivery_occurrence, pago_em',
       )
       .eq('motoboy_id', motoboyId)
       .not('status', 'in', '("delivered","canceled")')
@@ -498,10 +498,13 @@ export class MotoboyService {
 
     const restIds = [...new Set((data ?? []).map((p) => p.restaurant_id).filter(Boolean))];
     const { data: restaurantes } = restIds.length
-      ? await this.supabase.client.from('restaurants').select('id, name, payment_config').in('id', restIds)
+      ? await this.supabase.client.from('restaurants').select('id, name, payment_config, taxa_cartao_percentual').in('id', restIds)
       : { data: [] as any[] };
     const restMap = Object.fromEntries(
-      (restaurantes ?? []).map((r: any) => [r.id, { name: r.name, chave_pix: r.payment_config?.chave_pix ?? null }]),
+      (restaurantes ?? []).map((r: any) => [
+        r.id,
+        { name: r.name, chave_pix: r.payment_config?.chave_pix ?? null, taxa_cartao_percentual: r.taxa_cartao_percentual ?? 0 },
+      ]),
     );
 
     const pedidos = await Promise.all(
@@ -550,7 +553,7 @@ export class MotoboyService {
   async confirmarEntrega(
     pedidoId: number,
     motoboyId: number,
-    entregaPagamento?: { metodo: string; dinheiro?: number; pix?: number },
+    entregaPagamento?: { metodo: string; dinheiro?: number; pix?: number; cartao?: number },
   ) {
     const { data: pedido } = await this.supabase.client
       .from('orders')
@@ -560,8 +563,19 @@ export class MotoboyService {
       .maybeSingle();
     if (!pedido) throw new NotFoundException('Pedido não encontrado ou não atribuído a você');
 
+    // Taxa do cartão é sempre recalculada no backend (não confia no valor vindo do
+    // app) — mesma fórmula/config do módulo Salão (Config > "Taxa do cartão").
+    let taxaCartaoValor = 0;
+    if (entregaPagamento?.metodo === 'cartao') {
+      taxaCartaoValor = await this.salaoService.calcularTaxaCartao(pedido.restaurant_id, pedido.total, 'credit_card');
+      entregaPagamento = { ...entregaPagamento, cartao: pedido.total, taxa_cartao_valor: taxaCartaoValor } as any;
+    }
+
     const updatePayload: Record<string, any> = { status: 'delivered', updated_at: new Date().toISOString() };
-    if (entregaPagamento) updatePayload.entrega_pagamento = entregaPagamento;
+    if (entregaPagamento) {
+      updatePayload.entrega_pagamento = entregaPagamento;
+      updatePayload.pago_em = new Date().toISOString();
+    }
 
     const { error } = await this.supabase.client
       .from('orders')
@@ -596,6 +610,14 @@ export class MotoboyService {
             descricao: `Entrega pedido #${pedidoId} — PIX`,
             valor: entregaPagamento.pix,
             meio: 'pix',
+            criado_em: agora,
+          });
+        }
+        if ((entregaPagamento.cartao ?? 0) > 0) {
+          novas.push({
+            descricao: `Entrega pedido #${pedidoId} — Cartão${taxaCartaoValor > 0 ? ` (+ taxa ${taxaCartaoValor})` : ''}`,
+            valor: (entregaPagamento.cartao ?? 0) + taxaCartaoValor,
+            meio: 'cartao',
             criado_em: agora,
           });
         }
@@ -887,7 +909,7 @@ export class MotoboyService {
 
     await this.supabase.client
       .from('orders')
-      .update({ comprovante_pix_url: publicUrl, updated_at: new Date().toISOString() })
+      .update({ comprovante_pagamento_url: publicUrl, updated_at: new Date().toISOString() })
       .eq('id', pedidoId);
 
     return { url: publicUrl };

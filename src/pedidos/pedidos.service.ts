@@ -106,7 +106,7 @@ export class PedidosService {
   }) {
     let query = this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, status, payment_method, restaurant_id, customer_id, user_id, created_at')
+      .select('id, total, frete_cobrado, status, payment_method, restaurant_id, customer_id, user_id, created_at, pago_em, canal')
       .order('created_at', { ascending: false })
       .limit(filtros.limite ?? 50);
 
@@ -136,7 +136,7 @@ export class PedidosService {
   async buscarBruto(id: number) {
     const { data: pedido, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, troco_para, frete_cobrado, entrega_pagamento, status, payment_method, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
+      .select('id, total, troco_para, frete_cobrado, entrega_pagamento, status, payment_method, canal, pago_em, comprovante_pagamento_url, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -401,5 +401,40 @@ export class PedidosService {
       valor_devolver,
       precisa_estorno: valor_devolver > 0,
     };
+  }
+
+  // Cliente anexa o comprovante do PIX manual logo no checkout (além da foto que o
+  // motoboy também tira na entrega — mesmo bucket/coluna, serve como segunda evidência).
+  async uploadComprovanteCliente(id: number, userId: string, base64: string) {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('id, user_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (!pedido) throw new NotFoundException(`Pedido ${id} não encontrado`);
+    if (pedido.user_id !== userId) throw new ForbiddenException('Sem permissão para este pedido');
+
+    const matches = base64.match(/^data:(image\/\w+);base64,(.+)$/);
+    const mimeType = matches ? matches[1] : 'image/jpeg';
+    const raw = matches ? matches[2] : base64;
+    const buffer = Buffer.from(raw, 'base64');
+    const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+    const path = `pedido-${id}-${Date.now()}.${ext}`;
+
+    const { error: uploadError } = await this.supabase.client.storage
+      .from('comprovantes-pix')
+      .upload(path, buffer, { contentType: mimeType, upsert: true });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = this.supabase.client.storage
+      .from('comprovantes-pix')
+      .getPublicUrl(path);
+
+    await this.supabase.client
+      .from('orders')
+      .update({ comprovante_pagamento_url: publicUrl, updated_at: new Date().toISOString() })
+      .eq('id', id);
+
+    return { url: publicUrl };
   }
 }

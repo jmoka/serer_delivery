@@ -132,6 +132,31 @@ export class RestauranteService {
     return this.pedidos.atualizarStatus(pedidoId, status as any);
   }
 
+  // Cliente combinou o pagamento por fora (contato direto) e o dono confirma no painel.
+  // Isso poupa o motoboy de cobrar de novo na entrega (ver EntregaBarcode no app dele).
+  async marcarPedidoPago(pedidoId: number, restaurantId: number) {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('id, status, pago_em')
+      .eq('id', pedidoId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+
+    if (!pedido) throw new NotFoundException('Pedido não encontrado neste restaurante');
+    if (pedido.status === 'canceled') throw new BadRequestException('Pedido está cancelado');
+    if (pedido.pago_em) return pedido;
+
+    const { data, error } = await this.supabase.client
+      .from('orders')
+      .update({ pago_em: new Date().toISOString() })
+      .eq('id', pedidoId)
+      .select('id, status, pago_em')
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
   // Painel de controle de entregas: tudo que está "em voo" agora (pronto aguardando
   // atribuição, indo buscar, ou já saiu pra entrega), com dados de quem está entregando.
   async listarEntregas(restaurantId: number) {
@@ -846,7 +871,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
+        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -861,6 +886,7 @@ export class RestauranteService {
         : null,
       pagbank_seller_account_id: cfg.pagbank_seller_account_id ?? '',
       configurado: !!cfg.pagbank_token,
+      pagamento_manual: !!data?.pagamento_manual,
       split_ativo: !!(cfg.pagbank_seller_account_id),
       taxa_pagbank_percent: cfg.taxa_pagbank_percent ?? null,
       chave_pix: cfg.chave_pix ?? null,
@@ -890,6 +916,7 @@ export class RestauranteService {
       pagbank_seller_account_id?: string;
       taxa_pagbank_percent?: number | null;
       chave_pix?: string | null;
+      pagamento_manual?: boolean;
       frete_motoboy?: number;
       usa_motoboy?: boolean;
       motoboy_comissao_tipo?: 'fixo' | 'percentual' | 'km';
@@ -924,6 +951,7 @@ export class RestauranteService {
     if (body.chave_pix !== undefined) novo.chave_pix = body.chave_pix;
 
     const update: Record<string, any> = { payment_config: novo, updated_at: new Date().toISOString() };
+    if (body.pagamento_manual !== undefined) update.pagamento_manual = body.pagamento_manual;
     if (body.frete_motoboy !== undefined) update.frete_motoboy = body.frete_motoboy;
     if (body.usa_motoboy !== undefined) update.usa_motoboy = body.usa_motoboy;
     if (body.motoboy_comissao_tipo !== undefined) update.motoboy_comissao_tipo = body.motoboy_comissao_tipo;
@@ -1309,8 +1337,13 @@ export class RestauranteService {
         }
       } else {
         const m = p.payment_method ?? 'outro';
+        const taxa = p.entrega_pagamento?.taxa_cartao_valor ?? 0;
         por_pagamento[m] = (por_pagamento[m] ?? 0) + (p.total ?? 0);
-        total_vendas += p.total ?? 0;
+        if (taxa > 0) {
+          por_pagamento['taxa_cartao'] = (por_pagamento['taxa_cartao'] ?? 0) + taxa;
+          taxa_por_forma[m] = (taxa_por_forma[m] ?? 0) + taxa;
+        }
+        total_vendas += (p.total ?? 0) + taxa;
         if (m === 'cash') cash_recebido += p.total ?? 0;
       }
     }
@@ -1411,7 +1444,7 @@ export class RestauranteService {
 
     const { data: ordersData } = await this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, troco_para, status, payment_method, canal, created_at, updated_at, customer_id, motoboy_id, caixa_id, mesa_id, cliente_mesa_nome, numero_comanda, customers(name, phone_e164), motoboys(name), mesas(numero, nome)')
+      .select('id, total, frete_cobrado, troco_para, status, payment_method, canal, created_at, updated_at, customer_id, motoboy_id, caixa_id, mesa_id, cliente_mesa_nome, numero_comanda, entrega_pagamento, customers(name, phone_e164), motoboys(name), mesas(numero, nome)')
       .eq('restaurant_id', restaurantId)
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`)
       .order('created_at', { ascending: false });
@@ -1544,7 +1577,7 @@ export class RestauranteService {
     }
 
     const { data: todosPedidos } = await this.supabase.client
-      .from('orders').select('id, total, status, payment_method, canal, created_at')
+      .from('orders').select('id, total, status, payment_method, canal, created_at, entrega_pagamento')
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`);
 
     const saidas = (caixa.saidas ?? []) as any[];
@@ -1612,7 +1645,7 @@ export class RestauranteService {
 
     // Fechar caixa atual (com resumo)
     const { data: todosPedidos } = await this.supabase.client
-      .from('orders').select('id, total, status, payment_method, canal, created_at')
+      .from('orders').select('id, total, status, payment_method, canal, created_at, entrega_pagamento')
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`);
 
     const saidas = (caixa.saidas ?? []) as any[];
@@ -1950,7 +1983,7 @@ export class RestauranteService {
   async getRelatorio(restaurantId: number, de: string, ate: string) {
     const { data: orders, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, status, payment_method, canal, created_at, customer_id, gorjeta_valor, customers(name), mesa_id, cliente_mesa_nome, garcom_id, aberto_por_nome, garcons(nome)')
+      .select('id, total, status, payment_method, canal, created_at, customer_id, gorjeta_valor, entrega_pagamento, customers(name), mesa_id, cliente_mesa_nome, garcom_id, aberto_por_nome, garcons(nome)')
       .eq('restaurant_id', restaurantId)
       .gte('created_at', de)
       .lte('created_at', ate)
@@ -2089,7 +2122,8 @@ export class RestauranteService {
           total_troco += pag.troco ?? 0;
         }
       } else {
-        fluxo_caixa.push({ order_id: p.id, forma_pagamento: p.payment_method ?? 'unknown', origem: 'delivery', valor: p.total ?? 0, troco: 0, criado_em: p.created_at, taxa_cartao_valor: 0, cliente_nome, atendente_nome: null });
+        const taxaCartaoDelivery = p.entrega_pagamento?.taxa_cartao_valor ?? 0;
+        fluxo_caixa.push({ order_id: p.id, forma_pagamento: p.payment_method ?? 'unknown', origem: 'delivery', valor: p.total ?? 0, troco: 0, criado_em: p.created_at, taxa_cartao_valor: taxaCartaoDelivery, cliente_nome, atendente_nome: null });
       }
     }
     fluxo_caixa.sort((a, b) => new Date(a.criado_em).getTime() - new Date(b.criado_em).getTime());
