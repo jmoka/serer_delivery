@@ -26,6 +26,63 @@ export class SalaoService {
     private garcomTurno: GarcomTurnoService,
   ) {}
 
+  // Últimos 8 dígitos bastam pra casar apesar de variação de formato (com/sem
+  // DDI, com/sem 9º dígito) — evita exigir telefone digitado igual byte a byte.
+  private normalizarTelefone(tel: string): string {
+    return (tel || '').replace(/\D/g, '');
+  }
+
+  // Busca cliente já vinculado a este restaurante pelo telefone — usada tanto na
+  // digitação (autocomplete no app do garçom) quanto pra resolver o customer_id
+  // ao abrir a comanda, unificando o cadastro do balcão/comanda com o do delivery.
+  async buscarClientePorTelefone(restaurantId: number, telefone: string) {
+    const digitos = this.normalizarTelefone(telefone);
+    if (digitos.length < 8) return null;
+    const sufixo = digitos.slice(-8);
+
+    const { data: crRows } = await this.supabase.client
+      .from('customer_restaurants')
+      .select('customer_id')
+      .eq('restaurant_id', restaurantId);
+    const ids = (crRows ?? []).map((r) => r.customer_id);
+    if (!ids.length) return null;
+
+    const { data: candidatos } = await this.supabase.client
+      .from('customers')
+      .select('id, name, phone_e164')
+      .in('id', ids)
+      .not('phone_e164', 'is', null)
+      .ilike('phone_e164', `%${sufixo}%`);
+
+    const match = (candidatos ?? []).find((c) => this.normalizarTelefone(c.phone_e164).endsWith(sufixo));
+    return match ? { id: match.id, name: match.name } : null;
+  }
+
+  // Resolve o customer_id da comanda: reaproveita cliente já cadastrado (delivery
+  // ou comanda anterior) pelo telefone, ou cria um novo com nome/telefone que o
+  // garçom já é obrigado a digitar — sem passo extra pra ele.
+  private async resolverOuCriarClienteComanda(restaurantId: number, nome: string, telefone: string): Promise<number | null> {
+    const existente = await this.buscarClientePorTelefone(restaurantId, telefone);
+    if (existente) return existente.id;
+
+    const digitos = this.normalizarTelefone(telefone);
+    if (digitos.length < 8) return null;
+
+    const { data: novoCliente, error } = await this.supabase.client
+      .from('customers')
+      .insert({ name: nome, phone_e164: telefone })
+      .select('id')
+      .single();
+    if (error || !novoCliente) return null;
+
+    await this.supabase.client
+      .from('customer_restaurants')
+      .insert({ customer_id: novoCliente.id, restaurant_id: restaurantId })
+      .throwOnError();
+
+    return novoCliente.id;
+  }
+
   async mesas(restaurantId: number) {
     const { data: mesas, error } = await this.supabase.client
       .from('mesas')
@@ -499,6 +556,8 @@ export class SalaoService {
       .gte('created_at', inicioDoDia.toISOString());
     const numeroComanda = (count ?? 0) + 1;
 
+    const customerId = await this.resolverOuCriarClienteComanda(restaurantId, body.cliente_nome, body.cliente_telefone);
+
     const { data: comanda, error } = await this.supabase.client
       .from('orders')
       .insert({
@@ -507,6 +566,7 @@ export class SalaoService {
         status: 'aberta',
         garcom_id: garcomId,
         mesa_id: mesa?.id ?? null,
+        customer_id: customerId,
         cliente_mesa_nome: body.cliente_nome,
         cliente_mesa_telefone: body.cliente_telefone,
         total: 0,

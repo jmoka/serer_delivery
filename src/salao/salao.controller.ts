@@ -93,6 +93,16 @@ export class SalaoController {
     return this.service.abrirComanda(req.garcomId, req.garcomRestaurantId, body, req.restauranteAberto, req.salaoModo);
   }
 
+  // Autocomplete ao digitar o telefone no "abrir comanda" — acha cliente já
+  // cadastrado (delivery ou comanda anterior) sem o garçom precisar perguntar.
+  @Get('clientes/buscar')
+  async buscarClientePorTelefone(@Query('telefone') telefone: string, @Req() req: any) {
+    // Envelopado em objeto (nunca null solto) — resposta sem corpo JSON vira
+    // {} no client (ver garcomFetch), que seria truthy e pareceria "encontrado".
+    const cliente = await this.service.buscarClientePorTelefone(req.garcomRestaurantId, telefone ?? '');
+    return { cliente };
+  }
+
   @Post('comandas/:id/itens')
   adicionarItens(@Param('id', ParseIntPipe) id: number, @Body() body: { itens: ItemComandaBody[] }, @Req() req: any) {
     return this.service.adicionarItens(id, req.garcomId, body.itens);
