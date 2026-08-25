@@ -563,12 +563,26 @@ export class MotoboyService {
       .maybeSingle();
     if (!pedido) throw new NotFoundException('Pedido não encontrado ou não atribuído a você');
 
+    // Pagamento combinado (dinheiro + PIX + cartão em qualquer fração) — a soma das
+    // frações precisa bater com o total do pedido, senão dinheiro "some"/"aparece"
+    // do nada no caixa. Os outros métodos (exato/pix/cartao) já mandam o valor certo
+    // num campo só, exceto "conforme" com troco, que intencionalmente manda mais que
+    // o total (é o que o cliente entregou em mãos, não o valor da venda).
+    if (entregaPagamento?.metodo === 'combinado') {
+      const soma = (entregaPagamento.dinheiro ?? 0) + (entregaPagamento.pix ?? 0) + (entregaPagamento.cartao ?? 0);
+      if (Math.abs(soma - pedido.total) > 0.01) {
+        throw new BadRequestException('Soma dos valores não bate com o total do pedido');
+      }
+    }
+
     // Taxa do cartão é sempre recalculada no backend (não confia no valor vindo do
-    // app) — mesma fórmula/config do módulo Salão (Config > "Taxa do cartão").
+    // app) — mesma fórmula/config do módulo Salão (Config > "Taxa do cartão"). Incide
+    // só sobre a fatia paga no cartão, não sobre o pedido inteiro — importante no
+    // pagamento combinado, onde o cartão pode ser só parte do total.
     let taxaCartaoValor = 0;
-    if (entregaPagamento?.metodo === 'cartao') {
-      taxaCartaoValor = await this.salaoService.calcularTaxaCartao(pedido.restaurant_id, pedido.total, 'credit_card');
-      entregaPagamento = { ...entregaPagamento, cartao: pedido.total, taxa_cartao_valor: taxaCartaoValor } as any;
+    if ((entregaPagamento?.cartao ?? 0) > 0) {
+      taxaCartaoValor = await this.salaoService.calcularTaxaCartao(pedido.restaurant_id, entregaPagamento!.cartao!, 'credit_card');
+      entregaPagamento = { ...entregaPagamento, taxa_cartao_valor: taxaCartaoValor } as any;
     }
 
     const updatePayload: Record<string, any> = { status: 'delivered', updated_at: new Date().toISOString() };
