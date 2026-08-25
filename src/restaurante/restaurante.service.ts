@@ -842,7 +842,7 @@ export class RestauranteService {
   // (chamado também internamente com literais como { aberto }), então nunca
   // fazer merge cru: um campo extra no JSON vira config persistida sem controle.
   private static readonly CAMPOS_APARENCIA = [
-    'logo_url', 'descricao', 'background_url', 'background_color', 'banner_url', 'carousel_images', 'aberto',
+    'logo_url', 'descricao', 'background_url', 'background_color', 'background_gradient_from', 'background_gradient_to', 'background_opacity', 'banner_url', 'carousel_images', 'aberto',
   ] as const;
 
   async updateAparencia(restaurantId: number, body: Record<string, any>) {

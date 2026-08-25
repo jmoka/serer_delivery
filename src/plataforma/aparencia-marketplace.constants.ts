@@ -30,6 +30,8 @@ export const DEFAULT_APARENCIA_MARKETPLACE = {
   hero_subtitulo: 'Peça dos melhores restaurantes da sua cidade',
   hero_fundo_tipo: 'gradiente', // 'gradiente' | 'cor' | 'imagem'
   hero_fundo_cor: '#FF441F',
+  hero_fundo_gradient_from: '#FF441F',
+  hero_fundo_gradient_to: '#FF7A00',
   hero_fundo_imagem_url: '',
   hero_fundo_opacity: 100, // vale pro gradiente padrão, cor ou imagem
   stat1_label: 'Restaurantes',
