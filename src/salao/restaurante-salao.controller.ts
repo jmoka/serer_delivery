@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { SalaoPdvService } from './salao-pdv.service';
 import { GarconsService } from './garcons.service';
@@ -172,6 +172,12 @@ export class RestauranteSalaoController {
     @Req() req: any,
   ) {
     return this.service.editarClienteMesa(id, req.restaurantId, body);
+  }
+
+  @Get('clientes/buscar')
+  async buscarClientePorTelefone(@Query('telefone') telefone: string, @Req() req: any) {
+    const cliente = await this.service.buscarClientePorTelefone(req.restaurantId, telefone ?? '');
+    return { cliente };
   }
 
   @Get('comandas/:id/sugestao-gorjeta')

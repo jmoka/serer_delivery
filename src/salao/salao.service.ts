@@ -61,7 +61,10 @@ export class SalaoService {
   // Resolve o customer_id da comanda: reaproveita cliente já cadastrado (delivery
   // ou comanda anterior) pelo telefone, ou cria um novo com nome/telefone que o
   // garçom já é obrigado a digitar — sem passo extra pra ele.
-  private async resolverOuCriarClienteComanda(restaurantId: number, nome: string, telefone: string): Promise<number | null> {
+  // Público — também usado por SalaoPdvService (lado do estabelecimento: abrir
+  // comanda/mesa direto e editar cliente da venda balcão) pra unificar o mesmo
+  // cadastro de cliente independente de quem abriu a venda.
+  async resolverOuCriarClienteComanda(restaurantId: number, nome: string, telefone: string): Promise<number | null> {
     const existente = await this.buscarClientePorTelefone(restaurantId, telefone);
     if (existente) return existente.id;
 

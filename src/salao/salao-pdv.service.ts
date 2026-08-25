@@ -98,6 +98,7 @@ export class SalaoPdvService {
     const abertoPorNome = nomeCompleto?.trim().split(' ')[0] || null;
 
     const numeroComanda = await this.proximoNumeroComanda(restaurantId);
+    const customerId = await this.salaoService.resolverOuCriarClienteComanda(restaurantId, body.cliente_nome, body.cliente_telefone);
 
     const { data: comanda, error } = await this.supabase.client
       .from('orders')
@@ -106,6 +107,7 @@ export class SalaoPdvService {
         canal: 'presencial',
         status: 'aberta',
         mesa_id: mesa?.id ?? null,
+        customer_id: customerId,
         cliente_mesa_nome: body.cliente_nome,
         cliente_mesa_telefone: body.cliente_telefone,
         total: 0,
@@ -473,13 +475,30 @@ export class SalaoPdvService {
     }
     if (!body.cliente_nome?.trim()) throw new BadRequestException('Nome do cliente é obrigatório');
 
+    // Telefone é opcional aqui (venda balcão pode ficar anônima) — só resolve/cria
+    // o cadastro de cliente quando o operador realmente informou um telefone.
+    const telefone = body.cliente_telefone?.trim() || null;
+    const customerId = telefone
+      ? await this.salaoService.resolverOuCriarClienteComanda(restaurantId, body.cliente_nome.trim(), telefone)
+      : null;
+
     const { error } = await this.supabase.client
       .from('orders')
-      .update({ cliente_mesa_nome: body.cliente_nome.trim(), cliente_mesa_telefone: body.cliente_telefone?.trim() || null })
+      .update({
+        cliente_mesa_nome: body.cliente_nome.trim(),
+        cliente_mesa_telefone: telefone,
+        ...(customerId ? { customer_id: customerId } : {}),
+      })
       .eq('id', id);
     if (error) throw error;
 
     return this.comandaDetalhe(id, restaurantId);
+  }
+
+  // Autocomplete ao digitar o telefone (venda balcão / abrir mesa pelo caixa) — acha
+  // cliente já cadastrado (delivery ou comanda anterior) sem precisar perguntar.
+  buscarClientePorTelefone(restaurantId: number, telefone: string) {
+    return this.salaoService.buscarClientePorTelefone(restaurantId, telefone);
   }
 
   async aplicarDesconto(id: number, restaurantId: number, valor: number) {
