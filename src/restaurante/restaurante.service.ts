@@ -668,6 +668,127 @@ export class RestauranteService {
     return data;
   }
 
+  // Histórico + métricas de gosto/frequência de um cliente neste restaurante — cobre
+  // pedidos de delivery E comandas do salão (mesmo customer_id, ver salao.service.ts
+  // resolverOuCriarClienteComanda), unificando os dois canais numa visão só.
+  async detalheCliente(clienteId: number, restaurantId: number) {
+    const { data: cr } = await this.supabase.client
+      .from('customer_restaurants')
+      .select('customer_id')
+      .eq('customer_id', clienteId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!cr) throw new NotFoundException('Cliente não encontrado neste restaurante');
+
+    const { data: cliente, error: errCliente } = await this.supabase.client
+      .from('customers')
+      .select('id, name, email, phone_e164, notes, created_at')
+      .eq('id', clienteId)
+      .single();
+    if (errCliente) throw errCliente;
+
+    const { data: pedidosRaw, error: errPedidos } = await this.supabase.client
+      .from('orders')
+      .select(
+        'id, canal, status, total, payment_method, created_at, numero_comanda, mesa_id, ' +
+        'mesas(numero, nome), ' +
+        'order_items(quantity, unit_price, combo_nome, product_id, products(name, category_id, categories(name)))',
+      )
+      .eq('restaurant_id', restaurantId)
+      .eq('customer_id', clienteId)
+      .order('created_at', { ascending: false });
+    if (errPedidos) throw errPedidos;
+
+    const pedidos = (pedidosRaw ?? []) as any[];
+
+    // "Concluído" pra fins de métrica/gosto: delivery entregue, ou comanda paga —
+    // pedido cancelado/ainda em aberto não representa consumo de verdade.
+    const concluido = (p: any) =>
+      p.canal === 'presencial' ? p.status === 'paga' : p.status === 'delivered';
+    const concluidos = pedidos.filter(concluido);
+
+    const totalGasto = concluidos.reduce((acc, p) => acc + parseFloat(p.total), 0);
+    const pedidosCount = concluidos.length;
+    const ticketMedio = pedidosCount ? totalGasto / pedidosCount : 0;
+
+    const datasOrdenadas = concluidos
+      .map((p) => new Date(p.created_at).getTime())
+      .sort((a, b) => a - b);
+    const primeiroPedido = datasOrdenadas.length ? new Date(datasOrdenadas[0]).toISOString() : null;
+    const ultimoPedido = datasOrdenadas.length ? new Date(datasOrdenadas[datasOrdenadas.length - 1]).toISOString() : null;
+
+    let frequenciaMediaDias: number | null = null;
+    if (datasOrdenadas.length > 1) {
+      const totalDias = (datasOrdenadas[datasOrdenadas.length - 1] - datasOrdenadas[0]) / 86400000;
+      frequenciaMediaDias = parseFloat((totalDias / (datasOrdenadas.length - 1)).toFixed(1));
+    }
+
+    const porCanal: Record<string, { count: number; total: number }> = {};
+    for (const p of concluidos) {
+      const canal = p.canal === 'presencial' ? 'presencial' : 'delivery';
+      if (!porCanal[canal]) porCanal[canal] = { count: 0, total: 0 };
+      porCanal[canal].count++;
+      porCanal[canal].total += parseFloat(p.total);
+    }
+    for (const canal of Object.keys(porCanal)) {
+      porCanal[canal].total = parseFloat(porCanal[canal].total.toFixed(2));
+    }
+
+    // Gosto do cliente: produto (comida ou bebida, sem distinguir por nome já que a
+    // categorização é livre por restaurante) e categoria mais consumidos por quantidade.
+    const produtoMap = new Map<string, number>();
+    const categoriaMap = new Map<string, number>();
+    for (const p of concluidos) {
+      for (const item of (p.order_items ?? []) as any[]) {
+        const nomeProduto = item.products?.name ?? item.combo_nome ?? 'Produto removido';
+        produtoMap.set(nomeProduto, (produtoMap.get(nomeProduto) ?? 0) + item.quantity);
+        const nomeCategoria = item.products?.categories?.name;
+        if (nomeCategoria) categoriaMap.set(nomeCategoria, (categoriaMap.get(nomeCategoria) ?? 0) + item.quantity);
+      }
+    }
+    const produtosFavoritos = [...produtoMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([nome, quantidade]) => ({ nome, quantidade }));
+    const categoriasFavoritas = [...categoriaMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([nome, quantidade]) => ({ nome, quantidade }));
+
+    // Histórico completo (todos os status, inclusive cancelado/em aberto) — só as
+    // métricas acima que filtram por "concluído", a lista é pro dono ver o quadro todo.
+    const historico = pedidos.map((p) => ({
+      id: p.id,
+      canal: p.canal === 'presencial' ? 'presencial' : 'delivery',
+      status: p.status,
+      total: parseFloat(p.total),
+      payment_method: p.payment_method,
+      created_at: p.created_at,
+      numero_comanda: p.numero_comanda,
+      mesa: p.mesas ? `Mesa ${p.mesas.numero}${p.mesas.nome ? ' - ' + p.mesas.nome : ''}` : null,
+      itens: (p.order_items ?? []).map((i: any) => ({
+        nome: i.products?.name ?? i.combo_nome ?? 'Produto removido',
+        quantidade: i.quantity,
+      })),
+    }));
+
+    return {
+      cliente,
+      metricas: {
+        pedidos_count: pedidosCount,
+        total_gasto: parseFloat(totalGasto.toFixed(2)),
+        ticket_medio: parseFloat(ticketMedio.toFixed(2)),
+        primeiro_pedido: primeiroPedido,
+        ultimo_pedido: ultimoPedido,
+        frequencia_media_dias: frequenciaMediaDias,
+        por_canal: porCanal,
+      },
+      produtos_favoritos: produtosFavoritos,
+      categorias_favoritas: categoriasFavoritas,
+      historico,
+    };
+  }
+
   async updateEmpresa(
     restaurantId: number,
     body: { name?: string; address?: string; state?: string; city?: string; neighborhood?: string; cep?: string; logo_url?: string; slug?: string },

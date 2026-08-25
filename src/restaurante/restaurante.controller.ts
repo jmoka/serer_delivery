@@ -188,6 +188,11 @@ export class RestauranteController {
     return this.service.atualizarCliente(id, req.restaurantId, body);
   }
 
+  @Get('clientes/:id')
+  detalheCliente(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.detalheCliente(id, req.restaurantId);
+  }
+
   @Get('aparencia')
   getAparencia(@Req() req: any) {
     return this.service.getAparencia(req.restaurantId);
