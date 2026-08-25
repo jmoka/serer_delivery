@@ -28,13 +28,23 @@ export class MotoboyPortalController {
   }
 
   @Get('ganhos/historico')
-  ganhosHistorico(@Query('restaurant_id') restaurantId: string | undefined, @Req() req: any) {
-    return this.service.ganhosHistorico(req.motoboyId, restaurantId ? Number(restaurantId) : undefined);
+  ganhosHistorico(
+    @Query('restaurant_id') restaurantId: string | undefined,
+    @Query('de') de: string | undefined,
+    @Query('ate') ate: string | undefined,
+    @Req() req: any,
+  ) {
+    return this.service.ganhosHistorico(req.motoboyId, restaurantId ? Number(restaurantId) : undefined, de, ate);
   }
 
   @Get('ganhos/por-dia')
-  ganhosPorDia(@Req() req: any) {
-    return this.service.ganhosPorDia(req.motoboyId);
+  ganhosPorDia(
+    @Query('restaurant_id') restaurantId: string | undefined,
+    @Query('de') de: string | undefined,
+    @Query('ate') ate: string | undefined,
+    @Req() req: any,
+  ) {
+    return this.service.ganhosPorDia(req.motoboyId, restaurantId ? Number(restaurantId) : undefined, de, ate);
   }
 
   @Get('pedidos/disponiveis')

@@ -1044,18 +1044,26 @@ export class MotoboyService {
     return { resumo, total_geral: totalGeral, hoje };
   }
 
-  // Produção por dia (últimos 14 dias) pra aba Financeiro do motoboy — mesmo padrão de
-  // agrupamento por dia usado em relatorioFretes (por_dia).
-  async ganhosPorDia(motoboyId: number) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 14);
-    cutoff.setHours(0, 0, 0, 0);
-
-    const { data, error } = await this.supabase.client
+  // Produção por dia pra aba Financeiro do motoboy — mesmo padrão de agrupamento por dia
+  // usado em relatorioFretes (por_dia). Sem de/ate (uso original, antes do filtro de
+  // período), cai no default de últimos 14 dias.
+  async ganhosPorDia(motoboyId: number, restaurantId?: number, de?: string, ate?: string) {
+    let query = this.supabase.client
       .from('motoboy_comissoes')
       .select('comissao_valor, criado_em')
-      .eq('motoboy_id', motoboyId)
-      .gte('criado_em', cutoff.toISOString());
+      .eq('motoboy_id', motoboyId);
+
+    if (de && ate) {
+      query = query.gte('criado_em', de).lte('criado_em', ate);
+    } else {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 14);
+      cutoff.setHours(0, 0, 0, 0);
+      query = query.gte('criado_em', cutoff.toISOString());
+    }
+    if (restaurantId) query = query.eq('restaurant_id', restaurantId);
+
+    const { data, error } = await query;
     if (error) throw error;
 
     const porDia: Record<string, { dia: string; data: string; entregas: number; total: number }> = {};
@@ -1072,14 +1080,21 @@ export class MotoboyService {
     return { por_dia: Object.values(porDia).sort((a, b) => (a.data < b.data ? 1 : -1)) };
   }
 
-  async ganhosHistorico(motoboyId: number, restaurantId?: number) {
+  async ganhosHistorico(motoboyId: number, restaurantId?: number, de?: string, ate?: string) {
     let query = this.supabase.client
       .from('motoboy_comissoes')
       .select('id, restaurant_id, pedido_id, tipo, distancia_km, frete_repassado, valor_base, comissao_valor, status, criado_em, restaurant:restaurants(name)')
       .eq('motoboy_id', motoboyId)
-      .order('criado_em', { ascending: false })
-      .limit(100);
+      .order('criado_em', { ascending: false });
+
     if (restaurantId) query = query.eq('restaurant_id', restaurantId);
+    if (de && ate) {
+      // Filtro de período explícito substitui o limite de "últimas 100" — o usuário
+      // pediu um recorte, não uma amostra recente.
+      query = query.gte('criado_em', de).lte('criado_em', ate);
+    } else {
+      query = query.limit(100);
+    }
 
     const { data, error } = await query;
     if (error) throw error;
