@@ -2409,6 +2409,195 @@ export class RestauranteService {
     return { ok: true };
   }
 
+  // Relatório Motoboy: espelha getRelatorioGarcom, pra conferência + repasse dos ganhos de
+  // cada motoboy no período. Motoboys não pertencem a 1 restaurante só (motoboys.restaurant_id
+  // é legado 1:1) — a lista de "motoboys deste restaurante" vem da afiliação aceita em
+  // motoboy_estabelecimentos. Motoboy não tem gorjeta nem conceito de turno/conferência.
+  async getRelatorioMotoboy(restaurantId: number, de: string, ate: string) {
+    const { data: afiliacoes } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .select('motoboy_id, motoboys(id, name)')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aceito');
+
+    const { data: comissoes } = await this.supabase.client
+      .from('motoboy_comissoes')
+      .select('id, motoboy_id, pedido_id, tipo, distancia_km, frete_repassado, valor_base, comissao_valor, criado_em')
+      .eq('restaurant_id', restaurantId)
+      .gte('criado_em', de)
+      .lte('criado_em', ate);
+
+    const porMotoboy = new Map<number, any>();
+    for (const a of (afiliacoes ?? []) as any[]) {
+      const m = a.motoboys;
+      if (!m) continue;
+      porMotoboy.set(m.id, {
+        motoboy_id: m.id,
+        nome: m.name,
+        entregas: 0,
+        total_frete_repassado: 0,
+        total_adicional: 0,
+        total_comissao: 0,
+      });
+    }
+
+    // Nomes de todo mundo que aparece nas comissões do período, mesmo quem não está mais
+    // afiliado hoje — pro detalhamento continuar legível mesmo pra motoboy já removido.
+    const motoboyIdsComissao = [...new Set<number>((comissoes ?? []).map((c: any) => c.motoboy_id))];
+    const idsFaltantes = motoboyIdsComissao.filter((id) => !porMotoboy.has(id));
+    const { data: motoboysExtras } = idsFaltantes.length
+      ? await this.supabase.client.from('motoboys').select('id, name').in('id', idsFaltantes)
+      : { data: [] as any[] };
+    const nomeMotoboy = new Map<number, string>([
+      ...[...porMotoboy.values()].map((r: any) => [r.motoboy_id, r.nome] as [number, string]),
+      ...(motoboysExtras ?? []).map((m: any) => [m.id, m.name] as [number, string]),
+    ]);
+
+    for (const c of (comissoes ?? []) as any[]) {
+      const row = porMotoboy.get(c.motoboy_id);
+      if (!row) continue;
+      row.entregas += 1;
+      row.total_frete_repassado += c.frete_repassado ?? 0;
+      row.total_comissao += c.comissao_valor ?? 0;
+      row.total_adicional += (c.comissao_valor ?? 0) - (c.frete_repassado ?? 0);
+    }
+
+    const { data: repasses } = await this.supabase.client
+      .from('motoboy_repasses')
+      .select('id, motoboy_id, valor_comissao, pago_em')
+      .eq('restaurant_id', restaurantId)
+      .eq('periodo_de', de)
+      .eq('periodo_ate', ate);
+    const repassePorMotoboy = new Map<number, any>((repasses ?? []).map((r: any) => [r.motoboy_id, r]));
+    for (const row of porMotoboy.values()) {
+      row.repasse = repassePorMotoboy.get(row.motoboy_id) ?? null;
+    }
+
+    const entregas = (comissoes ?? [])
+      .map((c: any) => ({
+        id: c.id,
+        pedido_id: c.pedido_id,
+        motoboy_id: c.motoboy_id,
+        motoboy_nome: nomeMotoboy.get(c.motoboy_id) ?? '—',
+        data: c.criado_em,
+        tipo: c.tipo,
+        distancia_km: c.distancia_km,
+        frete_repassado: c.frete_repassado ?? 0,
+        adicional: (c.comissao_valor ?? 0) - (c.frete_repassado ?? 0),
+        comissao_valor: c.comissao_valor ?? 0,
+      }))
+      .sort((a: any, b: any) => new Date(a.data).getTime() - new Date(b.data).getTime());
+
+    return { motoboys: Array.from(porMotoboy.values()), entregas };
+  }
+
+  // Espelha registrarRepasseGarcom — sem valor_gorjeta (motoboy não recebe gorjeta).
+  async registrarRepasseMotoboy(
+    restaurantId: number,
+    motoboyId: number,
+    body: { de: string; ate: string; valor_comissao: number; valor_dinheiro?: number; valor_pix?: number },
+  ) {
+    const { data: afiliacao } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .select('motoboy_id, motoboys(id, name)')
+      .eq('motoboy_id', motoboyId)
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aceito')
+      .maybeSingle();
+    if (!afiliacao) throw new NotFoundException('Motoboy não encontrado neste restaurante');
+    const motoboy = (afiliacao as any).motoboys;
+
+    const total = Number(body.valor_comissao ?? 0);
+    const valorDinheiro = Number(body.valor_dinheiro ?? 0);
+    const valorPix = Number(body.valor_pix ?? 0);
+    if (Math.abs(valorDinheiro + valorPix - total) > 0.01) {
+      throw new BadRequestException('Soma dos valores por forma de pagamento não bate com o total a repassar');
+    }
+
+    let saidaCaixaId: number | null = null;
+    let saidaCriadoEm: string | null = null;
+    if (valorDinheiro > 0) {
+      const saida = await this.adicionarSaida(restaurantId, {
+        descricao: `Repasse comissão - ${motoboy?.name ?? 'Motoboy'}`,
+        valor: valorDinheiro,
+        meio: 'dinheiro',
+      });
+      saidaCaixaId = saida.caixa_id;
+      saidaCriadoEm = saida.criado_em;
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('motoboy_repasses')
+      .insert({
+        restaurant_id: restaurantId,
+        motoboy_id: motoboyId,
+        periodo_de: body.de,
+        periodo_ate: body.ate,
+        valor_comissao: total,
+        valor_dinheiro: valorDinheiro,
+        valor_pix: valorPix,
+        caixa_id: saidaCaixaId,
+        saida_criado_em: saidaCriadoEm,
+      })
+      .select('id, valor_comissao, valor_dinheiro, valor_pix, pago_em')
+      .single();
+
+    if (error) {
+      if (saidaCaixaId && saidaCriadoEm) {
+        await this.removerSaidaPorCriadoEm(restaurantId, saidaCaixaId, saidaCriadoEm).catch(() => {});
+      }
+      if (error.code === '23505') throw new ConflictException('Esse período já foi marcado como pago pra esse motoboy.');
+      throw error;
+    }
+
+    // Aproveita as colunas status/pago_em de motoboy_comissoes (existem desde a criação da
+    // tabela mas nunca tinham sido usadas) pra marcar as entregas do período como pagas.
+    // Best-effort: o registro acima em motoboy_repasses já é a fonte da verdade do repasse,
+    // isso é só bookkeeping extra pro app do motoboy conseguir mostrar pago x pendente.
+    try {
+      await this.supabase.client
+        .from('motoboy_comissoes')
+        .update({ status: 'pago', pago_em: new Date().toISOString() })
+        .eq('motoboy_id', motoboyId)
+        .eq('restaurant_id', restaurantId)
+        .gte('criado_em', body.de)
+        .lte('criado_em', body.ate);
+    } catch {}
+
+    return data;
+  }
+
+  // Espelha estornarRepasseGarcom.
+  async estornarRepasseMotoboy(restaurantId: number, repasseId: number) {
+    const { data: repasse, error: erroSelect } = await this.supabase.client
+      .from('motoboy_repasses')
+      .select('id, motoboy_id, periodo_de, periodo_ate, valor_dinheiro, caixa_id, saida_criado_em')
+      .eq('id', repasseId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (erroSelect) throw erroSelect;
+    if (!repasse) throw new NotFoundException('Repasse não encontrado');
+
+    if (repasse.valor_dinheiro > 0 && repasse.caixa_id && repasse.saida_criado_em) {
+      await this.removerSaidaPorCriadoEm(restaurantId, repasse.caixa_id, repasse.saida_criado_em);
+    }
+
+    const { error } = await this.supabase.client.from('motoboy_repasses').delete().eq('id', repasseId);
+    if (error) throw error;
+
+    try {
+      await this.supabase.client
+        .from('motoboy_comissoes')
+        .update({ status: 'pendente', pago_em: null })
+        .eq('motoboy_id', repasse.motoboy_id)
+        .eq('restaurant_id', restaurantId)
+        .gte('criado_em', repasse.periodo_de)
+        .lte('criado_em', repasse.periodo_ate);
+    } catch {}
+
+    return { ok: true };
+  }
+
   // Relatório Produtos: lista/sem-estoque/ativos-bloqueados são estado atual (não filtrados
   // por período); vendas (quantidade/receita por produto) são recortadas pelo período de/ate.
   async getRelatorioProdutos(restaurantId: number, de: string, ate: string) {

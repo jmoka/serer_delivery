@@ -1011,7 +1011,7 @@ export class MotoboyService {
   async ganhosResumo(motoboyId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_comissoes')
-      .select('restaurant_id, comissao_valor, restaurant:restaurants(name)')
+      .select('restaurant_id, comissao_valor, criado_em, restaurant:restaurants(name)')
       .eq('motoboy_id', motoboyId);
     if (error) throw error;
 
@@ -1030,7 +1030,46 @@ export class MotoboyService {
 
     const resumo = [...porRestaurante.values()].sort((a, b) => b.total - a.total);
     const totalGeral = resumo.reduce((acc, r) => acc + r.total, 0);
-    return { resumo, total_geral: totalGeral };
+
+    // "Hoje" pra aba Financeiro do motoboy acompanhar a produção do dia — mesmo corte de
+    // data (início do dia local) usado em relatorioFretes.
+    const inicioHoje = new Date();
+    inicioHoje.setHours(0, 0, 0, 0);
+    const hojeRows = (data ?? []).filter((row: any) => new Date(row.criado_em) >= inicioHoje);
+    const hoje = {
+      entregas: hojeRows.length,
+      total: hojeRows.reduce((acc: number, r: any) => acc + Number(r.comissao_valor), 0),
+    };
+
+    return { resumo, total_geral: totalGeral, hoje };
+  }
+
+  // Produção por dia (últimos 14 dias) pra aba Financeiro do motoboy — mesmo padrão de
+  // agrupamento por dia usado em relatorioFretes (por_dia).
+  async ganhosPorDia(motoboyId: number) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 14);
+    cutoff.setHours(0, 0, 0, 0);
+
+    const { data, error } = await this.supabase.client
+      .from('motoboy_comissoes')
+      .select('comissao_valor, criado_em')
+      .eq('motoboy_id', motoboyId)
+      .gte('criado_em', cutoff.toISOString());
+    if (error) throw error;
+
+    const porDia: Record<string, { dia: string; data: string; entregas: number; total: number }> = {};
+    for (const row of (data ?? []) as any[]) {
+      const d = new Date(row.criado_em);
+      const chave = d.toISOString().slice(0, 10);
+      if (!porDia[chave]) {
+        porDia[chave] = { dia: d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }), data: chave, entregas: 0, total: 0 };
+      }
+      porDia[chave].entregas += 1;
+      porDia[chave].total += Number(row.comissao_valor);
+    }
+
+    return { por_dia: Object.values(porDia).sort((a, b) => (a.data < b.data ? 1 : -1)) };
   }
 
   async ganhosHistorico(motoboyId: number, restaurantId?: number) {

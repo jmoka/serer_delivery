@@ -62,7 +62,7 @@ export class PedidosController {
     return this.service.criar({ ...body, user_id: req.userId });
   }
 
-  // Admin atualiza status (trigger DB registra comissão ao delivered)
+  // Admin atualiza status
   @Patch(':id/status')
   @UseGuards(AdminGuard)
   atualizarStatus(

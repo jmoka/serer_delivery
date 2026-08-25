@@ -32,6 +32,11 @@ export class MotoboyPortalController {
     return this.service.ganhosHistorico(req.motoboyId, restaurantId ? Number(restaurantId) : undefined);
   }
 
+  @Get('ganhos/por-dia')
+  ganhosPorDia(@Req() req: any) {
+    return this.service.ganhosPorDia(req.motoboyId);
+  }
+
   @Get('pedidos/disponiveis')
   disponiveis(@Query('restaurant_id', ParseIntPipe) restaurantId: number, @Req() req: any) {
     return this.service.pedidosDisponiveis(req.motoboyId, restaurantId);

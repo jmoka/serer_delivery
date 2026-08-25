@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
+import { ComissaoService } from '../motoboy/comissao.service';
 import { SalaoService } from '../salao/salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
@@ -13,6 +14,7 @@ export class PedidosService {
   constructor(
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
+    private comissao: ComissaoService,
     private salaoService: SalaoService,
     private estoque: EstoqueService,
     private combos: CombosService,
@@ -332,7 +334,7 @@ export class PedidosService {
       .from('orders')
       .update({ status, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, status, total, restaurant_id, payment_method, updated_at')
+      .select('id, status, total, restaurant_id, payment_method, updated_at, motoboy_id, frete_cobrado, customer_id')
       .single();
 
     if (error) throw error;
@@ -353,7 +355,15 @@ export class PedidosService {
       await this.salaoService.registrarEntradaCaixa(data.restaurant_id, `Venda delivery em dinheiro - Pedido #${id}`, data.total, 'venda_dinheiro');
     }
 
-    // Comissão registrada automaticamente via trigger on_order_delivered quando status = 'delivered'
+    // Comissão do motoboy: só era registrada quando o próprio motoboy confirmava a
+    // entrega pelo app (MotoboyService.confirmarEntrega) — pedido marcado como entregue
+    // por aqui (dono/admin, ex. quando o motoboy não usa o app) tinha motoboy_id mas
+    // nunca gerava a linha em motoboy_comissoes, ficando invisível no relatório de
+    // conferência. Idempotente via UNIQUE(pedido_id) em registrarComissaoEntrega.
+    if (status === 'delivered' && statusAnterior !== 'delivered' && data.motoboy_id) {
+      await this.comissao.registrarComissaoEntrega(data as any, data.motoboy_id);
+    }
+
     return data;
   }
 

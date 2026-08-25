@@ -372,6 +372,32 @@ export class RestauranteController {
     return this.service.estornarRepasseGarcom(req.restaurantId, repasseId);
   }
 
+  @Get('relatorio/motoboy')
+  relatorioMotoboy(
+    @Req() req: any,
+    @Query('de') de: string,
+    @Query('ate') ate: string,
+  ) {
+    return this.service.getRelatorioMotoboy(req.restaurantId, de, ate);
+  }
+
+  @Post('relatorio/motoboy/:motoboyId/repasse')
+  registrarRepasseMotoboy(
+    @Req() req: any,
+    @Param('motoboyId', ParseIntPipe) motoboyId: number,
+    @Body() body: {
+      de: string; ate: string; valor_comissao: number;
+      valor_dinheiro?: number; valor_pix?: number;
+    },
+  ) {
+    return this.service.registrarRepasseMotoboy(req.restaurantId, motoboyId, body);
+  }
+
+  @Delete('relatorio/motoboy/repasse/:repasseId')
+  estornarRepasseMotoboy(@Req() req: any, @Param('repasseId', ParseIntPipe) repasseId: number) {
+    return this.service.estornarRepasseMotoboy(req.restaurantId, repasseId);
+  }
+
   @Get('relatorio/produtos')
   relatorioProdutos(
     @Req() req: any,
