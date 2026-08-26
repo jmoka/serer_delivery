@@ -200,6 +200,39 @@ export class SalaoPdvService {
     return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo };
   }
 
+  // Caixa confirma que o cliente recebeu o item — mesma ação que o garçom tem no app
+  // dele (confirmarEntregaItem em salao.service.ts), só que escopada por restaurantId
+  // em vez de garcomId. Dá pro caixa desbloquear o fechamento/pagamento (ver `pagar`)
+  // mesmo se o garçom não estiver disponível pra confirmar pelo próprio celular.
+  async confirmarEntregaItem(id: number, restaurantId: number, itemId: number) {
+    await this.buscarComanda(id, restaurantId);
+
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, pronto_em')
+      .eq('id', itemId)
+      .eq('order_id', id)
+      .maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (item.status !== 'preparando' && item.status !== 'pronto') {
+      throw new BadRequestException('Item ainda não está em preparo');
+    }
+
+    const agora = new Date().toISOString();
+    const update: Record<string, unknown> = {
+      entregue_garcom: true, entregue_em: agora, garcom_nao_entregou: false,
+    };
+    if (item.status === 'preparando') {
+      update.status = 'pronto';
+      update.pronto_em = item.pronto_em ?? agora;
+    }
+
+    const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
+    if (error) throw error;
+
+    return this.comandaDetalhe(id, restaurantId);
+  }
+
   // Pagamento parcial registrado pelo caixa — mesma regra do garçom (não fecha sozinho).
   async registrarPagamentoParcial(id: number, restaurantId: number, valor: number, formaPagamento: string, valorRecebido?: number, trocoViaPix = false) {
     const comanda = await this.buscarComanda(id, restaurantId);
@@ -986,12 +1019,20 @@ export class SalaoPdvService {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
 
-    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price, status, products(name)').eq('order_id', id);
+    const { data: itens } = await this.supabase.client.from('order_items').select('quantity, unit_price, status, entregue_garcom, products(name)').eq('order_id', id);
     // Venda balcão é a exceção: ali todo item fica pendente de propósito até esse exato
     // pagamento (ver `adicionarItens`), que é quem dispara o envio — não bloqueia. Comanda
     // normal já deveria ter mandado tudo antes via "Enviar novos itens".
     if (!comanda.is_venda_balcao && (itens ?? []).some((i: any) => i.status === 'pendente')) {
       throw new BadRequestException('Tem item ainda não enviado pra produção: envie os itens antes de fechar a comanda');
+    }
+    // Mesma barreira que o app do garçom já tem em `fecharComanda` (salao.service.ts) —
+    // faltava aqui porque o caixa pode pagar direto de 'aberta', sem passar pelo fechamento
+    // do garçom. Sem isso, o caixa fecha/paga a comanda mesmo com prato pronto na cozinha
+    // e ninguém confirmou que o cliente recebeu. Balcão nunca cai aqui: os itens dele só
+    // são enviados (e só então podem virar 'preparando'/'pronto') depois deste pagamento.
+    if ((itens ?? []).some((i: any) => ['preparando', 'pronto'].includes(i.status) && !i.entregue_garcom)) {
+      throw new BadRequestException('Tem item pronto sem confirmar entrega: confirme a entrega antes de fechar a comanda');
     }
     const subtotal = (itens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
     const totalFinal = subtotal - (comanda.desconto_valor ?? 0) + (comanda.acrescimo_valor ?? 0);

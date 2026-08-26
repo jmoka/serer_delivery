@@ -99,6 +99,15 @@ export class RestauranteSalaoController {
     return this.service.editarItem(id, req.restaurantId, itemId, body);
   }
 
+  @Patch('comandas/:id/itens/:itemId/entregar')
+  confirmarEntregaItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Req() req: any,
+  ) {
+    return this.service.confirmarEntregaItem(id, req.restaurantId, itemId);
+  }
+
   @Post('comandas/:id/pagamento')
   registrarPagamentoParcial(
     @Param('id', ParseIntPipe) id: number,
