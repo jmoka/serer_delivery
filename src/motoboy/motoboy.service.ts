@@ -489,7 +489,7 @@ export class MotoboyService {
     const { data, error } = await this.supabase.client
       .from('orders')
       .select(
-        'id, total, troco_para, status, payment_method, restaurant_id, created_at, updated_at, motoboy_lat, motoboy_lng, customer_id, delivery_notes, delivery_occurrence, pago_em',
+        'id, total, troco_para, status, payment_method, restaurant_id, created_at, updated_at, motoboy_lat, motoboy_lng, customer_id, delivery_notes, delivery_occurrence, pago_em, frete_cobrado, frete_excedente_cobrado, distancia_entrega_km',
       )
       .eq('motoboy_id', motoboyId)
       .not('status', 'in', '("delivered","canceled")')
@@ -557,7 +557,7 @@ export class MotoboyService {
   ) {
     const { data: pedido } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, total, frete_cobrado, frete_excedente_cobrado, customer_id, payment_method')
+      .select('id, status, restaurant_id, total, frete_cobrado, frete_excedente_cobrado, distancia_entrega_km, customer_id, payment_method')
       .eq('id', pedidoId)
       .eq('motoboy_id', motoboyId)
       .maybeSingle();
@@ -1097,7 +1097,7 @@ export class MotoboyService {
   async ganhosHistorico(motoboyId: number, restaurantId?: number, de?: string, ate?: string) {
     let query = this.supabase.client
       .from('motoboy_comissoes')
-      .select('id, restaurant_id, pedido_id, tipo, distancia_km, frete_repassado, valor_base, comissao_valor, status, criado_em, restaurant:restaurants(name)')
+      .select('id, restaurant_id, pedido_id, tipo, distancia_km, valor_por_km, percentual, frete_repassado, frete_excedente_repassado, valor_base, comissao_valor, status, criado_em, restaurant:restaurants(name)')
       .eq('motoboy_id', motoboyId)
       .order('criado_em', { ascending: false });
 

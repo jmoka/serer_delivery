@@ -69,7 +69,7 @@ export class PerfilService {
 
     const { data: existing } = await this.supabase.client
       .from('customers')
-      .select('id, address_geocode_hash')
+      .select('id, address_geocode_hash, lat_ajustado_manualmente')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -103,7 +103,9 @@ export class PerfilService {
 
     // Geocodifica o endereço salvo pra alimentar o filtro por raio/KM da home quando o
     // cliente não tiver GPS ao vivo — nunca deixa uma falha do Nominatim derrubar o save.
-    if (body.address_json) {
+    // Pula se o cliente já ajustou o pino manualmente no mapa (geocode automático erra
+    // rua com nome duplicado em outro bairro; não pode sobrescrever o pino confirmado).
+    if (body.address_json && !existing?.lat_ajustado_manualmente) {
       try {
         const resultado = await this.geocoding.geocodificarSeNecessario(body.address_json, existing?.address_geocode_hash ?? null);
         if (resultado) {
@@ -118,6 +120,41 @@ export class PerfilService {
       }
     }
 
+    return data;
+  }
+
+  // Pino arrastado manualmente no mapa (StepEndereco do checkout) — sobrescreve o
+  // geocode automático quando ele erra o endereço, mesmo padrão já usado pro
+  // restaurante (RestauranteService.atualizarLocalizacaoManual).
+  async atualizarLocalizacaoManual(userId: string, lat: number, lng: number) {
+    if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat) || Number.isNaN(lng)) {
+      throw new BadRequestException('Latitude/longitude inválidas.');
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      throw new BadRequestException('Latitude/longitude fora do intervalo válido.');
+    }
+
+    const { data: existing } = await this.supabase.client
+      .from('customers')
+      .select('id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!existing) throw new NotFoundException('Perfil não encontrado — salve o endereço antes de ajustar o pino.');
+
+    const { data, error } = await this.supabase.client
+      .from('customers')
+      .update({
+        lat,
+        lng,
+        lat_ajustado_manualmente: true,
+        address_geocoded_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', existing.id)
+      .select('id, lat, lng')
+      .maybeSingle();
+
+    if (error) throw error;
     return data;
   }
 

@@ -26,6 +26,11 @@ export class PerfilController {
     return this.service.updateMeuPerfil(req.userId, body);
   }
 
+  @Patch('localizacao')
+  atualizarLocalizacao(@Req() req: any, @Body() body: { lat: number; lng: number }) {
+    return this.service.atualizarLocalizacaoManual(req.userId, body.lat, body.lng);
+  }
+
   @Post('foto')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   uploadFoto(@UploadedFile() file: Express.Multer.File, @Req() req: any) {

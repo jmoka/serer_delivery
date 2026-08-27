@@ -77,6 +77,13 @@ export class PedidosService {
     }
   }
 
+  // Geocodificação de endereço brasileiro às vezes casa com a rua errada em outro
+  // bairro/lado da cidade (nome de rua duplicado, ex: "Avenida 16 de Novembro" existe
+  // tanto no centro quanto num bairro periférico de Belém) — o sintoma é uma distância
+  // absurda pra uma entrega normal. Acima desse teto, trata como geocodificação não
+  // confiável e não cobra excedente, em vez de arriscar cobrar uma fortuna por engano.
+  private static readonly DISTANCIA_MAXIMA_PLAUSIVEL_KM = 30;
+
   private calcularValorExcedente(distanciaKm: number, kmIncluso: number, valorPorKm: number): number {
     const excedenteKm = Math.max(0, distanciaKm - kmIncluso);
     return Math.round(excedenteKm * valorPorKm * 100) / 100;
@@ -91,44 +98,87 @@ export class PedidosService {
     restLng: number | null,
     kmIncluso: number,
     valorPorKm: number,
-  ): Promise<{ distanciaKm: number | null; valorExcedente: number }> {
-    if (!customerId || restLat == null || restLng == null || valorPorKm <= 0) {
-      return { distanciaKm: null, valorExcedente: 0 };
+    raioMaximoKm: number | null,
+  ): Promise<{ distanciaKm: number | null; valorExcedente: number; foraDoRaio: boolean }> {
+    // Precisa calcular a distância se tiver excedente por km OU raio máximo configurado
+    // — mesmo sem cobrar por km, o raio máximo ainda precisa saber a distância real.
+    if (!customerId || restLat == null || restLng == null || (valorPorKm <= 0 && !raioMaximoKm)) {
+      return { distanciaKm: null, valorExcedente: 0, foraDoRaio: false };
     }
 
     const distancia = await Promise.race([
       this.comissao.calcularDistanciaPedido(customerId, restLat, restLng),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
-    if (distancia == null) return { distanciaKm: null, valorExcedente: 0 };
+    if (distancia == null || distancia > PedidosService.DISTANCIA_MAXIMA_PLAUSIVEL_KM) {
+      return { distanciaKm: null, valorExcedente: 0, foraDoRaio: false };
+    }
 
     const distanciaKm = parseFloat(distancia.toFixed(2));
-    return { distanciaKm, valorExcedente: this.calcularValorExcedente(distanciaKm, kmIncluso, valorPorKm) };
+    const valorExcedente = valorPorKm > 0 ? this.calcularValorExcedente(distanciaKm, kmIncluso, valorPorKm) : 0;
+    const foraDoRaio = !!raioMaximoKm && distanciaKm > raioMaximoKm;
+    return { distanciaKm, valorExcedente, foraDoRaio };
   }
 
   // POST /pedidos/estimativa-frete-endereco — preview em tempo real enquanto o
   // cliente digita o endereço no checkout (StepEndereco), antes de qualquer coisa
   // ser salva no perfil dele. Geocodifica o endereço direto (mesmo fallback
-  // progressivo do GeocodingService), nunca toca a tabela customers.
+  // progressivo do GeocodingService), nunca toca a tabela customers. Sempre devolve
+  // as coordenadas encontradas (mesmo quando a distância parece implausível) pra
+  // o frontend poder mostrar o pino num mapa e o cliente corrigir manualmente.
   async estimarFretePorEndereco(restaurantId: number, addressJson: Record<string, string>) {
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('lat, lng, km_incluso_frete, valor_km_excedente')
+      .select('lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km')
       .eq('id', restaurantId)
       .maybeSingle();
 
     const valorPorKm = parseFloat(rest?.valor_km_excedente ?? 0);
-    if (!rest?.lat || !rest?.lng || valorPorKm <= 0) return { distanciaKm: null, valorExcedente: 0 };
+    const raioMaximoKm = rest?.raio_maximo_entrega_km != null ? parseFloat(rest.raio_maximo_entrega_km) : null;
+    if (!rest?.lat || !rest?.lng || (valorPorKm <= 0 && !raioMaximoKm)) {
+      return { distanciaKm: null, valorExcedente: 0, lat: null, lng: null, suspeito: false, foraDoRaio: false };
+    }
 
     const coords = await Promise.race([
       this.geocoding.geocodeEnderecoBr(addressJson),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
     ]);
-    if (!coords) return { distanciaKm: null, valorExcedente: 0 };
+    if (!coords) return { distanciaKm: null, valorExcedente: 0, lat: null, lng: null, suspeito: false, foraDoRaio: false };
 
     const distanciaKm = parseFloat(haversineKm({ lat: rest.lat, lng: rest.lng }, coords).toFixed(2));
+    const suspeito = distanciaKm > PedidosService.DISTANCIA_MAXIMA_PLAUSIVEL_KM;
     const kmIncluso = parseFloat(rest.km_incluso_frete ?? 1);
-    return { distanciaKm, valorExcedente: this.calcularValorExcedente(distanciaKm, kmIncluso, valorPorKm) };
+    return {
+      distanciaKm,
+      valorExcedente: suspeito || valorPorKm <= 0 ? 0 : this.calcularValorExcedente(distanciaKm, kmIncluso, valorPorKm),
+      lat: coords.lat,
+      lng: coords.lng,
+      suspeito,
+      foraDoRaio: !suspeito && !!raioMaximoKm && distanciaKm > raioMaximoKm,
+    };
+  }
+
+  // POST /pedidos/estimativa-frete-pino — mesmo cálculo, mas com coordenada confirmada
+  // manualmente pelo cliente no mapa (nunca passa pelo teto de distância plausível,
+  // já que não é mais geocodificação automática — o cliente arrastou o pino).
+  async estimarFretePorCoordenada(restaurantId: number, lat: number, lng: number) {
+    const { data: rest } = await this.supabase.client
+      .from('restaurants')
+      .select('lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km')
+      .eq('id', restaurantId)
+      .maybeSingle();
+
+    const valorPorKm = parseFloat(rest?.valor_km_excedente ?? 0);
+    const raioMaximoKm = rest?.raio_maximo_entrega_km != null ? parseFloat(rest.raio_maximo_entrega_km) : null;
+    if (!rest?.lat || !rest?.lng) return { distanciaKm: null, valorExcedente: 0, foraDoRaio: false };
+
+    const distanciaKm = parseFloat(haversineKm({ lat: rest.lat, lng: rest.lng }, { lat, lng }).toFixed(2));
+    const kmIncluso = parseFloat(rest.km_incluso_frete ?? 1);
+    return {
+      distanciaKm,
+      valorExcedente: valorPorKm > 0 ? this.calcularValorExcedente(distanciaKm, kmIncluso, valorPorKm) : 0,
+      foraDoRaio: !!raioMaximoKm && distanciaKm > raioMaximoKm,
+    };
   }
 
   // GET /pedidos/estimativa-frete — preview do excedente de km antes de confirmar o pedido.
@@ -141,10 +191,10 @@ export class PedidosService {
 
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('lat, lng, km_incluso_frete, valor_km_excedente')
+      .select('lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km')
       .eq('id', restaurantId)
       .maybeSingle();
-    if (!rest) return { distanciaKm: null, valorExcedente: 0 };
+    if (!rest) return { distanciaKm: null, valorExcedente: 0, foraDoRaio: false };
 
     return this.calcularExcedenteDistancia(
       customer?.id ?? null,
@@ -152,6 +202,7 @@ export class PedidosService {
       rest.lng,
       parseFloat(rest.km_incluso_frete ?? 1),
       parseFloat(rest.valor_km_excedente ?? 0),
+      rest.raio_maximo_entrega_km != null ? parseFloat(rest.raio_maximo_entrega_km) : null,
     );
   }
 
@@ -298,7 +349,7 @@ export class PedidosService {
     // Busca frete do restaurante e soma ao total
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('frete_motoboy, motoboy_comissao_tipo, lat, lng, km_incluso_frete, valor_km_excedente')
+      .select('frete_motoboy, motoboy_comissao_tipo, lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km')
       .eq('id', body.restaurant_id)
       .maybeSingle();
 
@@ -344,13 +395,17 @@ export class PedidosService {
       this.geocodificarEnderecoCliente(customerId).catch(() => {});
     }
 
-    const { distanciaKm, valorExcedente } = await this.calcularExcedenteDistancia(
+    const { distanciaKm, valorExcedente, foraDoRaio } = await this.calcularExcedenteDistancia(
       customerId,
       rest?.lat ?? null,
       rest?.lng ?? null,
       parseFloat(rest?.km_incluso_frete ?? 1),
       parseFloat(rest?.valor_km_excedente ?? 0),
+      rest?.raio_maximo_entrega_km != null ? parseFloat(rest.raio_maximo_entrega_km) : null,
     );
+    if (foraDoRaio) {
+      throw new BadRequestException(`Esse endereço fica a ${distanciaKm}km, fora do raio de entrega do estabelecimento (${rest?.raio_maximo_entrega_km}km).`);
+    }
     const total = subtotal + frete + valorExcedente;
 
     // Busca caixa aberto para vincular o pedido
@@ -418,7 +473,7 @@ export class PedidosService {
       .from('orders')
       .update({ status, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, status, total, restaurant_id, payment_method, updated_at, motoboy_id, frete_cobrado, frete_excedente_cobrado, customer_id')
+      .select('id, status, total, restaurant_id, payment_method, updated_at, motoboy_id, frete_cobrado, frete_excedente_cobrado, distancia_entrega_km, customer_id')
       .single();
 
     if (error) throw error;

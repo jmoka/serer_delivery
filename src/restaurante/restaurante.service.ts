@@ -992,7 +992,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, km_incluso_frete, valor_km_excedente, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
+        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -1020,6 +1020,7 @@ export class RestauranteService {
       motoboy_comissao_km_fallback: parseFloat(data?.motoboy_comissao_km_fallback ?? 0),
       km_incluso_frete: parseFloat(data?.km_incluso_frete ?? 1),
       valor_km_excedente: parseFloat(data?.valor_km_excedente ?? 0),
+      raio_maximo_entrega_km: data?.raio_maximo_entrega_km != null ? parseFloat(data.raio_maximo_entrega_km) : null,
       geocode_falhou: !!data?.geocode_falhou,
       gorjeta_percentual: parseFloat(data?.gorjeta_percentual ?? 0),
       taxa_cartao_percentual: parseFloat(data?.taxa_cartao_percentual ?? 0),
@@ -1049,6 +1050,7 @@ export class RestauranteService {
       motoboy_comissao_km_fallback?: number;
       km_incluso_frete?: number;
       valor_km_excedente?: number;
+      raio_maximo_entrega_km?: number | null;
       gorjeta_percentual?: number;
       taxa_cartao_percentual?: number;
       salao_modo?: 'mesas' | 'comandas' | 'ambos';
@@ -1086,6 +1088,7 @@ export class RestauranteService {
     if (body.motoboy_comissao_km_fallback !== undefined) update.motoboy_comissao_km_fallback = body.motoboy_comissao_km_fallback;
     if (body.km_incluso_frete !== undefined) update.km_incluso_frete = body.km_incluso_frete;
     if (body.valor_km_excedente !== undefined) update.valor_km_excedente = body.valor_km_excedente;
+    if (body.raio_maximo_entrega_km !== undefined) update.raio_maximo_entrega_km = body.raio_maximo_entrega_km;
     if (body.gorjeta_percentual !== undefined) update.gorjeta_percentual = body.gorjeta_percentual;
     if (body.taxa_cartao_percentual !== undefined) update.taxa_cartao_percentual = body.taxa_cartao_percentual;
     if (body.salao_modo !== undefined) update.salao_modo = body.salao_modo;

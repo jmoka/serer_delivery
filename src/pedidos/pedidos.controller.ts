@@ -55,6 +55,15 @@ export class PedidosController {
     return this.service.estimarFretePorEndereco(body.restaurant_id, body.address_json ?? {});
   }
 
+  // Recalcula com a coordenada que o cliente confirmou/ajustou arrastando o pino no
+  // mapa — usado quando a geocodificação automática erra (ex: rua com nome duplicado
+  // em outro bairro da cidade).
+  @Post('estimativa-frete-pino')
+  @UseGuards(JwtGuard)
+  estimativaFretePino(@Body() body: { restaurant_id: number; lat: number; lng: number }) {
+    return this.service.estimarFretePorCoordenada(body.restaurant_id, body.lat, body.lng);
+  }
+
   // Admin ou dono do pedido
   @Get(':id')
   @UseGuards(JwtGuard)

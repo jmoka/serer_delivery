@@ -10,6 +10,7 @@ interface PedidoParaComissao {
   total: number;
   frete_cobrado: number;
   frete_excedente_cobrado?: number | null;
+  distancia_entrega_km?: number | null;
   customer_id: number | null;
 }
 
@@ -43,10 +44,13 @@ export class ComissaoService {
     // O motoboy sempre recebe o frete cobrado do cliente, incluindo o excedente de
     // distância (ele que roda o km a mais) — o tipo configurado (fixo/percentual/km)
     // é um ADICIONAL somado em cima disso, não substituto.
-    const freteRepassado = Number(pedido.frete_cobrado ?? 0) + Number(pedido.frete_excedente_cobrado ?? 0);
+    const freteExcedenteRepassado = Number(pedido.frete_excedente_cobrado ?? 0);
+    const freteRepassado = Number(pedido.frete_cobrado ?? 0) + freteExcedenteRepassado;
     let tipo = restaurant.motoboy_comissao_tipo as string;
     let adicional = 0;
-    let distanciaKm: number | null = null;
+    // Já vem calculada do checkout (excedente de km) quando existir — evita geocodificar
+    // de novo só pra exibir no histórico do motoboy.
+    let distanciaKm: number | null = pedido.distancia_entrega_km != null ? Number(pedido.distancia_entrega_km) : null;
     let valorPorKm: number | null = null;
     let percentual: number | null = null;
     let valorBase = 0;
@@ -82,6 +86,7 @@ export class ComissaoService {
         tipo,
         valor_base: valorBase,
         frete_repassado: parseFloat(freteRepassado.toFixed(2)),
+        frete_excedente_repassado: parseFloat(freteExcedenteRepassado.toFixed(2)),
         percentual,
         distancia_km: distanciaKm,
         valor_por_km: valorPorKm,
