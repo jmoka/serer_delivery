@@ -22,7 +22,7 @@ export class AgenteGdoorController {
   // Catálogo do ESTOQUE local, reportado a cada poll — só alimenta o seletor de
   // código no painel, não é usado pelo agente pra decidir mapeamento nenhum.
   @Post('estoque')
-  registrarEstoque(@Body() body: { itens: { codigo: string; descricao?: string }[] }, @Req() req: any) {
+  registrarEstoque(@Body() body: { itens: { codigo: string; descricao?: string; preco_venda?: number; qtd?: number; unidade?: string }[] }, @Req() req: any) {
     return this.service.registrarEstoque(req.agenteRestaurantId, body.itens ?? []);
   }
 
@@ -39,5 +39,20 @@ export class AgenteGdoorController {
   @Post('jobs/:id/erro')
   marcarErro(@Param('id', ParseIntPipe) id: number, @Body() body: { mensagem?: string }, @Req() req: any) {
     return this.service.marcarErro(id, req.agenteRestaurantId, body.mensagem ?? 'Erro desconhecido');
+  }
+
+  @Get('criar-produto/pendentes')
+  criarProdutoPendentes(@Req() req: any) {
+    return this.service.criarProdutoPendentes(req.agenteRestaurantId, req.agenteCnpjEsperado, req.agenteCnpjConfirmado);
+  }
+
+  @Post('criar-produto/:id/concluido')
+  marcarProdutoCriado(@Param('id', ParseIntPipe) id: number, @Body() body: { codigo_gdoor: string }, @Req() req: any) {
+    return this.service.marcarProdutoCriado(id, req.agenteRestaurantId, body.codigo_gdoor);
+  }
+
+  @Post('criar-produto/:id/erro')
+  marcarProdutoErro(@Param('id', ParseIntPipe) id: number, @Body() body: { mensagem?: string }, @Req() req: any) {
+    return this.service.marcarProdutoErro(id, req.agenteRestaurantId, body.mensagem ?? 'Erro desconhecido');
   }
 }
