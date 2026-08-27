@@ -5,6 +5,7 @@ import { ComissaoService } from '../motoboy/comissao.service';
 import { SalaoService } from '../salao/salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
+import { haversineKm } from '../common/geo.util';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
@@ -76,6 +77,84 @@ export class PedidosService {
     }
   }
 
+  private calcularValorExcedente(distanciaKm: number, kmIncluso: number, valorPorKm: number): number {
+    const excedenteKm = Math.max(0, distanciaKm - kmIncluso);
+    return Math.round(excedenteKm * valorPorKm * 100) / 100;
+  }
+
+  // Checkout é síncrono — nunca deixa o cliente esperando o Nominatim (rate-limited
+  // a ~1req/s pelo GeocodingService). Se não resolver rápido, cobra excedente zero
+  // — decisão de produto: nunca estimar/arriscar cobrar a mais no excedente de km.
+  private async calcularExcedenteDistancia(
+    customerId: number | null,
+    restLat: number | null,
+    restLng: number | null,
+    kmIncluso: number,
+    valorPorKm: number,
+  ): Promise<{ distanciaKm: number | null; valorExcedente: number }> {
+    if (!customerId || restLat == null || restLng == null || valorPorKm <= 0) {
+      return { distanciaKm: null, valorExcedente: 0 };
+    }
+
+    const distancia = await Promise.race([
+      this.comissao.calcularDistanciaPedido(customerId, restLat, restLng),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (distancia == null) return { distanciaKm: null, valorExcedente: 0 };
+
+    const distanciaKm = parseFloat(distancia.toFixed(2));
+    return { distanciaKm, valorExcedente: this.calcularValorExcedente(distanciaKm, kmIncluso, valorPorKm) };
+  }
+
+  // POST /pedidos/estimativa-frete-endereco — preview em tempo real enquanto o
+  // cliente digita o endereço no checkout (StepEndereco), antes de qualquer coisa
+  // ser salva no perfil dele. Geocodifica o endereço direto (mesmo fallback
+  // progressivo do GeocodingService), nunca toca a tabela customers.
+  async estimarFretePorEndereco(restaurantId: number, addressJson: Record<string, string>) {
+    const { data: rest } = await this.supabase.client
+      .from('restaurants')
+      .select('lat, lng, km_incluso_frete, valor_km_excedente')
+      .eq('id', restaurantId)
+      .maybeSingle();
+
+    const valorPorKm = parseFloat(rest?.valor_km_excedente ?? 0);
+    if (!rest?.lat || !rest?.lng || valorPorKm <= 0) return { distanciaKm: null, valorExcedente: 0 };
+
+    const coords = await Promise.race([
+      this.geocoding.geocodeEnderecoBr(addressJson),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+    ]);
+    if (!coords) return { distanciaKm: null, valorExcedente: 0 };
+
+    const distanciaKm = parseFloat(haversineKm({ lat: rest.lat, lng: rest.lng }, coords).toFixed(2));
+    const kmIncluso = parseFloat(rest.km_incluso_frete ?? 1);
+    return { distanciaKm, valorExcedente: this.calcularValorExcedente(distanciaKm, kmIncluso, valorPorKm) };
+  }
+
+  // GET /pedidos/estimativa-frete — preview do excedente de km antes de confirmar o pedido.
+  async estimarFrete(userId: string, restaurantId: number) {
+    const { data: customer } = await this.supabase.client
+      .from('customers')
+      .select('id')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const { data: rest } = await this.supabase.client
+      .from('restaurants')
+      .select('lat, lng, km_incluso_frete, valor_km_excedente')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    if (!rest) return { distanciaKm: null, valorExcedente: 0 };
+
+    return this.calcularExcedenteDistancia(
+      customer?.id ?? null,
+      rest.lat,
+      rest.lng,
+      parseFloat(rest.km_incluso_frete ?? 1),
+      parseFloat(rest.valor_km_excedente ?? 0),
+    );
+  }
+
   private async geocodificarEnderecoCliente(customerId: number) {
     const { data: customer } = await this.supabase.client
       .from('customers')
@@ -87,15 +166,9 @@ export class PedidosService {
     const resultado = await this.geocoding.geocodificarSeNecessario(customer.address_json, customer.address_geocode_hash);
     if (!resultado) return;
 
-    await this.supabase.client
-      .from('customers')
-      .update({
-        lat: resultado.lat,
-        lng: resultado.lng,
-        address_geocode_hash: resultado.hash,
-        address_geocoded_at: new Date().toISOString(),
-      })
-      .eq('id', customerId);
+    const update: Record<string, any> = { lat: resultado.lat, lng: resultado.lng, address_geocoded_at: new Date().toISOString() };
+    if (resultado.hash) update.address_geocode_hash = resultado.hash;
+    await this.supabase.client.from('customers').update(update).eq('id', customerId);
   }
 
   async listar(filtros: {
@@ -108,7 +181,7 @@ export class PedidosService {
   }) {
     let query = this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, status, payment_method, restaurant_id, customer_id, user_id, created_at, pago_em, canal')
+      .select('id, total, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, status, payment_method, restaurant_id, customer_id, user_id, created_at, pago_em, canal')
       .order('created_at', { ascending: false })
       .limit(filtros.limite ?? 50);
 
@@ -138,7 +211,7 @@ export class PedidosService {
   async buscarBruto(id: number) {
     const { data: pedido, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, troco_para, frete_cobrado, entrega_pagamento, status, payment_method, canal, pago_em, comprovante_pagamento_url, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
+      .select('id, total, troco_para, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, entrega_pagamento, status, payment_method, canal, pago_em, comprovante_pagamento_url, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -151,11 +224,11 @@ export class PedidosService {
         .select('id, quantity, unit_price, product_id, combo_nome, combo_quantidade, status, enviado_em, preparando_em')
         .eq('order_id', id),
       pedido.customer_id
-        ? this.supabase.client.from('customers').select('id, name, email, phone_e164, address_json').eq('id', pedido.customer_id).maybeSingle()
+        ? this.supabase.client.from('customers').select('id, name, email, phone_e164, address_json, lat, lng').eq('id', pedido.customer_id).maybeSingle()
         : Promise.resolve({ data: null }),
       this.supabase.client
         .from('restaurants')
-        .select('id, name, comissao_pct, address')
+        .select('id, name, comissao_pct, address, lat, lng')
         .eq('id', pedido.restaurant_id)
         .maybeSingle(),
       pedido.motoboy_id
@@ -225,14 +298,14 @@ export class PedidosService {
     // Busca frete do restaurante e soma ao total
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('frete_motoboy, motoboy_comissao_tipo')
+      .select('frete_motoboy, motoboy_comissao_tipo, lat, lng, km_incluso_frete, valor_km_excedente')
       .eq('id', body.restaurant_id)
       .maybeSingle();
 
     const frete = parseFloat(rest?.frete_motoboy ?? 0);
-    const total = subtotal + frete;
 
-    // Resolve customer_id — busca existente ou cria novo ao primeiro pedido
+    // Resolve customer_id — busca existente ou cria novo ao primeiro pedido. Precisa vir
+    // antes do cálculo de excedente de km, que depende do customerId pra achar lat/lng.
     let customerId = body.customer_id ?? null;
     if (!customerId && body.user_id) {
       const { data: c } = await this.supabase.client
@@ -271,6 +344,15 @@ export class PedidosService {
       this.geocodificarEnderecoCliente(customerId).catch(() => {});
     }
 
+    const { distanciaKm, valorExcedente } = await this.calcularExcedenteDistancia(
+      customerId,
+      rest?.lat ?? null,
+      rest?.lng ?? null,
+      parseFloat(rest?.km_incluso_frete ?? 1),
+      parseFloat(rest?.valor_km_excedente ?? 0),
+    );
+    const total = subtotal + frete + valorExcedente;
+
     // Busca caixa aberto para vincular o pedido
     const { data: caixaAberto } = await this.supabase.client
       .from('caixas')
@@ -290,6 +372,8 @@ export class PedidosService {
         user_id: body.user_id,
         total: parseFloat(total.toFixed(2)),
         frete_cobrado: parseFloat(frete.toFixed(2)),
+        distancia_entrega_km: distanciaKm,
+        frete_excedente_cobrado: parseFloat(valorExcedente.toFixed(2)),
         status: 'pending',
         caixa_id: caixaAberto?.id ?? null,
       })
@@ -334,7 +418,7 @@ export class PedidosService {
       .from('orders')
       .update({ status, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, status, total, restaurant_id, payment_method, updated_at, motoboy_id, frete_cobrado, customer_id')
+      .select('id, status, total, restaurant_id, payment_method, updated_at, motoboy_id, frete_cobrado, frete_excedente_cobrado, customer_id')
       .single();
 
     if (error) throw error;

@@ -107,15 +107,11 @@ export class PerfilService {
       try {
         const resultado = await this.geocoding.geocodificarSeNecessario(body.address_json, existing?.address_geocode_hash ?? null);
         if (resultado) {
-          await this.supabase.client
-            .from('customers')
-            .update({
-              lat: resultado.lat,
-              lng: resultado.lng,
-              address_geocode_hash: resultado.hash,
-              address_geocoded_at: new Date().toISOString(),
-            })
-            .eq('id', customerId);
+          const update: Record<string, any> = { lat: resultado.lat, lng: resultado.lng, address_geocoded_at: new Date().toISOString() };
+          // hash null = falhou — não persiste, pra tentar de novo no próximo save
+          // mesmo com o endereço idêntico (em vez de travar num resultado nulo).
+          if (resultado.hash) update.address_geocode_hash = resultado.hash;
+          await this.supabase.client.from('customers').update(update).eq('id', customerId);
         }
       } catch {
         // silencioso — perfil já foi salvo, geocodificação é best-effort

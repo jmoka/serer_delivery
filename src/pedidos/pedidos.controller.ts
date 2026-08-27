@@ -39,6 +39,22 @@ export class PedidosController {
     });
   }
 
+  // Preview do excedente de km antes de confirmar o pedido (StepEndereco em diante do
+  // checkout) — precisa vir ANTES de @Get(':id') senão o Nest casaria como :id.
+  @Get('estimativa-frete')
+  @UseGuards(JwtGuard)
+  estimativaFrete(@Query('restaurant_id', ParseIntPipe) restaurantId: number, @Req() req: any) {
+    return this.service.estimarFrete(req.userId, restaurantId);
+  }
+
+  // Preview em tempo real enquanto o cliente ainda está digitando o endereço
+  // (antes de salvar o perfil) — StepEndereco chama isso assim que o CEP resolve.
+  @Post('estimativa-frete-endereco')
+  @UseGuards(JwtGuard)
+  estimativaFreteEndereco(@Body() body: { restaurant_id: number; address_json: Record<string, string> }) {
+    return this.service.estimarFretePorEndereco(body.restaurant_id, body.address_json ?? {});
+  }
+
   // Admin ou dono do pedido
   @Get(':id')
   @UseGuards(JwtGuard)

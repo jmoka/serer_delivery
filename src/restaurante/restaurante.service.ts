@@ -992,7 +992,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
+        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, km_incluso_frete, valor_km_excedente, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -1018,6 +1018,8 @@ export class RestauranteService {
       motoboy_comissao_percentual: parseFloat(data?.motoboy_comissao_percentual ?? 0),
       motoboy_comissao_valor_km: parseFloat(data?.motoboy_comissao_valor_km ?? 0),
       motoboy_comissao_km_fallback: parseFloat(data?.motoboy_comissao_km_fallback ?? 0),
+      km_incluso_frete: parseFloat(data?.km_incluso_frete ?? 1),
+      valor_km_excedente: parseFloat(data?.valor_km_excedente ?? 0),
       geocode_falhou: !!data?.geocode_falhou,
       gorjeta_percentual: parseFloat(data?.gorjeta_percentual ?? 0),
       taxa_cartao_percentual: parseFloat(data?.taxa_cartao_percentual ?? 0),
@@ -1045,6 +1047,8 @@ export class RestauranteService {
       motoboy_comissao_percentual?: number;
       motoboy_comissao_valor_km?: number;
       motoboy_comissao_km_fallback?: number;
+      km_incluso_frete?: number;
+      valor_km_excedente?: number;
       gorjeta_percentual?: number;
       taxa_cartao_percentual?: number;
       salao_modo?: 'mesas' | 'comandas' | 'ambos';
@@ -1080,6 +1084,8 @@ export class RestauranteService {
     if (body.motoboy_comissao_percentual !== undefined) update.motoboy_comissao_percentual = body.motoboy_comissao_percentual;
     if (body.motoboy_comissao_valor_km !== undefined) update.motoboy_comissao_valor_km = body.motoboy_comissao_valor_km;
     if (body.motoboy_comissao_km_fallback !== undefined) update.motoboy_comissao_km_fallback = body.motoboy_comissao_km_fallback;
+    if (body.km_incluso_frete !== undefined) update.km_incluso_frete = body.km_incluso_frete;
+    if (body.valor_km_excedente !== undefined) update.valor_km_excedente = body.valor_km_excedente;
     if (body.gorjeta_percentual !== undefined) update.gorjeta_percentual = body.gorjeta_percentual;
     if (body.taxa_cartao_percentual !== undefined) update.taxa_cartao_percentual = body.taxa_cartao_percentual;
     if (body.salao_modo !== undefined) update.salao_modo = body.salao_modo;
@@ -2027,7 +2033,7 @@ export class RestauranteService {
   async setFreteGratis(restaurantId: number, pedidoId: number) {
     const { data: pedido, error: errGet } = await this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, status')
+      .select('id, total, frete_cobrado, frete_excedente_cobrado, status')
       .eq('id', pedidoId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -2039,16 +2045,18 @@ export class RestauranteService {
     }
 
     const frete = parseFloat(pedido.frete_cobrado ?? 0);
-    if (frete === 0) return { message: 'Frete já é zero', pedido };
+    const excedente = parseFloat(pedido.frete_excedente_cobrado ?? 0);
+    if (frete === 0 && excedente === 0) return { message: 'Frete já é zero', pedido };
 
-    const novoTotal = parseFloat((Number(pedido.total) - frete).toFixed(2));
+    // "Frete grátis" zera o frete fixo e o excedente de distância juntos — grátis é grátis.
+    const novoTotal = parseFloat((Number(pedido.total) - frete - excedente).toFixed(2));
 
     const { data, error } = await this.supabase.client
       .from('orders')
-      .update({ frete_cobrado: 0, total: novoTotal })
+      .update({ frete_cobrado: 0, frete_excedente_cobrado: 0, total: novoTotal })
       .eq('id', pedidoId)
       .eq('restaurant_id', restaurantId)
-      .select('id, total, frete_cobrado')
+      .select('id, total, frete_cobrado, frete_excedente_cobrado')
       .single();
 
     if (error) throw error;

@@ -557,7 +557,7 @@ export class MotoboyService {
   ) {
     const { data: pedido } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, total, frete_cobrado, customer_id, payment_method')
+      .select('id, status, restaurant_id, total, frete_cobrado, frete_excedente_cobrado, customer_id, payment_method')
       .eq('id', pedidoId)
       .eq('motoboy_id', motoboyId)
       .maybeSingle();

@@ -9,6 +9,7 @@ interface PedidoParaComissao {
   restaurant_id: number;
   total: number;
   frete_cobrado: number;
+  frete_excedente_cobrado?: number | null;
   customer_id: number | null;
 }
 
@@ -39,9 +40,10 @@ export class ComissaoService {
       .maybeSingle();
     if (!restaurant) return null;
 
-    // O motoboy sempre recebe o frete cobrado do cliente — o tipo configurado
-    // (fixo/percentual/km) é um ADICIONAL somado em cima disso, não substituto.
-    const freteRepassado = Number(pedido.frete_cobrado ?? 0);
+    // O motoboy sempre recebe o frete cobrado do cliente, incluindo o excedente de
+    // distância (ele que roda o km a mais) — o tipo configurado (fixo/percentual/km)
+    // é um ADICIONAL somado em cima disso, não substituto.
+    const freteRepassado = Number(pedido.frete_cobrado ?? 0) + Number(pedido.frete_excedente_cobrado ?? 0);
     let tipo = restaurant.motoboy_comissao_tipo as string;
     let adicional = 0;
     let distanciaKm: number | null = null;
@@ -96,7 +98,8 @@ export class ComissaoService {
     return data;
   }
 
-  private async calcularDistanciaPedido(
+  // Público: reaproveitado por PedidosService pra calcular excedente de km no checkout.
+  async calcularDistanciaPedido(
     customerId: number | null,
     restLat: number | null,
     restLng: number | null,
@@ -113,8 +116,7 @@ export class ComissaoService {
     let { lat, lng } = customer;
     if (lat == null || lng == null) {
       // Best-effort: geocodifica agora caso não tenha sido feito no checkout.
-      const enderecoTexto = this.formatarEndereco(customer.address_json);
-      const coords = await this.geocoding.geocodeEndereco(enderecoTexto);
+      const coords = await this.geocoding.geocodeEnderecoBr(customer.address_json);
       if (!coords) return null;
 
       lat = coords.lat;
@@ -127,11 +129,5 @@ export class ComissaoService {
     }
 
     return haversineKm({ lat: restLat, lng: restLng }, { lat, lng });
-  }
-
-  private formatarEndereco(addressJson: any): string {
-    if (!addressJson) return '';
-    const { logradouro, numero, bairro, cidade, estado, cep } = addressJson;
-    return [logradouro, numero, bairro, cidade, estado, cep].filter(Boolean).join(', ');
   }
 }
