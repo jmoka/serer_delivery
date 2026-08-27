@@ -5,5 +5,6 @@ import { LicencaController } from './licenca.controller';
 @Module({
   controllers: [LicencaController],
   providers: [LicencaService],
+  exports: [LicencaService],
 })
 export class LicencaModule {}

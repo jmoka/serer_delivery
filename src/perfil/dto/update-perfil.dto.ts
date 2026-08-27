@@ -14,4 +14,9 @@ export class UpdatePerfilDto {
   @IsOptional()
   @IsObject()
   address_json?: Record<string, any>;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  cpf_cnpj?: string;
 }

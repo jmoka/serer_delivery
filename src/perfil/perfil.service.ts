@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 
-const SELECT_PERFIL = 'id, name, email, phone_e164, address_json, foto_perfil_url';
+const SELECT_PERFIL = 'id, name, email, phone_e164, address_json, foto_perfil_url, cpf_cnpj';
 
 @Injectable()
 export class PerfilService {
@@ -58,7 +58,7 @@ export class PerfilService {
 
   async updateMeuPerfil(
     userId: string,
-    body: { name?: string; phone_e164?: string; address_json?: Record<string, any> },
+    body: { name?: string; phone_e164?: string; address_json?: Record<string, any>; cpf_cnpj?: string },
   ) {
     if (body.address_json) {
       const { logradouro, numero } = body.address_json;

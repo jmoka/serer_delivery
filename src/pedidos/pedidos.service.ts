@@ -6,6 +6,7 @@ import { SalaoService } from '../salao/salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
 import { haversineKm } from '../common/geo.util';
+import { GdoorService } from '../gdoor/gdoor.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
@@ -19,6 +20,7 @@ export class PedidosService {
     private salaoService: SalaoService,
     private estoque: EstoqueService,
     private combos: CombosService,
+    private gdoor: GdoorService,
   ) {}
 
   // Roteia os itens do pedido delivery pro mesmo mecanismo de KDS por setor que o
@@ -275,7 +277,7 @@ export class PedidosService {
         .select('id, quantity, unit_price, product_id, combo_nome, combo_quantidade, status, enviado_em, preparando_em')
         .eq('order_id', id),
       pedido.customer_id
-        ? this.supabase.client.from('customers').select('id, name, email, phone_e164, address_json, lat, lng').eq('id', pedido.customer_id).maybeSingle()
+        ? this.supabase.client.from('customers').select('id, name, email, phone_e164, address_json, lat, lng, cpf_cnpj').eq('id', pedido.customer_id).maybeSingle()
         : Promise.resolve({ data: null }),
       this.supabase.client
         .from('restaurants')
@@ -501,6 +503,15 @@ export class PedidosService {
     // conferência. Idempotente via UNIQUE(pedido_id) em registrarComissaoEntrega.
     if (status === 'delivered' && statusAnterior !== 'delivered' && data.motoboy_id) {
       await this.comissao.registrarComissaoEntrega(data as any, data.motoboy_id);
+    }
+
+    // Enfileira pro agente GDOOR local puxar (polling) — nunca chama o agente
+    // direto, ele que roda numa máquina de restaurante atrás de NAT, inalcançável
+    // por essa API na nuvem. buscarBruto porque precisa dos itens com nome de
+    // produto resolvido, que o update acima não tem. Best-effort, nunca trava o pedido.
+    if (status === 'delivered' && statusAnterior !== 'delivered') {
+      const detalhe = await this.buscarBruto(id);
+      this.gdoor.criarJob(data.restaurant_id, id, { cliente: detalhe.cliente, itens: detalhe.itens }).catch(() => {});
     }
 
     return data;

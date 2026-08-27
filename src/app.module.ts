@@ -22,6 +22,7 @@ import { PerfilModule } from './perfil/perfil.module';
 import { TagsModule } from './tags/tags.module';
 import { SalaoModule } from './salao/salao.module';
 import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.module';
+import { GdoorModule } from './gdoor/gdoor.module';
 import { PlanosModule } from './planos/planos.module';
 import { InstalacoesModule } from './instalacoes/instalacoes.module';
 import { LicencaModule } from './licenca/licenca.module';
@@ -60,6 +61,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
     TagsModule,
     SalaoModule,
     AgenteImpressaoModule,
+    GdoorModule,
     PlanosModule,
     InstalacoesModule,
     LicencaModule,
