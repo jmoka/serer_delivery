@@ -19,6 +19,13 @@ export class AgenteGdoorController {
     return this.service.registrarCnpjAgente(req.agenteRestaurantId, body.cnpj);
   }
 
+  // Catálogo do ESTOQUE local, reportado a cada poll — só alimenta o seletor de
+  // código no painel, não é usado pelo agente pra decidir mapeamento nenhum.
+  @Post('estoque')
+  registrarEstoque(@Body() body: { itens: { codigo: string; descricao?: string }[] }, @Req() req: any) {
+    return this.service.registrarEstoque(req.agenteRestaurantId, body.itens ?? []);
+  }
+
   @Get('jobs/pendentes')
   jobsPendentes(@Req() req: any) {
     return this.service.jobsPendentes(req.agenteRestaurantId, req.agenteCnpjEsperado, req.agenteCnpjConfirmado);

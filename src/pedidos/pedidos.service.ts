@@ -511,7 +511,7 @@ export class PedidosService {
     // produto resolvido, que o update acima não tem. Best-effort, nunca trava o pedido.
     if (status === 'delivered' && statusAnterior !== 'delivered') {
       const detalhe = await this.buscarBruto(id);
-      this.gdoor.criarJob(data.restaurant_id, id, { cliente: detalhe.cliente, itens: detalhe.itens }).catch(() => {});
+      this.gdoor.criarJob(data.restaurant_id, id, detalhe.cliente, detalhe.itens).catch(() => {});
     }
 
     return data;

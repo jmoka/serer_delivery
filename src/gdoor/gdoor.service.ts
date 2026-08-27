@@ -71,10 +71,96 @@ export class GdoorService {
 
   // INSERT puro — nunca faz chamada HTTP. O agente é quem puxa (polling), nunca
   // o contrário (server_delivery roda na nuvem, não alcança a máquina do restaurante).
-  async criarJob(restaurantId: number, pedidoId: number, payload: Record<string, any>) {
+  // Resolve product_id -> codigo_gdoor aqui (mapeamento cadastrado no painel) e já
+  // grava no payload, pra o agente não precisar de nenhum mapeamento local — só
+  // grava o que o job mandar. Item sem mapeamento vai com codigo_gdoor: null, e o
+  // agente reporta erro pedindo pra mapear (visível no painel).
+  async criarJob(restaurantId: number, pedidoId: number, cliente: any, itens: any[]) {
+    const productIds = [...new Set(itens.map((i: any) => i.product_id))];
+    const { data: mapeamentos } = await this.supabase.client
+      .from('gdoor_produto_mapeamento')
+      .select('product_id, codigo_gdoor')
+      .eq('restaurant_id', restaurantId)
+      .in('product_id', productIds.length ? productIds : [0]);
+    const mapa = Object.fromEntries((mapeamentos ?? []).map((m: any) => [m.product_id, m.codigo_gdoor]));
+
+    const itensComCodigo = itens.map((i: any) => ({ ...i, codigo_gdoor: mapa[i.product_id] ?? null }));
+
     const { error } = await this.supabase.client
       .from('gdoor_jobs')
-      .insert({ restaurant_id: restaurantId, pedido_id: pedidoId, payload });
+      .insert({ restaurant_id: restaurantId, pedido_id: pedidoId, payload: { cliente, itens: itensComCodigo } });
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // ── Catálogo/mapeamento de produtos (lado dono lê e edita, agente só escreve o cache) ──
+
+  // Substituição total do cache a cada report do agente — reflete sempre o
+  // estado atual do ESTOQUE do GDOOR, sem acumular itens removidos/renomeados.
+  async registrarEstoque(restaurantId: number, itens: { codigo: string; descricao?: string }[]) {
+    await this.supabase.client.from('gdoor_estoque_cache').delete().eq('restaurant_id', restaurantId);
+    if (itens.length > 0) {
+      const linhas = itens.map((i) => ({ restaurant_id: restaurantId, codigo: i.codigo, descricao: i.descricao ?? null }));
+      const { error } = await this.supabase.client.from('gdoor_estoque_cache').insert(linhas);
+      if (error) throw error;
+    }
+    return { ok: true };
+  }
+
+  async listarEstoque(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('gdoor_estoque_cache')
+      .select('codigo, descricao')
+      .eq('restaurant_id', restaurantId)
+      .order('descricao');
+    if (error) throw error;
+    return { itens: data ?? [] };
+  }
+
+  async listarMapeamento(restaurantId: number) {
+    const [{ data: produtos, error: errProdutos }, { data: mapeamentos, error: errMapa }] = await Promise.all([
+      this.supabase.client
+        .from('products')
+        .select('id, name, category_id, is_active, categories(name)')
+        .eq('restaurant_id', restaurantId)
+        .order('name'),
+      this.supabase.client
+        .from('gdoor_produto_mapeamento')
+        .select('product_id, codigo_gdoor, descricao_gdoor')
+        .eq('restaurant_id', restaurantId),
+    ]);
+    if (errProdutos) throw errProdutos;
+    if (errMapa) throw errMapa;
+
+    const mapa = Object.fromEntries((mapeamentos ?? []).map((m: any) => [m.product_id, m]));
+    const produtosComMapa = (produtos ?? []).map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      category_name: p.categories?.name ?? 'Outros',
+      is_active: p.is_active,
+      codigo_gdoor: mapa[p.id]?.codigo_gdoor ?? null,
+      descricao_gdoor: mapa[p.id]?.descricao_gdoor ?? null,
+    }));
+    return { produtos: produtosComMapa };
+  }
+
+  async salvarMapeamentoProduto(restaurantId: number, productId: number, codigoGdoor: string | null, descricaoGdoor?: string) {
+    if (!codigoGdoor?.trim()) {
+      const { error } = await this.supabase.client
+        .from('gdoor_produto_mapeamento')
+        .delete()
+        .eq('restaurant_id', restaurantId)
+        .eq('product_id', productId);
+      if (error) throw error;
+      return { ok: true };
+    }
+
+    const { error } = await this.supabase.client
+      .from('gdoor_produto_mapeamento')
+      .upsert(
+        { restaurant_id: restaurantId, product_id: productId, codigo_gdoor: codigoGdoor.trim(), descricao_gdoor: descricaoGdoor ?? null, atualizado_em: new Date().toISOString() },
+        { onConflict: 'restaurant_id,product_id' },
+      );
     if (error) throw error;
     return { ok: true };
   }
