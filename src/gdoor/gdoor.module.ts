@@ -4,9 +4,10 @@ import { AgenteGdoorController } from './agente-gdoor.controller';
 import { RestauranteGdoorController } from './restaurante-gdoor.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { PlanosModule } from '../planos/planos.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule],
+  imports: [AuthModule, SupabaseModule, PlanosModule],
   controllers: [AgenteGdoorController, RestauranteGdoorController],
   providers: [GdoorService],
   exports: [GdoorService],

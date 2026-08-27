@@ -22,14 +22,9 @@ export class RestauranteGdoorController {
     return this.service.salvarCnpjEsperado(req.restaurantId, body.cnpj);
   }
 
-  @Get('estoque')
-  estoque(@Req() req: any) {
-    return this.service.listarEstoque(req.restaurantId);
-  }
-
-  @Get('mapeamento')
-  mapeamento(@Req() req: any) {
-    return this.service.listarMapeamento(req.restaurantId);
+  @Get('catalogo')
+  catalogo(@Req() req: any) {
+    return this.service.catalogoCompleto(req.restaurantId);
   }
 
   @Put('mapeamento/:productId')
@@ -39,5 +34,29 @@ export class RestauranteGdoorController {
     @Req() req: any,
   ) {
     return this.service.salvarMapeamentoProduto(req.restaurantId, productId, body.codigo_gdoor, body.descricao_gdoor);
+  }
+
+  @Patch('estoque/:codigo/bloquear')
+  bloquearSync(
+    @Param('codigo') codigo: string,
+    @Body() body: { bloqueado: boolean },
+    @Req() req: any,
+  ) {
+    return this.service.bloquearSync(req.restaurantId, codigo, !!body.bloqueado);
+  }
+
+  @Post('importar-de-gdoor')
+  importarDeGdoor(@Body() body: { codigos: string[] }, @Req() req: any) {
+    return this.service.importarDeGdoor(req.restaurantId, body.codigos ?? []);
+  }
+
+  @Post('exportar-para-gdoor')
+  exportarParaGdoor(@Body() body: { product_ids: number[] }, @Req() req: any) {
+    return this.service.exportarParaGdoor(req.restaurantId, body.product_ids ?? []);
+  }
+
+  @Get('exportar-para-gdoor/status')
+  statusExportacao(@Req() req: any) {
+    return this.service.statusExportacao(req.restaurantId);
   }
 }
