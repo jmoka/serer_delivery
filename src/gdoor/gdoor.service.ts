@@ -120,9 +120,24 @@ export class GdoorService {
 
     const itensComCodigo = itens.map((i: any) => ({ ...i, codigo_gdoor: mapa[i.product_id] ?? null }));
 
+    // Se o cliente do pedido já tiver um cadastro mapeado no GDOOR (sincronização
+    // de clientes por CPF/CNPJ), usa o código dele em vez do genérico
+    // "Consumidor" — o agente decide o fallback se isso vier vazio.
+    let clienteCodigoGdoor: string | null = null;
+    if (cliente?.id) {
+      const { data: mapaCliente } = await this.supabase.client
+        .from('gdoor_cliente_mapeamento')
+        .select('codigo_gdoor')
+        .eq('restaurant_id', restaurantId)
+        .eq('customer_id', cliente.id)
+        .maybeSingle();
+      clienteCodigoGdoor = mapaCliente?.codigo_gdoor ?? null;
+    }
+    const clienteComCodigo = { ...cliente, codigo_gdoor: clienteCodigoGdoor };
+
     const { error } = await this.supabase.client
       .from('gdoor_jobs')
-      .insert({ restaurant_id: restaurantId, pedido_id: pedidoId, payload: { cliente, itens: itensComCodigo } });
+      .insert({ restaurant_id: restaurantId, pedido_id: pedidoId, payload: { cliente: clienteComCodigo, itens: itensComCodigo } });
     if (error) throw error;
     return { ok: true };
   }
