@@ -219,15 +219,22 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, created_at, categories(name)')
+      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
 
     if (error) throw error;
-    // category_name direto no produto (igual ao endpoint do garçom) pra telas com
-    // filtro por categoria não precisarem buscar/montar o map à parte.
-    const produtos = (data ?? []).map((p: any) => ({ ...p, category_name: p.categories?.name ?? 'Outros' }));
+    // category_name/grupo_name direto no produto (igual ao endpoint do garçom)
+    // pra telas com filtro/agrupamento não precisarem montar o map à parte.
+    // grupo_id é sempre uma categoria PRÓPRIA do restaurante (nunca global) —
+    // reaproveita a mesma tabela categories só que como "grupo" no cardápio
+    // impresso (ver categorias/gerenciarGrupo abaixo).
+    const produtos = (data ?? []).map((p: any) => ({
+      ...p,
+      category_name: p.categorias?.name ?? 'Outros',
+      grupo_name: p.grupo?.name ?? null,
+    }));
     return { produtos };
   }
 
@@ -235,7 +242,7 @@ export class RestauranteService {
     restaurantId: number,
     body: {
       name: string; description?: string; price: number; image_url?: string;
-      category_id: number; tags?: string[]; preco_promo?: number; destaque?: boolean;
+      category_id: number; grupo_id?: number | null; tags?: string[]; preco_promo?: number; destaque?: boolean;
       impressora_id?: number; quantidade_estoque?: number; preco_custo?: number; quantidade_minima?: number;
     },
   ) {
@@ -248,6 +255,15 @@ export class RestauranteService {
     if (cat.restaurant_id !== null && cat.restaurant_id !== restaurantId)
       throw new NotFoundException('Categoria não pertence a este restaurante');
 
+    // Grupo (cardápio impresso) é opcional, mas quando informado tem que ser
+    // categoria PRÓPRIA do restaurante — nunca global, é o dono quem cria.
+    if (body.grupo_id != null) {
+      const { data: grupo } = await this.supabase.client
+        .from('categories').select('id, restaurant_id').eq('id', body.grupo_id).maybeSingle();
+      if (!grupo || grupo.restaurant_id !== restaurantId)
+        throw new NotFoundException('Grupo não pertence a este restaurante');
+    }
+
     const { data, error } = await this.supabase.client
       .from('products')
       .insert({
@@ -257,6 +273,7 @@ export class RestauranteService {
         preco_promo: body.preco_promo ?? null,
         image_url: body.image_url ?? null,
         category_id: body.category_id,
+        grupo_id: body.grupo_id ?? null,
         restaurant_id: restaurantId,
         tags: body.tags ?? [],
         destaque: body.destaque ?? false,
@@ -393,6 +410,17 @@ export class RestauranteService {
       if (cat.restaurant_id !== null && cat.restaurant_id !== restaurantId)
         throw new NotFoundException('Categoria não pertence a este restaurante');
       update.category_id = body.category_id;
+    }
+    if (body.grupo_id !== undefined) {
+      if (body.grupo_id === null) {
+        update.grupo_id = null;
+      } else {
+        const { data: grupo } = await this.supabase.client
+          .from('categories').select('id, restaurant_id').eq('id', body.grupo_id).maybeSingle();
+        if (!grupo || grupo.restaurant_id !== restaurantId)
+          throw new NotFoundException('Grupo não pertence a este restaurante');
+        update.grupo_id = body.grupo_id;
+      }
     }
 
     const { data, error } = await this.supabase.client
