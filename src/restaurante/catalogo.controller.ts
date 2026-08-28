@@ -281,6 +281,31 @@ export class CatalogoController {
     return resultado;
   }
 
+  // Item (produto ou combo) em destaque pago no marketplace — restaurante
+  // comprou um pacote (ver módulo marketplace-boost) pra aparecer num dos 4
+  // carrosséis da home. "Ativo" é sempre calculado por data aqui mesmo (sem
+  // job/cron): pago_em preenchido + fim_em ainda não passou.
+  @Get('patrocinados')
+  async patrocinados() {
+    const cacheKey = 'catalogo:patrocinados:marketplace';
+    const cached = await this.redis.getJSON<Record<string, number[]>>(cacheKey);
+    if (cached) return cached;
+
+    const { data, error } = await this.supabase.client
+      .from('marketplace_boosts')
+      .select('carrossel, item_ids')
+      .not('pago_em', 'is', null)
+      .gt('fim_em', new Date().toISOString());
+    if (error) throw error;
+
+    const resultado: Record<string, number[]> = { combos: [], mais_vendidos: [], promocao: [], lancamentos: [] };
+    for (const b of data ?? []) {
+      resultado[b.carrossel] = [...(resultado[b.carrossel] ?? []), ...(b.item_ids ?? [])];
+    }
+    await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    return resultado;
+  }
+
   // Resolução de domínio customizado — precisa vir ANTES de @Get(':slug') na
   // ordem das rotas (mesma regra de 'filtros'/'produtos' acima).
   @Get('by-domain/:host')

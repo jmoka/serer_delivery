@@ -24,6 +24,7 @@ import { SalaoModule } from './salao/salao.module';
 import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.module';
 import { GdoorModule } from './gdoor/gdoor.module';
 import { PlanosModule } from './planos/planos.module';
+import { MarketplaceBoostModule } from './marketplace-boost/marketplace-boost.module';
 import { InstalacoesModule } from './instalacoes/instalacoes.module';
 import { LicencaModule } from './licenca/licenca.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
@@ -63,6 +64,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
     AgenteImpressaoModule,
     GdoorModule,
     PlanosModule,
+    MarketplaceBoostModule,
     InstalacoesModule,
     LicencaModule,
     UsuariosModule,
