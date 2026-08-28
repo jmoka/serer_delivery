@@ -162,6 +162,20 @@ export class RestauranteController {
     return this.service.deletarCategoria(id, req.restaurantId);
   }
 
+  @Get('categorias/observacoes')
+  observacoesCategorias(@Req() req: any) {
+    return this.service.observacoesCategorias(req.restaurantId);
+  }
+
+  @Put('categorias/:id/observacao')
+  salvarObservacaoCategoria(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { observacao: string },
+    @Req() req: any,
+  ) {
+    return this.service.salvarObservacaoCategoria(req.restaurantId, id, body.observacao ?? '');
+  }
+
   @Get('clientes')
   listarClientes(
     @Req() req: any,

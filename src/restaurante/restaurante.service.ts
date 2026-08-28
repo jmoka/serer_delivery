@@ -579,6 +579,39 @@ export class RestauranteService {
     return this.categorias.remover(categoriaId);
   }
 
+  // Observação por categoria (cardápio impresso) — sempre desta loja, mesmo
+  // quando a categoria é da plataforma (compartilhada entre restaurantes).
+  async observacoesCategorias(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('category_observacoes')
+      .select('category_id, observacao')
+      .eq('restaurant_id', restaurantId);
+    if (error) throw error;
+    return { observacoes: data ?? [] };
+  }
+
+  async salvarObservacaoCategoria(restaurantId: number, categoryId: number, observacao: string) {
+    const texto = (observacao ?? '').trim();
+    if (!texto) {
+      const { error } = await this.supabase.client
+        .from('category_observacoes')
+        .delete()
+        .eq('restaurant_id', restaurantId)
+        .eq('category_id', categoryId);
+      if (error) throw error;
+      return { ok: true };
+    }
+
+    const { error } = await this.supabase.client
+      .from('category_observacoes')
+      .upsert(
+        { restaurant_id: restaurantId, category_id: categoryId, observacao: texto, atualizado_em: new Date().toISOString() },
+        { onConflict: 'restaurant_id,category_id' },
+      );
+    if (error) throw error;
+    return { ok: true };
+  }
+
   async listarClientes(restaurantId: number, filtros: { busca?: string; limite?: number }) {
     // Busca IDs dos clientes vinculados a este restaurante
     const { data: crRows, error: crErr } = await this.supabase.client
