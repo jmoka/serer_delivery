@@ -55,4 +55,25 @@ export class AgenteGdoorController {
   marcarProdutoErro(@Param('id', ParseIntPipe) id: number, @Body() body: { mensagem?: string }, @Req() req: any) {
     return this.service.marcarProdutoErro(id, req.agenteRestaurantId, body.mensagem ?? 'Erro desconhecido');
   }
+
+  // Catálogo de clientes local, reportado a cada poll — mesmo padrão do estoque.
+  @Post('clientes')
+  registrarClientes(@Body() body: { itens: any[] }, @Req() req: any) {
+    return this.service.registrarClientes(req.agenteRestaurantId, body.itens ?? []);
+  }
+
+  @Get('criar-cliente/pendentes')
+  criarClientePendentes(@Req() req: any) {
+    return this.service.criarClientePendentes(req.agenteRestaurantId, req.agenteCnpjEsperado, req.agenteCnpjConfirmado);
+  }
+
+  @Post('criar-cliente/:id/concluido')
+  marcarClienteCriado(@Param('id', ParseIntPipe) id: number, @Body() body: { codigo_gdoor: string }, @Req() req: any) {
+    return this.service.marcarClienteCriado(id, req.agenteRestaurantId, body.codigo_gdoor);
+  }
+
+  @Post('criar-cliente/:id/erro')
+  marcarClienteErro(@Param('id', ParseIntPipe) id: number, @Body() body: { mensagem?: string }, @Req() req: any) {
+    return this.service.marcarClienteErro(id, req.agenteRestaurantId, body.mensagem ?? 'Erro desconhecido');
+  }
 }

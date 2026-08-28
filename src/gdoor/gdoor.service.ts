@@ -5,6 +5,15 @@ import { PlanosService } from '../planos/planos.service';
 
 const normalizarCnpj = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '');
 
+// Só dígitos, últimos 11 (DDD + número) — descarta prefixo de país/zero à
+// esquerda (+5591999998888 e 91999998888 têm que bater). CPF/CNPJ é usado
+// primeiro por ser mais forte, mas raramente preenchido no checkout do
+// delivery — telefone é o dado que realmente costuma existir nos dois lados.
+const normalizarTelefone = (v: string | null | undefined) => {
+  const digitos = (v ?? '').replace(/\D/g, '');
+  return digitos.length >= 8 ? digitos.slice(-11) : '';
+};
+
 const CATEGORIA_PADRAO_IMPORTACAO = 'Importado do GDOOR';
 
 // Tolerância de 1 centavo pra não marcar como "divergente" arredondamento de ponto flutuante.
@@ -19,6 +28,14 @@ const qtdDiverge = (a: number | null, b: number | null) => {
 const nomeDiverge = (a: string | null, b: string | null) => {
   if (!a || !b) return false;
   return a.trim().toLowerCase() !== b.trim().toLowerCase();
+};
+// Compara telefone normalizado — formatos diferentes (+55 na frente, DDD com
+// ou sem 9º dígito) não devem contar como divergência.
+const telefoneDiverge = (a: string | null, b: string | null) => {
+  const na = normalizarTelefone(a);
+  const nb = normalizarTelefone(b);
+  if (!na || !nb) return false;
+  return na !== nb;
 };
 
 @Injectable()
@@ -331,12 +348,26 @@ export class GdoorService {
       .in('product_id', productIds.length ? productIds : [0]);
     const jaMapeados = new Set((mapeamentos ?? []).map((m: any) => m.product_id));
 
+    // Job pendente já em fila pro mesmo produto — não duplica se clicar
+    // "exportar" de novo antes do agente processar o anterior.
+    const { data: jobsPendentes } = await this.supabase.client
+      .from('gdoor_criar_produto_jobs')
+      .select('product_id')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'pendente')
+      .in('product_id', productIds.length ? productIds : [0]);
+    const jaEnfileirados = new Set((jobsPendentes ?? []).map((j: any) => j.product_id));
+
     const enfileirados: number[] = [];
     const ignorados: { product_id: number; motivo: string }[] = [];
 
     for (const produto of produtos ?? []) {
       if (jaMapeados.has(produto.id)) {
         ignorados.push({ product_id: produto.id, motivo: 'já mapeado' });
+        continue;
+      }
+      if (jaEnfileirados.has(produto.id)) {
+        ignorados.push({ product_id: produto.id, motivo: 'já tem job pendente' });
         continue;
       }
       const { error } = await this.supabase.client.from('gdoor_criar_produto_jobs').insert({
@@ -482,6 +513,356 @@ export class GdoorService {
     await this.garantirJobCriarProdutoDoRestaurante(jobId, restaurantId);
     const { error } = await this.supabase.client
       .from('gdoor_criar_produto_jobs')
+      .update({ status: 'erro', erro_msg: mensagem ?? 'Erro desconhecido' })
+      .eq('id', jobId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // ── Catálogo/sincronização de clientes (mesmo padrão de produtos) ─────
+  // customers é global na plataforma (N:N via customer_restaurants, não tem
+  // restaurant_id direto) — diferente de products. Importar/exportar checam
+  // duplicata por CPF/CNPJ antes de criar, pra não duplicar cliente que já
+  // existe (de outro restaurante) nem criar de novo no GDOOR quem já tem
+  // código lá. Comparação em memória (não dá pra normalizar pontuação de
+  // CPF/CNPJ direto no filtro do PostgREST) — aceitável no volume atual.
+
+  async registrarClientes(restaurantId: number, itens: { codigo: string; nome?: string; cnpj_cnpf?: string; telefone?: string; email?: string; endereco?: string; numero?: string; complemento?: string; bairro?: string; cidade?: string; uf?: string; cep?: string; lat?: number; lon?: number }[]) {
+    if (itens.length > 0) {
+      const linhas = itens.map((i) => ({
+        restaurant_id: restaurantId,
+        codigo: i.codigo,
+        nome: i.nome ?? null,
+        cnpj_cnpf: i.cnpj_cnpf ?? null,
+        telefone: i.telefone ?? null,
+        email: i.email ?? null,
+        endereco: i.endereco ?? null,
+        numero: i.numero ?? null,
+        complemento: i.complemento ?? null,
+        bairro: i.bairro ?? null,
+        cidade: i.cidade ?? null,
+        uf: i.uf ?? null,
+        cep: i.cep ?? null,
+        lat: i.lat ?? null,
+        lon: i.lon ?? null,
+        atualizado_em: new Date().toISOString(),
+      }));
+      const { error } = await this.supabase.client
+        .from('gdoor_cliente_cache')
+        .upsert(linhas, { onConflict: 'restaurant_id,codigo' });
+      if (error) throw error;
+
+      const codigosAtuais = itens.map((i) => i.codigo);
+      await this.supabase.client
+        .from('gdoor_cliente_cache')
+        .delete()
+        .eq('restaurant_id', restaurantId)
+        .not('codigo', 'in', `(${codigosAtuais.map((c) => `"${c}"`).join(',')})`);
+    } else {
+      await this.supabase.client.from('gdoor_cliente_cache').delete().eq('restaurant_id', restaurantId);
+    }
+    return { ok: true };
+  }
+
+  async bloquearSyncCliente(restaurantId: number, codigo: string, bloqueado: boolean) {
+    const { error } = await this.supabase.client
+      .from('gdoor_cliente_cache')
+      .update({ bloqueado_sync: bloqueado })
+      .eq('restaurant_id', restaurantId)
+      .eq('codigo', codigo);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  async catalogoClientes(restaurantId: number) {
+    const { data: crRows, error: errCr } = await this.supabase.client
+      .from('customer_restaurants')
+      .select('customer_id')
+      .eq('restaurant_id', restaurantId);
+    if (errCr) throw errCr;
+    const customerIds = (crRows ?? []).map((r: any) => r.customer_id);
+
+    const [{ data: clientes, error: errClientes }, { data: cacheGdoor, error: errCache }, { data: mapeamentos, error: errMapa }] = await Promise.all([
+      customerIds.length
+        ? this.supabase.client.from('customers').select('id, name, email, phone_e164, cpf_cnpj').in('id', customerIds).order('name')
+        : Promise.resolve({ data: [], error: null }),
+      this.supabase.client
+        .from('gdoor_cliente_cache')
+        .select('codigo, nome, cnpj_cnpf, telefone, email, bloqueado_sync')
+        .eq('restaurant_id', restaurantId)
+        .order('nome'),
+      this.supabase.client
+        .from('gdoor_cliente_mapeamento')
+        .select('customer_id, codigo_gdoor')
+        .eq('restaurant_id', restaurantId),
+    ]);
+    if (errClientes) throw errClientes;
+    if (errCache) throw errCache;
+    if (errMapa) throw errMapa;
+
+    const mapaPorCliente = Object.fromEntries((mapeamentos ?? []).map((m: any) => [m.customer_id, m]));
+    const mapaPorCodigo = Object.fromEntries((mapeamentos ?? []).map((m: any) => [m.codigo_gdoor, m]));
+    const cachePorCodigo = Object.fromEntries((cacheGdoor ?? []).map((e: any) => [e.codigo, e]));
+
+    const clientesDelivery = (clientes ?? []).map((c: any) => {
+      const mapa = mapaPorCliente[c.id];
+      const item = mapa ? cachePorCodigo[mapa.codigo_gdoor] : null;
+      const diverge = !!item && (nomeDiverge(c.name, item.nome) || telefoneDiverge(c.phone_e164, item.telefone) || nomeDiverge(c.email, item.email));
+      return { id: c.id, name: c.name, email: c.email, phone_e164: c.phone_e164, cpf_cnpj: c.cpf_cnpj, codigo_gdoor: mapa?.codigo_gdoor ?? null, diverge, sincronizavel: !!normalizarCnpj(c.cpf_cnpj) };
+    });
+
+    const clientesGdoor = (cacheGdoor ?? []).map((e: any) => {
+      const mapa = mapaPorCodigo[e.codigo];
+      const cliente = mapa ? (clientes ?? []).find((c: any) => c.id === mapa.customer_id) : null;
+      const diverge = !!cliente && (nomeDiverge(cliente.name, e.nome) || telefoneDiverge(cliente.phone_e164, e.telefone) || nomeDiverge(cliente.email, e.email));
+      return { codigo: e.codigo, nome: e.nome, cnpj_cnpf: e.cnpj_cnpf, telefone: e.telefone, email: e.email, bloqueado_sync: e.bloqueado_sync, customer_id: mapa?.customer_id ?? null, nome_delivery: cliente?.name ?? null, diverge, sincronizavel: !!normalizarCnpj(e.cnpj_cnpf) };
+    });
+
+    return { clientes_delivery: clientesDelivery, clientes_gdoor: clientesGdoor };
+  }
+
+  // Importa em massa clientes do GDOOR pro DeliveryHub. Exige CPF/CNPJ — sem
+  // isso não sincroniza (telefone sozinho não é confiável o bastante pra
+  // decidir automaticamente que é a mesma pessoa). customers é global — se já
+  // existir alguém com o mesmo CPF/CNPJ (de outro restaurante), só vincula
+  // (customer_restaurants) em vez de duplicar o cadastro.
+  async importarClientesDeGdoor(restaurantId: number, codigos: string[]) {
+    const { data: clientesGdoor, error: errGdoor } = await this.supabase.client
+      .from('gdoor_cliente_cache')
+      .select('codigo, nome, cnpj_cnpf, telefone, email, endereco, numero, complemento, bairro, cidade, uf, cep, lat, lon, bloqueado_sync')
+      .eq('restaurant_id', restaurantId)
+      .in('codigo', codigos);
+    if (errGdoor) throw errGdoor;
+
+    const { data: mapeamentos } = await this.supabase.client
+      .from('gdoor_cliente_mapeamento')
+      .select('codigo_gdoor')
+      .eq('restaurant_id', restaurantId)
+      .in('codigo_gdoor', codigos);
+    const jaMapeados = new Set((mapeamentos ?? []).map((m: any) => m.codigo_gdoor));
+
+    const { data: candidatosCpf } = await this.supabase.client
+      .from('customers')
+      .select('id, cpf_cnpj')
+      .not('cpf_cnpj', 'is', null);
+
+    const importados: string[] = [];
+    const ignorados: { codigo: string; motivo: string }[] = [];
+
+    for (const item of clientesGdoor ?? []) {
+      if (jaMapeados.has(item.codigo)) {
+        ignorados.push({ codigo: item.codigo, motivo: 'já mapeado' });
+        continue;
+      }
+      if (item.bloqueado_sync) {
+        ignorados.push({ codigo: item.codigo, motivo: 'marcado como não sincronizar' });
+        continue;
+      }
+      if (!item.nome?.trim()) {
+        ignorados.push({ codigo: item.codigo, motivo: 'sem nome no GDOOR' });
+        continue;
+      }
+      if (!normalizarCnpj(item.cnpj_cnpf)) {
+        ignorados.push({ codigo: item.codigo, motivo: 'sem CPF/CNPJ no GDOOR' });
+        continue;
+      }
+
+      const cnpjNormalizado = normalizarCnpj(item.cnpj_cnpf);
+      const existente = (candidatosCpf ?? []).find((c: any) => normalizarCnpj(c.cpf_cnpj) === cnpjNormalizado) ?? null;
+
+      let customerId: number;
+      if (existente) {
+        customerId = existente.id;
+      } else {
+        const { data: novo, error: errNovo } = await this.supabase.client
+          .from('customers')
+          .insert({
+            name: item.nome.trim(),
+            email: item.email || null,
+            phone_e164: item.telefone || null,
+            cpf_cnpj: item.cnpj_cnpf || null,
+            address_json: {
+              logradouro: item.endereco ?? '',
+              numero: item.numero ?? '',
+              complemento: item.complemento ?? '',
+              bairro: item.bairro ?? '',
+              cidade: item.cidade ?? '',
+              estado: item.uf ?? '',
+              cep: item.cep ?? '',
+            },
+            lat: item.lat ?? null,
+            lng: item.lon ?? null,
+          })
+          .select('id')
+          .single();
+        if (errNovo) {
+          ignorados.push({ codigo: item.codigo, motivo: 'falha ao criar cliente' });
+          continue;
+        }
+        customerId = novo.id;
+      }
+
+      await this.supabase.client
+        .from('customer_restaurants')
+        .upsert({ customer_id: customerId, restaurant_id: restaurantId }, { onConflict: 'customer_id,restaurant_id' });
+
+      await this.supabase.client.from('gdoor_cliente_mapeamento').upsert(
+        { restaurant_id: restaurantId, customer_id: customerId, codigo_gdoor: item.codigo, atualizado_em: new Date().toISOString() },
+        { onConflict: 'restaurant_id,customer_id' },
+      );
+      importados.push(item.codigo);
+    }
+
+    return { importados, ignorados };
+  }
+
+  // Exporta clientes do Delivery pro GDOOR. Exige CPF/CNPJ — sem isso não
+  // sincroniza. Se já existir item no cache com o mesmo CPF/CNPJ, só mapeia
+  // direto (sem pedir job novo pro agente) — evita duplicar cadastro no GDOOR
+  // de quem já está lá.
+  async exportarClientesParaGdoor(restaurantId: number, customerIds: number[]) {
+    const { data: clientes, error: errClientes } = await this.supabase.client
+      .from('customers')
+      .select('id, name, email, phone_e164, cpf_cnpj, address_json')
+      .in('id', customerIds);
+    if (errClientes) throw errClientes;
+
+    const { data: mapeamentos } = await this.supabase.client
+      .from('gdoor_cliente_mapeamento')
+      .select('customer_id')
+      .eq('restaurant_id', restaurantId)
+      .in('customer_id', customerIds.length ? customerIds : [0]);
+    const jaMapeados = new Set((mapeamentos ?? []).map((m: any) => m.customer_id));
+
+    // Job pendente já em fila pro mesmo cliente — não duplica se clicar
+    // "exportar" de novo antes do agente processar o anterior.
+    const { data: jobsPendentes } = await this.supabase.client
+      .from('gdoor_criar_cliente_jobs')
+      .select('customer_id')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'pendente')
+      .in('customer_id', customerIds.length ? customerIds : [0]);
+    const jaEnfileirados = new Set((jobsPendentes ?? []).map((j: any) => j.customer_id));
+
+    const { data: cacheGdoor } = await this.supabase.client
+      .from('gdoor_cliente_cache')
+      .select('codigo, cnpj_cnpf')
+      .eq('restaurant_id', restaurantId)
+      .not('cnpj_cnpf', 'is', null);
+
+    const enfileirados: number[] = [];
+    const mapeadosDireto: number[] = [];
+    const ignorados: { customer_id: number; motivo: string }[] = [];
+
+    for (const cliente of clientes ?? []) {
+      if (jaMapeados.has(cliente.id)) {
+        ignorados.push({ customer_id: cliente.id, motivo: 'já mapeado' });
+        continue;
+      }
+      if (jaEnfileirados.has(cliente.id)) {
+        ignorados.push({ customer_id: cliente.id, motivo: 'já tem job pendente' });
+        continue;
+      }
+      const cnpjNormalizado = normalizarCnpj(cliente.cpf_cnpj);
+      if (!cnpjNormalizado) {
+        ignorados.push({ customer_id: cliente.id, motivo: 'sem CPF/CNPJ cadastrado' });
+        continue;
+      }
+
+      const existenteNoGdoor = (cacheGdoor ?? []).find((e: any) => normalizarCnpj(e.cnpj_cnpf) === cnpjNormalizado) ?? null;
+
+      if (existenteNoGdoor) {
+        await this.supabase.client.from('gdoor_cliente_mapeamento').upsert(
+          { restaurant_id: restaurantId, customer_id: cliente.id, codigo_gdoor: existenteNoGdoor.codigo, atualizado_em: new Date().toISOString() },
+          { onConflict: 'restaurant_id,customer_id' },
+        );
+        mapeadosDireto.push(cliente.id);
+        continue;
+      }
+
+      const endereco: any = cliente.address_json || {};
+      const { error } = await this.supabase.client.from('gdoor_criar_cliente_jobs').insert({
+        restaurant_id: restaurantId,
+        customer_id: cliente.id,
+        payload: {
+          nome: cliente.name,
+          cnpj_cnpf: cliente.cpf_cnpj,
+          telefone: cliente.phone_e164,
+          email: cliente.email,
+          endereco: endereco.logradouro,
+          numero: endereco.numero,
+          complemento: endereco.complemento,
+          bairro: endereco.bairro,
+          cidade: endereco.cidade,
+          uf: endereco.estado,
+          cep: endereco.cep,
+        },
+      });
+      if (error) {
+        ignorados.push({ customer_id: cliente.id, motivo: 'falha ao enfileirar' });
+        continue;
+      }
+      enfileirados.push(cliente.id);
+    }
+
+    return { enfileirados, mapeados_direto: mapeadosDireto, ignorados };
+  }
+
+  async statusExportacaoClientes(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('gdoor_criar_cliente_jobs')
+      .select('id, customer_id, status, codigo_gdoor_criado, erro_msg, criado_em, processado_em')
+      .eq('restaurant_id', restaurantId)
+      .order('criado_em', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return { jobs: data ?? [] };
+  }
+
+  async criarClientePendentes(restaurantId: number, cnpjEsperado: string | null, cnpjConfirmado: string | null) {
+    const cnpjConfere = !cnpjEsperado || (cnpjConfirmado && normalizarCnpj(cnpjEsperado) === normalizarCnpj(cnpjConfirmado));
+    if (!cnpjConfere) return { jobs: [], bloqueado: true };
+
+    const { data, error } = await this.supabase.client
+      .from('gdoor_criar_cliente_jobs')
+      .select('id, payload')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'pendente')
+      .order('criado_em', { ascending: true });
+    if (error) throw error;
+    return { jobs: data ?? [], bloqueado: false };
+  }
+
+  private async garantirJobCriarClienteDoRestaurante(jobId: number, restaurantId: number) {
+    const { data } = await this.supabase.client
+      .from('gdoor_criar_cliente_jobs')
+      .select('id, customer_id')
+      .eq('id', jobId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!data) throw new NotFoundException('Trabalho não encontrado');
+    return data;
+  }
+
+  async marcarClienteCriado(jobId: number, restaurantId: number, codigoGdoor: string) {
+    const job = await this.garantirJobCriarClienteDoRestaurante(jobId, restaurantId);
+    const { error } = await this.supabase.client
+      .from('gdoor_criar_cliente_jobs')
+      .update({ status: 'processado', codigo_gdoor_criado: codigoGdoor, processado_em: new Date().toISOString() })
+      .eq('id', jobId);
+    if (error) throw error;
+
+    await this.supabase.client.from('gdoor_cliente_mapeamento').upsert(
+      { restaurant_id: restaurantId, customer_id: job.customer_id, codigo_gdoor: codigoGdoor, atualizado_em: new Date().toISOString() },
+      { onConflict: 'restaurant_id,customer_id' },
+    );
+    return { ok: true };
+  }
+
+  async marcarClienteErro(jobId: number, restaurantId: number, mensagem: string) {
+    await this.garantirJobCriarClienteDoRestaurante(jobId, restaurantId);
+    const { error } = await this.supabase.client
+      .from('gdoor_criar_cliente_jobs')
       .update({ status: 'erro', erro_msg: mensagem ?? 'Erro desconhecido' })
       .eq('id', jobId);
     if (error) throw error;
