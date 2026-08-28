@@ -59,4 +59,35 @@ export class RestauranteGdoorController {
   statusExportacao(@Req() req: any) {
     return this.service.statusExportacao(req.restaurantId);
   }
+
+  // ── Clientes ────────────────────────────────────────────────────
+
+  @Get('catalogo-clientes')
+  catalogoClientes(@Req() req: any) {
+    return this.service.catalogoClientes(req.restaurantId);
+  }
+
+  @Patch('clientes/:codigo/bloquear')
+  bloquearSyncCliente(
+    @Param('codigo') codigo: string,
+    @Body() body: { bloqueado: boolean },
+    @Req() req: any,
+  ) {
+    return this.service.bloquearSyncCliente(req.restaurantId, codigo, !!body.bloqueado);
+  }
+
+  @Post('importar-clientes-de-gdoor')
+  importarClientesDeGdoor(@Body() body: { codigos: string[] }, @Req() req: any) {
+    return this.service.importarClientesDeGdoor(req.restaurantId, body.codigos ?? []);
+  }
+
+  @Post('exportar-clientes-para-gdoor')
+  exportarClientesParaGdoor(@Body() body: { customer_ids: number[] }, @Req() req: any) {
+    return this.service.exportarClientesParaGdoor(req.restaurantId, body.customer_ids ?? []);
+  }
+
+  @Get('exportar-clientes-para-gdoor/status')
+  statusExportacaoClientes(@Req() req: any) {
+    return this.service.statusExportacaoClientes(req.restaurantId);
+  }
 }
