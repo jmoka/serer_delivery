@@ -43,4 +43,8 @@ export class CriarPlanoDto {
   @IsOptional()
   @IsBoolean()
   inclui_salao?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  inclui_gdoor?: boolean;
 }

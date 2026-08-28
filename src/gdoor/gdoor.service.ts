@@ -110,6 +110,17 @@ export class GdoorService {
   // grava o que o job mandar. Item sem mapeamento vai com codigo_gdoor: null, e o
   // agente reporta erro pedindo pra mapear (visível no painel).
   async criarJob(restaurantId: number, pedidoId: number, cliente: any, itens: any[]) {
+    // Módulo é comprável no pacote (igual Delivery/Salão) — se a loja não tem,
+    // não enfileira. Chamadores (pedidos.service.ts, salao.service.ts) tratam
+    // isso como best-effort (.catch(() => {})), então um no-op silencioso aqui
+    // é o ponto único de enforcement pros dois gatilhos (delivery e comanda).
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('modulo_gdoor')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    if (!restaurante?.modulo_gdoor) return { ok: false, motivo: 'modulo_gdoor_desabilitado' };
+
     const productIds = [...new Set(itens.map((i: any) => i.product_id))];
     const { data: mapeamentos } = await this.supabase.client
       .from('gdoor_produto_mapeamento')

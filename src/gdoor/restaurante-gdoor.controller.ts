@@ -1,9 +1,10 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
+import { ModuloGdoorGuard } from '../auth/modulo-gdoor.guard';
 import { GdoorService } from './gdoor.service';
 
 @Controller('restaurante/gdoor')
-@UseGuards(RestaurantOwnerGuard)
+@UseGuards(RestaurantOwnerGuard, ModuloGdoorGuard)
 export class RestauranteGdoorController {
   constructor(private service: GdoorService) {}
 

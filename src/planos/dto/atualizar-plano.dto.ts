@@ -47,4 +47,8 @@ export class AtualizarPlanoDto {
   @IsOptional()
   @IsBoolean()
   inclui_salao?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  inclui_gdoor?: boolean;
 }

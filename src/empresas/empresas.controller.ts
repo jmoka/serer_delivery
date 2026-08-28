@@ -26,6 +26,7 @@ export class EmpresasController {
     user_id?: string;
     modulo_delivery?: boolean;
     modulo_salao?: boolean;
+    modulo_gdoor?: boolean;
   }) {
     return this.service.criar(body);
   }

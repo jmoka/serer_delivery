@@ -115,6 +115,7 @@ export class PlanosService {
         ativo: body.ativo ?? true,
         inclui_delivery: body.inclui_delivery ?? true,
         inclui_salao: body.inclui_salao ?? false,
+        inclui_gdoor: body.inclui_gdoor ?? false,
       })
       .select()
       .single();
@@ -136,6 +137,7 @@ export class PlanosService {
     if (body.ativo !== undefined) campos.ativo = body.ativo;
     if (body.inclui_delivery !== undefined) campos.inclui_delivery = body.inclui_delivery;
     if (body.inclui_salao !== undefined) campos.inclui_salao = body.inclui_salao;
+    if (body.inclui_gdoor !== undefined) campos.inclui_gdoor = body.inclui_gdoor;
 
     const { data, error } = await this.supabase.client
       .from('planos')
@@ -227,6 +229,7 @@ export class PlanosService {
         .update({
           modulo_delivery: plano.inclui_delivery,
           modulo_salao: plano.inclui_salao,
+          modulo_gdoor: plano.inclui_gdoor,
           updated_at: new Date().toISOString(),
         })
         .eq('id', titular.restaurantId);

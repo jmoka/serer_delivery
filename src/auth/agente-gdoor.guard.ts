@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 
 // Mesmo padrão do AgenteImpressaoGuard — token vira o heartbeat automaticamente
@@ -15,11 +15,15 @@ export class AgenteGdoorGuard implements CanActivate {
 
     const { data } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, gdoor_cnpj_esperado, gdoor_cnpj_confirmado')
+      .select('id, name, modulo_gdoor, gdoor_cnpj_esperado, gdoor_cnpj_confirmado')
       .eq('gdoor_agente_token', token)
       .maybeSingle();
 
     if (!data) throw new UnauthorizedException('Token inválido');
+    // Loja pode ter perdido o módulo (downgrade de plano) depois de já ter
+    // pareado o agente — token continua válido, mas o agente não deve mais
+    // conseguir puxar/reportar nada até o módulo voltar a ser habilitado.
+    if (!data.modulo_gdoor) throw new ForbiddenException('Módulo GDOOR não está habilitado para essa loja');
 
     await this.supabase.client
       .from('restaurants')
