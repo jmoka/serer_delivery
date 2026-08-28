@@ -18,9 +18,10 @@ import { AutoAtendimentoController } from './auto-atendimento.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AgenteImpressaoModule } from '../agente-impressao/agente-impressao.module';
+import { GdoorModule } from '../gdoor/gdoor.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, AgenteImpressaoModule],
+  imports: [AuthModule, SupabaseModule, AgenteImpressaoModule, GdoorModule],
   controllers: [
     SalaoController,
     GarcomAuthController,
