@@ -38,6 +38,11 @@ export class RestauranteGarconsController {
     return this.service.forcarLogout(id, req.restaurantId);
   }
 
+  @Post(':id/liberar-bloqueio')
+  liberarBloqueio(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.liberarBloqueio(id, req.restaurantId);
+  }
+
   @Get('comissoes')
   listarComissoes(@Req() req: any) {
     return this.service.listarComissoesConfig(req.restaurantId);

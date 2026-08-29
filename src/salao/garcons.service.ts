@@ -75,15 +75,16 @@ export class GarconsService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('garcons')
-      .select('id, nome, telefone, login_key, ativo, permissoes, ultimo_acesso_em, active_session_id, session_expires_at, created_at')
+      .select('id, nome, telefone, login_key, ativo, permissoes, ultimo_acesso_em, active_session_id, session_expires_at, bloqueado_ate, created_at')
       .eq('restaurant_id', restaurantId)
       .order('created_at', { ascending: false });
     if (error) throw error;
 
     const agora = Date.now();
-    return (data ?? []).map(({ active_session_id, session_expires_at, ...resto }) => ({
+    return (data ?? []).map(({ active_session_id, session_expires_at, bloqueado_ate, ...resto }) => ({
       ...resto,
       sessao_ativa: !!active_session_id && !!session_expires_at && new Date(session_expires_at).getTime() > agora,
+      bloqueado_ate: bloqueado_ate && new Date(bloqueado_ate).getTime() > agora ? bloqueado_ate : null,
     }));
   }
 
@@ -138,6 +139,19 @@ export class GarconsService {
     const { error } = await this.supabase.client
       .from('garcons')
       .update({ active_session_id: null, session_expires_at: null })
+      .eq('id', id);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Libera na hora o bloqueio por senha errada repetida (ver MAX_TENTATIVAS_LOGIN em
+  // garcom-auth.service.ts) — ação separada de forcarLogout: ali o garçom está logado
+  // em outro lugar, aqui ele não consegue nem entrar em lugar nenhum.
+  async liberarBloqueio(id: number, restaurantId: number) {
+    await this.garantirPertence(id, restaurantId);
+    const { error } = await this.supabase.client
+      .from('garcons')
+      .update({ tentativas_login_falhas: 0, bloqueado_ate: null })
       .eq('id', id);
     if (error) throw error;
     return { ok: true };
