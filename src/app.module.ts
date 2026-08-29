@@ -28,6 +28,7 @@ import { MarketplaceBoostModule } from './marketplace-boost/marketplace-boost.mo
 import { InstalacoesModule } from './instalacoes/instalacoes.module';
 import { LicencaModule } from './licenca/licenca.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
+import { AuthLoginModule } from './auth-login/auth-login.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
     InstalacoesModule,
     LicencaModule,
     UsuariosModule,
+    AuthLoginModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

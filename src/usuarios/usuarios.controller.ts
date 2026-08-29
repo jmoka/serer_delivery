@@ -53,4 +53,9 @@ export class UsuariosController {
   excluir(@Param('id') id: string, @Req() req: any) {
     return this.service.excluir(req.userId, id);
   }
+
+  @Patch(':id/liberar-bloqueio-login')
+  liberarBloqueioLogin(@Param('id') id: string, @Req() req: any) {
+    return this.service.liberarBloqueioLogin(req.userId, id);
+  }
 }

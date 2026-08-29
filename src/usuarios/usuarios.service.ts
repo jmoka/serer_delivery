@@ -70,7 +70,7 @@ export class UsuariosService {
   async listar(params: { busca?: string; role?: string; page: number; limit: number }) {
     let query = this.supabase.client
       .from('user_profiles')
-      .select('id, name, email, role, phone_e164, bloqueado, must_change_password, created_at', { count: 'exact' })
+      .select('id, name, email, role, phone_e164, bloqueado, bloqueado_login_ate, must_change_password, created_at', { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (params.role) query = query.eq('role', params.role);
@@ -88,8 +88,13 @@ export class UsuariosService {
       : { data: [] as any[] };
 
     const porUserId = new Map((restaurantes ?? []).map((r) => [r.user_id, r]));
+    const agora = Date.now();
     return {
-      usuarios: (usuarios ?? []).map((u) => ({ ...u, restaurante: porUserId.get(u.id) ?? null })),
+      usuarios: (usuarios ?? []).map(({ bloqueado_login_ate, ...u }) => ({
+        ...u,
+        restaurante: porUserId.get(u.id) ?? null,
+        bloqueado_login_ate: bloqueado_login_ate && new Date(bloqueado_login_ate).getTime() > agora ? bloqueado_login_ate : null,
+      })),
       total: count ?? 0,
     };
   }
@@ -233,6 +238,42 @@ export class UsuariosService {
     });
 
     return data;
+  }
+
+  // Libera na hora o bloqueio por senha errada repetida no login principal (ver
+  // MAX_TENTATIVAS_LOGIN em auth-login.service.ts) — limpa o bloqueio de conta E o
+  // ban_duration real no Supabase Auth (senão a conta continuaria travada lá até o
+  // bloqueio de 5min expirar sozinho, mesmo com o contador zerado no nosso banco).
+  async liberarBloqueioLogin(adminUserId: string, targetUserId: string) {
+    const { data: perfilAntes } = await this.supabase.client
+      .from('user_profiles')
+      .select('email, bloqueado')
+      .eq('id', targetUserId)
+      .maybeSingle();
+    if (!perfilAntes) throw new NotFoundException('Usuário não encontrado.');
+
+    // Só levanta o ban_duration se não houver bloqueio manual do admin também ativo
+    // (bloqueado=true usa o mesmo mecanismo com prazo bem mais longo) — senão essa
+    // ação liberaria sem querer alguém que o admin bloqueou de propósito.
+    if (!perfilAntes.bloqueado) {
+      const { error: eBan } = await this.supabase.client.auth.admin.updateUserById(targetUserId, { ban_duration: 'none' });
+      if (eBan) throw eBan;
+    }
+
+    const { error } = await this.supabase.client
+      .from('user_profiles')
+      .update({ tentativas_login_falhas: 0, bloqueado_login_ate: null })
+      .eq('id', targetUserId);
+    if (error) throw error;
+
+    await this.supabase.client.from('admin_audit_log').insert({
+      admin_user_id: adminUserId,
+      target_user_id: targetUserId,
+      acao: 'liberar_bloqueio_login',
+      detalhes: { email: perfilAntes.email },
+    });
+
+    return { ok: true };
   }
 
   async excluir(adminUserId: string, targetUserId: string) {
