@@ -162,6 +162,11 @@ export class RestauranteController {
     return this.service.deletarCategoria(id, req.restaurantId);
   }
 
+  @Patch('categorias/:id')
+  editarCategoria(@Param('id', ParseIntPipe) id: number, @Body('name') name: string, @Req() req: any) {
+    return this.service.editarCategoria(id, req.restaurantId, name);
+  }
+
   @Get('categorias/observacoes')
   observacoesCategorias(@Req() req: any) {
     return this.service.observacoesCategorias(req.restaurantId);

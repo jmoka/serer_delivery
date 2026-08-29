@@ -579,6 +579,14 @@ export class RestauranteService {
     return this.categorias.remover(categoriaId);
   }
 
+  async editarCategoria(categoriaId: number, restaurantId: number, name: string) {
+    const { data } = await this.supabase.client
+      .from('categories').select('id').eq('id', categoriaId).eq('restaurant_id', restaurantId).maybeSingle();
+    if (!data) throw new NotFoundException('Categoria não encontrada neste restaurante');
+    if (!name?.trim()) throw new BadRequestException('Nome não pode ser vazio');
+    return this.categorias.atualizar(categoriaId, { name: name.trim() });
+  }
+
   // Observação por categoria (cardápio impresso) — sempre desta loja, mesmo
   // quando a categoria é da plataforma (compartilhada entre restaurantes).
   async observacoesCategorias(restaurantId: number) {
