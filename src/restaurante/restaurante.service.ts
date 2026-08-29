@@ -1291,6 +1291,42 @@ export class RestauranteService {
     };
   }
 
+  // Itens "presos" sem setor: produto sem impressora configurada faz o envio pra cozinha
+  // marcar o item como 'enviado' mas com impressora_id null — getKdsSetor acima nunca
+  // acha esse item (exige impressora_id concreto), então ele fica invisível em toda tela
+  // de KDS/Produção. Essa lista existe pra o estabelecimento descobrir e resgatar esses
+  // itens (ver reenviarItemParaSetor em salao.service.ts), sem precisar já saber o número
+  // da comanda. Sem limite de data — diferente dos "prontos" de getKdsSetor, um item preso
+  // aqui não teria como já ter sido resolvido sozinho.
+  async getKdsSemImpressora(restaurantId: number) {
+    const { data: itens, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, quantity, observacao, product_id, status, enviado_em, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, numero_comanda, is_venda_balcao, aberto_por_nome, mesas(numero, nome), garcons(nome))')
+      .is('impressora_id', null)
+      .in('status', ['enviado', 'preparando'])
+      .order('enviado_em', { ascending: true });
+    if (error) throw error;
+
+    const itensValidos = (itens as any[]).filter((i) => i.orders?.restaurant_id === restaurantId);
+
+    return {
+      itens: itensValidos.map((i) => ({
+        id: i.id,
+        order_id: i.order_id,
+        product_id: i.product_id,
+        product_name: i.products?.name,
+        quantity: i.quantity,
+        observacao: i.observacao,
+        status: i.status,
+        enviado_em: i.enviado_em,
+        mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+        numero_comanda: i.orders?.numero_comanda ?? null,
+        cliente: i.orders?.cliente_mesa_nome ?? null,
+        garcom: i.orders?.garcons?.nome ?? (i.orders?.is_venda_balcao ? 'Balcão' : (i.orders?.aberto_por_nome ?? null)),
+      })),
+    };
+  }
+
   // Move só esse item de "aguardando" (enviado) pra "preparando" — ação por item, não
   // por comanda inteira (cada prato tem seu próprio ritmo de preparo).
   async iniciarPreparoItem(itemId: number, restaurantId: number) {

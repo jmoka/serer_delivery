@@ -188,7 +188,7 @@ export class SalaoPdvService {
     const comanda = await this.buscarComanda(id, restaurantId);
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, observacao, combo_nome, combo_quantidade, status, enviado_em, entregue_garcom, products(name, image_url)')
+      .select('id, product_id, quantity, unit_price, observacao, combo_nome, combo_quantidade, status, enviado_em, entregue_garcom, impressora_id, products(name, image_url)')
       .eq('order_id', id)
       .order('id', { ascending: true });
     const { data: pagamentos } = await this.supabase.client

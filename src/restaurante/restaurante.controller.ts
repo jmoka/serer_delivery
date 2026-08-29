@@ -304,6 +304,13 @@ export class RestauranteController {
     return this.service.getKdsSetor(req.restaurantId, impressoraId);
   }
 
+  // Itens enviados sem impressora configurada no produto — ficam invisíveis nas telas de
+  // setor normais (todas exigem impressora_id). Estabelecimento resgata daqui.
+  @Get('kds/sem-impressora')
+  kdsSemImpressora(@Req() req: any) {
+    return this.service.getKdsSemImpressora(req.restaurantId);
+  }
+
   @Patch('kds/itens/:id/pronto')
   kdsMarcarPronto(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.marcarItemPronto(id, req.restaurantId);
@@ -332,6 +339,11 @@ export class RestauranteController {
   @Post('kds/itens/:id/reimprimir')
   kdsReimprimir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.salaoService.reimprimirItem(id, req.restaurantId);
+  }
+
+  @Patch('kds/itens/:id/reenviar')
+  kdsReenviar(@Param('id', ParseIntPipe) id: number, @Body('impressora_id') impressoraId: number, @Req() req: any) {
+    return this.salaoService.reenviarItemParaSetor(id, req.restaurantId, impressoraId);
   }
 
   @Post('storage/setup')

@@ -1451,6 +1451,56 @@ export class SalaoService {
     return { ok: true, via: 'navegador', setor: (impressora as any).setor, impressora_nome: (impressora as any).nome, itens: itensFormatados };
   }
 
+  // Resgate de item que ficou "preso" sem setor: produto sem impressora configurada no
+  // cadastro faz o item ser marcado 'enviado' mas nunca aparecer em nenhuma tela de KDS
+  // (todas filtram por impressora_id, e o item fica com impressora_id null pra sempre).
+  // O estabelecimento escolhe manualmente pra qual setor mandar agora — atribui a
+  // impressora no item e gera o ticket, igual reimprimirItem faz, mas sem exigir que o
+  // item já tivesse uma impressora associada.
+  async reenviarItemParaSetor(itemId: number, restaurantId: number, novaImpressoraId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, quantity, observacao, order_id, products(name, description), orders(id, restaurant_id, numero_comanda, mesas(numero, nome), cliente_mesa_nome, cliente_mesa_telefone, garcons(nome))')
+      .eq('id', itemId)
+      .maybeSingle();
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
+    }
+    if (!['enviado', 'preparando'].includes(item.status)) {
+      throw new BadRequestException('Item não está mais aguardando ou em preparo');
+    }
+
+    const { data: impressora } = await this.supabase.client
+      .from('impressoras')
+      .select('id, nome, setor, nome_sistema')
+      .eq('id', novaImpressoraId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (!impressora) throw new NotFoundException('Impressora não encontrada');
+
+    await this.supabase.client.from('order_items').update({ impressora_id: novaImpressoraId }).eq('id', itemId);
+
+    const itensFormatados = [{
+      product_name: (item as any).products?.name,
+      description: (item as any).products?.description,
+      quantity: item.quantity,
+      observacao: item.observacao,
+    }];
+    const conteudo = this.formatarTicketTexto((impressora as any).setor, (item as any).orders, itensFormatados);
+
+    if ((impressora as any).nome_sistema) {
+      const { error } = await this.supabase.client.from('impressao_jobs').insert({
+        restaurant_id: restaurantId,
+        impressora_id: novaImpressoraId,
+        conteudo,
+      });
+      if (error) throw error;
+      return { ok: true, via: 'agente' };
+    }
+
+    return { ok: true, via: 'navegador', setor: (impressora as any).setor, impressora_nome: (impressora as any).nome, itens: itensFormatados };
+  }
+
   // Garçom não escolhe mais a forma de pagamento aqui — quem define isso é o caixa,
   // no fechamento real da comanda (só ele emite recibo e finaliza o pagamento).
   async fecharComanda(comandaId: number, garcomId: number) {
