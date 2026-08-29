@@ -203,7 +203,7 @@ export class GdoorService {
     const [{ data: produtos, error: errProdutos }, { data: estoque, error: errEstoque }, { data: mapeamentos, error: errMapa }] = await Promise.all([
       this.supabase.client
         .from('products')
-        .select('id, name, price, quantidade_estoque, category_id, is_active, categories(name)')
+        .select('id, name, price, quantidade_estoque, category_id, is_active, categories!products_category_id_fkey(name)')
         .eq('restaurant_id', restaurantId)
         .order('name'),
       this.supabase.client

@@ -206,7 +206,7 @@ export class SalaoService {
   async produtos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, price, image_url, category_id, quantidade_estoque, categories(name)')
+      .select('id, name, price, image_url, category_id, quantidade_estoque, categories!products_category_id_fkey(name)')
       .eq('restaurant_id', restaurantId)
       .eq('is_active', true)
       .gt('quantidade_estoque', 0)
