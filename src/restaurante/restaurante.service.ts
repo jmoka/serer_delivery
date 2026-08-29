@@ -753,7 +753,7 @@ export class RestauranteService {
       .select(
         'id, canal, status, total, payment_method, created_at, numero_comanda, mesa_id, ' +
         'mesas(numero, nome), ' +
-        'order_items(quantity, unit_price, combo_nome, product_id, products(name, category_id, categories(name)))',
+        'order_items(quantity, unit_price, combo_nome, product_id, products(name, category_id, categories!products_category_id_fkey(name)))',
       )
       .eq('restaurant_id', restaurantId)
       .eq('customer_id', clienteId)
@@ -2796,7 +2796,7 @@ export class RestauranteService {
   async getRelatorioProdutos(restaurantId: number, de: string, ate: string) {
     const { data: produtosData } = await this.supabase.client
       .from('products')
-      .select('id, name, price, preco_custo, is_active, quantidade_estoque, quantidade_minima, category_id, categories(name)')
+      .select('id, name, price, preco_custo, is_active, quantidade_estoque, quantidade_minima, category_id, categories!products_category_id_fkey(name)')
       .eq('restaurant_id', restaurantId)
       .order('name');
 
