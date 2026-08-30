@@ -4,7 +4,6 @@ import { SalaoService } from './salao.service';
 import type { ItemComandaBody } from './salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
-import { GdoorService } from '../gdoor/gdoor.service';
 
 // PDV do caixa (lado estabelecimento): ações de cancelar/desconto/acréscimo/pagar
 // são exclusivas do dono (RestaurantOwnerGuard) — o garçom nunca tem acesso a
@@ -16,7 +15,6 @@ export class SalaoPdvService {
     private salaoService: SalaoService,
     private estoque: EstoqueService,
     private combos: CombosService,
-    private gdoor: GdoorService,
   ) {}
 
   async mesas(restaurantId: number) {
@@ -1125,24 +1123,9 @@ export class SalaoPdvService {
 
     await this.lancarComissoes(comanda, subtotal, totalFinal);
 
-    // Enfileira pro agente GDOOR local puxar (polling) — cobre comanda paga
-    // direto de 'aberta' (sem passar pelo fechamento do garçom) e venda balcão
-    // (que nunca passa por 'fechada_garcom'). `criarJob` já ignora se essa
-    // comanda tiver disparado o job antes em `fecharComanda` (dedup por
-    // pedido_id), então não duplica. Best-effort, nunca trava o pagamento.
-    const { data: itensParaGdoor } = await this.supabase.client
-      .from('order_items')
-      .select('product_id, quantity, unit_price, products(name)')
-      .eq('order_id', id);
-    if (itensParaGdoor?.length) {
-      const clienteGdoor = { name: comanda.cliente_mesa_nome?.trim() || 'Cliente balcão', cpf_cnpj: null };
-      this.gdoor.criarJob(
-        restaurantId,
-        id,
-        clienteGdoor,
-        itensParaGdoor.map((i: any) => ({ product_id: i.product_id, product_name: i.products?.name ?? null, quantity: i.quantity, unit_price: i.unit_price })),
-      ).catch(() => {});
-    }
+    // GDOOR não é mais disparado automaticamente aqui — o dono pediu envio manual
+    // (botão "Enviar para GDOOR" na comanda já paga, ver GdoorService.enviarManual),
+    // depois de casos onde a prevenda automática não aparecia na tela do GDOOR.
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')

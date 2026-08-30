@@ -181,6 +181,26 @@ export class GdoorService {
     return data;
   }
 
+  // Mesma coisa que statusJobPedido, mas em lote — usado pela lista de pedidos
+  // da sessão (/restaurante/sessao), pra não disparar 1 request por linha da
+  // tabela. Pega todos os jobs dos pedidos pedidos e fica só com o mais
+  // recente de cada um (ordenando desc e não sobrescrevendo repetição).
+  async statusJobPedidos(restaurantId: number, pedidoIds: number[]) {
+    if (!pedidoIds.length) return {};
+    const { data } = await this.supabase.client
+      .from('gdoor_jobs')
+      .select('pedido_id, status, venda_id_gdoor, erro_msg, criado_em, processado_em')
+      .eq('restaurant_id', restaurantId)
+      .in('pedido_id', pedidoIds)
+      .order('criado_em', { ascending: false });
+
+    const porPedido: Record<number, any> = {};
+    for (const job of data ?? []) {
+      if (!porPedido[job.pedido_id]) porPedido[job.pedido_id] = job;
+    }
+    return porPedido;
+  }
+
   // Botão manual "Enviar para GDOOR" na comanda/pedido já concluído — cobre o
   // caso do gatilho automático ter falhado (módulo ligado depois da venda,
   // erro anterior) ou o operador só querer reenviar. Comanda/balcão e delivery

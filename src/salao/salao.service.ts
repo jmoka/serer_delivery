@@ -3,7 +3,6 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
 import { GarcomTurnoService } from './garcom-turno.service';
-import { GdoorService } from '../gdoor/gdoor.service';
 
 export interface AbrirComandaBody {
   mesa_id?: number;
@@ -25,7 +24,6 @@ export class SalaoService {
     private estoque: EstoqueService,
     private combosService: CombosService,
     private garcomTurno: GarcomTurnoService,
-    private gdoor: GdoorService,
   ) {}
 
   // Últimos 8 dígitos bastam pra casar apesar de variação de formato (com/sem
@@ -1541,26 +1539,9 @@ export class SalaoService {
       await this.supabase.client.from('mesas').update({ status: 'aguardando_pagamento' }).eq('id', comanda.mesa_id);
     }
 
-    // Enfileira pro agente GDOOR local puxar (polling) — mesmo padrão do
-    // delivery (PedidosService.atualizarStatus em status='delivered'), aqui o
-    // "estado final" equivalente é o fechamento da comanda. Comanda não tem
-    // CPF/CNPJ do cliente (só cliente_mesa_nome/telefone, sem cadastro formal),
-    // então cliente_cpf_cnpj sempre vai vazio nesse fluxo. Best-effort, nunca
-    // trava o fechamento.
-    const { data: itensComanda } = await this.supabase.client
-      .from('order_items')
-      .select('product_id, quantity, unit_price, products(name)')
-      .eq('order_id', comandaId);
-    if (itensComanda?.length) {
-      const itensParaGdoor = itensComanda.map((i: any) => ({
-        product_id: i.product_id,
-        product_name: i.products?.name ?? null,
-        quantity: i.quantity,
-        unit_price: i.unit_price,
-      }));
-      const cliente = { name: comanda.cliente_mesa_nome?.trim() || 'Cliente balcão', cpf_cnpj: null };
-      this.gdoor.criarJob(comanda.restaurant_id, comandaId, cliente, itensParaGdoor).catch(() => {});
-    }
+    // GDOOR não é mais disparado automaticamente aqui — o dono pediu envio manual
+    // (botão "Enviar para GDOOR" na comanda já paga, ver GdoorService.enviarManual),
+    // depois de casos onde a prevenda automática não aparecia na tela do GDOOR.
 
     return { ok: true };
   }

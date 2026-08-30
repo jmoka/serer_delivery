@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { ModuloGdoorGuard } from '../auth/modulo-gdoor.guard';
 import { GdoorService } from './gdoor.service';
@@ -97,6 +97,12 @@ export class RestauranteGdoorController {
   @Get('pedido/:id/status')
   statusPedido(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.statusJobPedido(req.restaurantId, id);
+  }
+
+  @Get('status-pedidos')
+  statusPedidos(@Query('ids') ids: string, @Req() req: any) {
+    const pedidoIds = (ids ?? '').split(',').map((v) => parseInt(v, 10)).filter((v) => !isNaN(v));
+    return this.service.statusJobPedidos(req.restaurantId, pedidoIds);
   }
 
   @Post('pedido/:id/enviar')
