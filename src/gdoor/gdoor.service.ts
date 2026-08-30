@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PlanosService } from '../planos/planos.service';
@@ -113,13 +113,26 @@ export class GdoorService {
     // Módulo é comprável no pacote (igual Delivery/Salão) — se a loja não tem,
     // não enfileira. Chamadores (pedidos.service.ts, salao.service.ts) tratam
     // isso como best-effort (.catch(() => {})), então um no-op silencioso aqui
-    // é o ponto único de enforcement pros dois gatilhos (delivery e comanda).
+    // é o ponto único de enforcement pros gatilhos (delivery, comanda, balcão).
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
       .select('modulo_gdoor')
       .eq('id', restaurantId)
       .maybeSingle();
     if (!restaurante?.modulo_gdoor) return { ok: false, motivo: 'modulo_gdoor_desabilitado' };
+
+    // Dedup: mesmo pedido/comanda pode disparar mais de um gatilho automático
+    // (ex. garçom fecha em 'fechada_garcom' e o caixa paga em seguida) — se já
+    // existe job pendente ou processado pra esse pedido, não duplica. Job com
+    // erro não bloqueia (permite reenviar).
+    const { data: jobExistente } = await this.supabase.client
+      .from('gdoor_jobs')
+      .select('id, status')
+      .eq('restaurant_id', restaurantId)
+      .eq('pedido_id', pedidoId)
+      .in('status', ['pendente', 'processado'])
+      .maybeSingle();
+    if (jobExistente) return { ok: false, motivo: 'ja_enfileirado' };
 
     const productIds = [...new Set(itens.map((i: any) => i.product_id))];
     const { data: mapeamentos } = await this.supabase.client
@@ -151,6 +164,72 @@ export class GdoorService {
       .insert({ restaurant_id: restaurantId, pedido_id: pedidoId, payload: { cliente: clienteComCodigo, itens: itensComCodigo } });
     if (error) throw error;
     return { ok: true };
+  }
+
+  // Status do job mais recente pra esse pedido/comanda — alimenta a tag "Enviado
+  // GDOOR" na tela de pedido/comanda fechada. Sem job ainda = 'nao_enviado'.
+  async statusJobPedido(restaurantId: number, pedidoId: number) {
+    const { data } = await this.supabase.client
+      .from('gdoor_jobs')
+      .select('status, venda_id_gdoor, erro_msg, criado_em, processado_em')
+      .eq('restaurant_id', restaurantId)
+      .eq('pedido_id', pedidoId)
+      .order('criado_em', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return { status: 'nao_enviado' };
+    return data;
+  }
+
+  // Botão manual "Enviar para GDOOR" na comanda/pedido já concluído — cobre o
+  // caso do gatilho automático ter falhado (módulo ligado depois da venda,
+  // erro anterior) ou o operador só querer reenviar. Comanda/balcão e delivery
+  // compartilham a mesma tabela `orders`; `canal` distingue os dois pra montar
+  // o payload certo (presencial não tem cadastro de cliente formal).
+  async enviarManual(restaurantId: number, pedidoId: number) {
+    const jobAtual = await this.statusJobPedido(restaurantId, pedidoId);
+    if (jobAtual.status === 'pendente' || jobAtual.status === 'processado') {
+      throw new BadRequestException('Essa venda já foi enviada ao GDOOR');
+    }
+
+    const { data: pedido, error } = await this.supabase.client
+      .from('orders')
+      .select('id, restaurant_id, status, canal, customer_id, cliente_mesa_nome')
+      .eq('id', pedidoId)
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!pedido) throw new NotFoundException('Pedido não encontrado');
+
+    const concluido = pedido.canal === 'presencial' ? pedido.status === 'paga' : pedido.status === 'delivered';
+    if (!concluido) {
+      throw new BadRequestException('Só é possível enviar pro GDOOR uma venda já concluída (paga/entregue)');
+    }
+
+    const { data: itensRaw } = await this.supabase.client
+      .from('order_items')
+      .select('product_id, quantity, unit_price, products(name)')
+      .eq('order_id', pedidoId);
+    const itens = (itensRaw ?? []).map((i: any) => ({
+      product_id: i.product_id,
+      product_name: i.products?.name ?? null,
+      quantity: i.quantity,
+      unit_price: i.unit_price,
+    }));
+
+    let cliente: any = { name: 'Consumidor', cpf_cnpj: null };
+    if (pedido.canal === 'presencial') {
+      cliente = { name: pedido.cliente_mesa_nome?.trim() || 'Cliente balcão', cpf_cnpj: null };
+    } else if (pedido.customer_id) {
+      const { data: clienteDelivery } = await this.supabase.client
+        .from('customers')
+        .select('id, name, email, phone_e164, cpf_cnpj')
+        .eq('id', pedido.customer_id)
+        .maybeSingle();
+      if (clienteDelivery) cliente = clienteDelivery;
+    }
+
+    return this.criarJob(restaurantId, pedidoId, cliente, itens);
   }
 
   // ── Catálogo/mapeamento de produtos (lado dono lê e edita, agente só escreve o cache) ──

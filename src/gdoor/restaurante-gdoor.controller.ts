@@ -91,4 +91,16 @@ export class RestauranteGdoorController {
   statusExportacaoClientes(@Req() req: any) {
     return this.service.statusExportacaoClientes(req.restaurantId);
   }
+
+  // ── Prevenda por pedido/comanda (botão manual + tag "Enviado GDOOR") ──
+
+  @Get('pedido/:id/status')
+  statusPedido(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.statusJobPedido(req.restaurantId, id);
+  }
+
+  @Post('pedido/:id/enviar')
+  enviarPedido(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.enviarManual(req.restaurantId, id);
+  }
 }
