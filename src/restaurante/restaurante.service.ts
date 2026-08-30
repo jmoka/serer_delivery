@@ -2528,7 +2528,14 @@ export class RestauranteService {
           garcom_nome: nomeGarcom.get(p.garcom_id) ?? '—',
           mesa_numero: p.mesas?.numero ?? null,
           mesa_nome: p.mesas?.nome ?? null,
-          cliente_nome: p.customers?.name ?? p.cliente_mesa_nome ?? null,
+          // Nome digitado nessa comanda em específico é o dado real da venda — vem
+          // primeiro. `customers.name` só serve de fallback: se o telefone bater com
+          // um cliente já cadastrado (resolverOuCriarClienteComanda, salao.service.ts),
+          // o customer_id é reaproveitado mas o cadastro NUNCA é renomeado, então usar
+          // o nome do cadastro aqui mostrava o nome de uma comanda antiga (ex.: garçom
+          // reaproveitando o mesmo telefone pra clientes diferentes) em vez do cliente
+          // de fato atendido nesta venda.
+          cliente_nome: p.cliente_mesa_nome ?? p.customers?.name ?? null,
           data: p.created_at,
           total: p.total ?? 0,
           gorjeta,
