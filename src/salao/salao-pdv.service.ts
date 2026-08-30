@@ -27,7 +27,7 @@ export class SalaoPdvService {
 
     const { data: comandas } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, garcom_id, total, status, numero_comanda, cliente_mesa_nome, garcons(nome), aberto_por_nome, conferencia_solicitada_em')
+      .select('id, mesa_id, garcom_id, total, desconto_valor, acrescimo_valor, gorjeta_valor, status, numero_comanda, cliente_mesa_nome, garcons(nome), aberto_por_nome, conferencia_solicitada_em, restaurants(gorjeta_percentual)')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
@@ -139,9 +139,15 @@ export class SalaoPdvService {
   }
 
   async comandasAbertas(restaurantId: number) {
+    // `total` sozinho é só a soma bruta dos produtos — desconto/acréscimo ficam em
+    // colunas separadas e só se somam a ele no pagamento (ver `pagar()`), e gorjeta
+    // nunca entra em `total` (nem depois de paga, ver recibo em `pagar()`). Manda
+    // tudo aqui (+ % de gorjeta do restaurante, pra sugestão de quem ainda não
+    // confirmou) pro frontend calcular o valor real da comanda, senão o card mostra
+    // um total que não bate com o que vai ser cobrado de verdade.
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, status, payment_method, numero_comanda, created_at, mesas(numero, nome), garcons(nome), aberto_por_nome')
+      .select('id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, total, desconto_valor, acrescimo_valor, gorjeta_valor, status, payment_method, numero_comanda, created_at, mesas(numero, nome), garcons(nome), aberto_por_nome, restaurants(gorjeta_percentual)')
       .eq('restaurant_id', restaurantId)
       .eq('canal', 'presencial')
       .in('status', ['aberta', 'fechada_garcom'])
