@@ -3,6 +3,7 @@ import { MotoboyService } from './motoboy.service';
 import { MotoboyAuthService } from './motoboy-auth.service';
 import { ComissaoService } from './comissao.service';
 import { GeocodingService } from './geocoding.service';
+import { CnpjService } from './cnpj.service';
 import { RestauranteMotoboysController } from './restaurante-motoboys.controller';
 import { MotoboyPortalController } from './motoboy-portal.controller';
 import { MotoboyAuthController } from './motoboy-auth.controller';
@@ -21,7 +22,7 @@ import { SalaoModule } from '../salao/salao.module';
     MotoboyEstabelecimentosController,
     MotoboyAdminController,
   ],
-  providers: [MotoboyService, MotoboyAuthService, ComissaoService, GeocodingService],
+  providers: [MotoboyService, MotoboyAuthService, ComissaoService, GeocodingService, CnpjService],
   exports: [MotoboyService, ComissaoService, GeocodingService],
 })
 export class MotoboyModule {}

@@ -4,13 +4,23 @@ import { ComissaoService } from './comissao.service';
 import { GeocodingService } from './geocoding.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { SalaoService } from '../salao/salao.service';
-import { EMAIL_RE, PHONE_RE } from './motoboy-auth.service';
+import { EMAIL_RE, PHONE_RE, VEICULO_TIPOS, resolverSituacaoMei } from './motoboy-auth.service';
+import { CnpjService } from './cnpj.service';
+import { uploadDocumentoMotoboy } from './upload-documento-motoboy.util';
 
 export interface MotoboyPeloRestauranteBody {
   name?: string;
   phone?: string;
   email?: string;
   password?: string;
+  veiculo_tipo?: string;
+  cnpj?: string;
+  veiculo_foto?: string;
+  veiculo_documento?: string;
+  veiculo_documento_carretinha?: string;
+  documento_frente?: string;
+  documento_verso?: string;
+  comprovante_endereco?: string;
 }
 
 const DOC_BUCKET = 'motoboy-documentos';
@@ -24,6 +34,7 @@ export class MotoboyService {
     private geocoding: GeocodingService,
     private estoque: EstoqueService,
     private salaoService: SalaoService,
+    private cnpj: CnpjService,
   ) {}
 
   // Antes de ver/solicitar vaga em qualquer estabelecimento, a plataforma
@@ -101,7 +112,8 @@ export class MotoboyService {
   // Cria uma conta Supabase Auth de verdade (não mais password_hash local) —
   // e-mail é obrigatório porque é a identidade de login.
   async criarPeloRestaurante(restaurantId: number, body: MotoboyPeloRestauranteBody) {
-    this.validarDadosMotoboy(body, { exigirNome: true, exigirEmail: true, exigirSenha: true });
+    this.validarDadosMotoboy(body, { exigirNome: true, exigirEmail: true, exigirSenha: true, exigirVeiculo: true });
+    const cnpjNorm = (body.cnpj ?? '').replace(/\D/g, '');
 
     const { data: existente } = await this.supabase.client
       .from('motoboys')
@@ -136,10 +148,45 @@ export class MotoboyService {
         status_plataforma: 'aprovado',
         aprovado_em: agora,
         criado_por_restaurant_id: restaurantId,
+        veiculo_tipo: body.veiculo_tipo,
+        cnpj: cnpjNorm,
       })
       .select('id, name, phone, email')
       .single();
     if (error) throw error;
+
+    const [
+      veiculo_foto_url,
+      veiculo_documento_url,
+      veiculo_documento_carretinha_url,
+      documento_frente_url,
+      documento_verso_url,
+      comprovante_endereco_url,
+    ] = await Promise.all([
+      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-foto', body.veiculo_foto!),
+      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento', body.veiculo_documento!),
+      body.veiculo_documento_carretinha
+        ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento-carretinha', body.veiculo_documento_carretinha)
+        : Promise.resolve(null),
+      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-frente', body.documento_frente!),
+      body.documento_verso ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-verso', body.documento_verso) : Promise.resolve(null),
+      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'comprovante-endereco', body.comprovante_endereco!),
+    ]);
+    const situacaoMei = await resolverSituacaoMei(this.cnpj, cnpjNorm, body.veiculo_tipo!);
+
+    await this.supabase.client
+      .from('motoboys')
+      .update({
+        veiculo_foto_url,
+        veiculo_documento_url,
+        veiculo_documento_carretinha_url,
+        documento_frente_url,
+        documento_verso_url,
+        comprovante_endereco_url,
+        ...situacaoMei,
+        mei_verificado_em: agora,
+      })
+      .eq('id', motoboy.id);
 
     const { error: afilError } = await this.supabase.client
       .from('motoboy_estabelecimentos')
@@ -151,7 +198,7 @@ export class MotoboyService {
 
   private validarDadosMotoboy(
     body: MotoboyPeloRestauranteBody,
-    opts: { exigirNome: boolean; exigirEmail: boolean; exigirSenha: boolean },
+    opts: { exigirNome: boolean; exigirEmail: boolean; exigirSenha: boolean; exigirVeiculo?: boolean },
   ) {
     if (opts.exigirNome && !body.name?.trim()) throw new BadRequestException('Informe o nome do motoboy');
     if (opts.exigirEmail && !body.email) throw new BadRequestException('Informe o e-mail do motoboy');
@@ -162,6 +209,17 @@ export class MotoboyService {
     }
     if (!opts.exigirSenha && body.password && body.password.length < 8) {
       throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
+    }
+    if (opts.exigirVeiculo) {
+      if (!VEICULO_TIPOS.includes(body.veiculo_tipo as any)) throw new BadRequestException('Tipo de veículo inválido');
+      if ((body.cnpj ?? '').replace(/\D/g, '').length !== 14) throw new BadRequestException('CNPJ inválido');
+      if (!body.veiculo_foto) throw new BadRequestException('Envie a foto do veículo');
+      if (!body.veiculo_documento) throw new BadRequestException('Envie o documento do veículo (CRLV)');
+      if (body.veiculo_tipo === 'carretinha' && !body.veiculo_documento_carretinha) {
+        throw new BadRequestException('Envie o documento da carretinha (CRLV), além do documento do carro');
+      }
+      if (!body.documento_frente) throw new BadRequestException('Envie a CNH do entregador');
+      if (!body.comprovante_endereco) throw new BadRequestException('Envie o comprovante de endereço');
     }
   }
 
@@ -274,7 +332,7 @@ export class MotoboyService {
     // Pra pendente precisamos da ficha completa (docs via signed URL); pra histórico
     // (aceito/recusado) só o básico, evita gerar signed URL à toa por linha.
     const campos = status === 'pendente'
-      ? 'motoboy:motoboys(id, name, phone, email, foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url)'
+      ? 'motoboy:motoboys(id, name, phone, email, foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url, veiculo_tipo, veiculo_foto_url, veiculo_documento_url, veiculo_documento_carretinha_url, cnpj, mei_situacao, mei_cnae_principal, mei_caminhoneiro)'
       : 'motoboy:motoboys(id, name, phone, email)';
 
     const { data, error } = await this.supabase.client
@@ -307,6 +365,9 @@ export class MotoboyService {
           documento_frente_url: await this.signedUrl(row.motoboy?.documento_frente_url),
           documento_verso_url: await this.signedUrl(row.motoboy?.documento_verso_url),
           comprovante_endereco_url: await this.signedUrl(row.motoboy?.comprovante_endereco_url),
+          veiculo_foto_url: await this.signedUrl(row.motoboy?.veiculo_foto_url),
+          veiculo_documento_url: await this.signedUrl(row.motoboy?.veiculo_documento_url),
+          veiculo_documento_carretinha_url: await this.signedUrl(row.motoboy?.veiculo_documento_carretinha_url),
         },
       })),
     );
@@ -1138,7 +1199,7 @@ export class MotoboyService {
     const { data: mb, error } = await this.supabase.client
       .from('motoboys')
       .select(
-        'id, name, phone, email, foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url, status_plataforma, motivo_recusa_plataforma, aprovado_em, created_at, revisoes_solicitadas',
+        'id, name, phone, email, foto_perfil_url, documento_frente_url, documento_verso_url, comprovante_endereco_url, status_plataforma, motivo_recusa_plataforma, aprovado_em, created_at, revisoes_solicitadas, veiculo_tipo, veiculo_foto_url, veiculo_documento_url, veiculo_documento_carretinha_url, cnpj, mei_situacao, mei_cnae_principal, mei_caminhoneiro',
       )
       .eq('id', motoboyId)
       .maybeSingle();
@@ -1151,6 +1212,9 @@ export class MotoboyService {
       documento_frente_url: await this.signedUrl(mb.documento_frente_url),
       documento_verso_url: await this.signedUrl(mb.documento_verso_url),
       comprovante_endereco_url: await this.signedUrl(mb.comprovante_endereco_url),
+      veiculo_foto_url: await this.signedUrl(mb.veiculo_foto_url),
+      veiculo_documento_url: await this.signedUrl(mb.veiculo_documento_url),
+      veiculo_documento_carretinha_url: await this.signedUrl(mb.veiculo_documento_carretinha_url),
     };
   }
 

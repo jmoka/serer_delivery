@@ -240,6 +240,21 @@ export class OnboardingController {
     if (body.cep !== undefined) campos.cep = body.cep ? body.cep.replace(/\D/g, '') : null;
     if (body.business_hours !== undefined) campos.business_hours = body.business_hours;
     if (body.type_id !== undefined) campos.type_id = body.type_id;
+
+    // Salão/comanda é feature exclusiva de estabelecimentos tipo "Restaurante" —
+    // mesmo que o plano contratado inclua o módulo, um tipo diferente (Farmácia,
+    // Material de Construção etc.) nunca sai daqui com modulo_salao habilitado.
+    // Só se aplica no momento do cadastro (aqui é a única vez que type_id é
+    // gravado) — não mexe em restaurantes já existentes.
+    if (body.type_id !== undefined) {
+      const { data: tipo } = await this.supabase.client
+        .from('establishment_types')
+        .select('name')
+        .eq('id', body.type_id)
+        .maybeSingle();
+      if (tipo?.name !== 'Restaurante') campos.modulo_salao = false;
+    }
+
     if (body.cnpj !== undefined) campos.cnpj = cnpjNorm;
     if (body.whatsapp !== undefined) campos.whatsapp = whatsappNorm;
     if (body.email !== undefined) campos.email = emailNorm;
