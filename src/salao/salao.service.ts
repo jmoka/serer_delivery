@@ -1337,12 +1337,21 @@ export class SalaoService {
     return this.processarEnvioPendentes(comandaId, comanda);
   }
 
-  private async processarEnvioPendentes(comandaId: number, comanda: any) {
-    const { data: pendentes, error } = await this.supabase.client
+  // Envia só um item específico (ex.: unidade extra incluída num item já enviado, ver
+  // SalaoPdvService.incluirMaisUnidade) sem disparar os demais pendentes da comanda —
+  // o garçom pode ainda não ter decidido enviar o resto do que está sendo lançado.
+  async enviarItemEspecifico(comandaId: number, comanda: any, itemId: number) {
+    return this.processarEnvioPendentes(comandaId, comanda, [itemId]);
+  }
+
+  private async processarEnvioPendentes(comandaId: number, comanda: any, itemIds?: number[]) {
+    let query = this.supabase.client
       .from('order_items')
       .select('id, product_id, quantity, observacao, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema))')
       .eq('order_id', comandaId)
       .eq('status', 'pendente');
+    if (itemIds?.length) query = query.in('id', itemIds);
+    const { data: pendentes, error } = await query;
     if (error) throw error;
     if (!pendentes?.length) return { grupos: [] };
 

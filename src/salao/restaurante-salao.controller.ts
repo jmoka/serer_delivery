@@ -99,6 +99,16 @@ export class RestauranteSalaoController {
     return this.service.editarItem(id, req.restaurantId, itemId, body);
   }
 
+  @Post('comandas/:id/itens/:itemId/incluir-mais')
+  incluirMaisUnidade(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Body() body: { quantidade?: number },
+    @Req() req: any,
+  ) {
+    return this.service.incluirMaisUnidade(id, req.restaurantId, itemId, body.quantidade ?? 1);
+  }
+
   @Patch('comandas/:id/itens/:itemId/entregar')
   confirmarEntregaItem(
     @Param('id', ParseIntPipe) id: number,

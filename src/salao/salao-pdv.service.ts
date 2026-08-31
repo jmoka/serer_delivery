@@ -194,7 +194,7 @@ export class SalaoPdvService {
     const comanda = await this.buscarComanda(id, restaurantId);
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, unit_price, observacao, combo_nome, combo_quantidade, status, enviado_em, entregue_garcom, impressora_id, products(name, image_url)')
+      .select('id, product_id, quantity, unit_price, observacao, combo_nome, combo_quantidade, status, enviado_em, entregue_garcom, impressora_id, products(name, image_url, impressoras(nome, setor))')
       .eq('order_id', id)
       .order('id', { ascending: true });
     const { data: pagamentos } = await this.supabase.client
@@ -665,12 +665,21 @@ export class SalaoPdvService {
     }
 
     const { data: item } = await this.supabase.client
-      .from('order_items').select('id, product_id, quantity').eq('id', itemId).eq('order_id', comandaId).maybeSingle();
+      .from('order_items').select('id, product_id, quantity, status').eq('id', itemId).eq('order_id', comandaId).maybeSingle();
     if (!item) throw new NotFoundException('Item não encontrado');
 
     const update: Record<string, unknown> = {};
     if (body.quantity !== undefined) {
       if (body.quantity < 1) throw new BadRequestException('Quantidade mínima é 1');
+      // Aumentar a quantidade de um item que já foi pro setor de produção não pode só
+      // trocar o número no banco — a unidade extra nunca chegaria na cozinha/bar. Esse
+      // caminho fica só pra reduzir (ex.: corrigir excesso já avisado verbalmente) ou
+      // pra editar item ainda pendente; incluir mais unidade em item já enviado precisa
+      // passar por incluirMaisUnidade(), que gera uma linha nova e manda pro ponto de
+      // preparo certo.
+      if (body.quantity > item.quantity && item.status !== 'pendente') {
+        throw new BadRequestException('Item já foi enviado — use "incluir mais" para adicionar e mandar a unidade extra pro ponto de preparo');
+      }
       update.quantity = body.quantity;
     }
     if (body.observacao !== undefined) update.observacao = body.observacao?.trim() || null;
@@ -689,6 +698,50 @@ export class SalaoPdvService {
     }
 
     return this.comandaDetalhe(comandaId, restaurantId);
+  }
+
+  // Unidade extra num item que já foi enviado pro setor: vira uma linha nova (pendente)
+  // com o mesmo produto/observação e já sai enviada/impressa só pra ela, sem disparar os
+  // demais itens pendentes da comanda que o garçom ainda não decidiu enviar. Frontend
+  // confirma com o usuário ("Enviar pra Cozinha/Bar/X?") antes de chamar isso — ver
+  // renderItemLinha em restaurante-salao/index.jsx.
+  async incluirMaisUnidade(comandaId: number, restaurantId: number, itemId: number, quantidade: number) {
+    if (quantidade < 1) throw new BadRequestException('Quantidade mínima é 1');
+
+    const comanda = await this.buscarComanda(comandaId, restaurantId);
+    if (comanda.status !== 'aberta') throw new BadRequestException('Comanda não está aberta');
+
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, product_id, unit_price, observacao, combo_nome, combo_quantidade')
+      .eq('id', itemId).eq('order_id', comandaId).maybeSingle();
+    if (!item) throw new NotFoundException('Item não encontrado');
+
+    const { data: novoItem, error } = await this.supabase.client
+      .from('order_items')
+      .insert({
+        order_id: comandaId,
+        product_id: item.product_id,
+        quantity: quantidade,
+        unit_price: item.unit_price,
+        observacao: item.observacao,
+        combo_nome: item.combo_nome,
+        combo_quantidade: item.combo_quantidade,
+        status: 'pendente',
+      })
+      .select('id')
+      .single();
+    if (error) throw error;
+
+    await this.estoque.decrementarItens([{ product_id: item.product_id, quantity: quantidade }]);
+
+    const { data: todosItens } = await this.supabase.client.from('order_items').select('quantity, unit_price').eq('order_id', comandaId);
+    const total = (todosItens ?? []).reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+    await this.supabase.client.from('orders').update({ total: parseFloat(total.toFixed(2)) }).eq('id', comandaId);
+
+    const { grupos } = await this.salaoService.enviarItemEspecifico(comandaId, comanda, novoItem.id);
+
+    return { ...(await this.comandaDetalhe(comandaId, restaurantId)), grupos };
   }
 
   async removerItem(comandaId: number, restaurantId: number, itemId: number) {
