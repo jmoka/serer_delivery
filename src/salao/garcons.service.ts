@@ -126,8 +126,25 @@ export class GarconsService {
     return data;
   }
 
+  // Excluir de verdade só é seguro sem nenhum histórico — garcom_turnos/
+  // garcom_comissoes_lancamentos/garcom_repasses são ON DELETE CASCADE em garcom_id,
+  // então excluir um garçom com turno fechado apaga a conferência dele junto (incidente
+  // real: operador excluiu garçom e a conferência sumiu). Com histórico, orientar a
+  // desativar em vez de excluir — mesmo padrão de MotoboyService.excluirPeloRestaurante.
   async remover(id: number, restaurantId: number) {
     await this.garantirPertence(id, restaurantId);
+
+    const [turnos, comissoes, repasses, pedidos] = await Promise.all([
+      this.supabase.client.from('garcom_turnos').select('id', { count: 'exact', head: true }).eq('garcom_id', id),
+      this.supabase.client.from('garcom_comissoes_lancamentos').select('id', { count: 'exact', head: true }).eq('garcom_id', id),
+      this.supabase.client.from('garcom_repasses').select('id', { count: 'exact', head: true }).eq('garcom_id', id),
+      this.supabase.client.from('orders').select('id', { count: 'exact', head: true }).eq('garcom_id', id),
+    ]);
+    const temHistorico = [turnos, comissoes, repasses, pedidos].some((r) => (r.count ?? 0) > 0);
+    if (temHistorico) {
+      throw new BadRequestException('Este garçom já tem histórico de turnos/vendas/comissão — desative em vez de excluir, pra não perder a conferência.');
+    }
+
     const { error } = await this.supabase.client.from('garcons').delete().eq('id', id);
     if (error) throw error;
     return { ok: true };
