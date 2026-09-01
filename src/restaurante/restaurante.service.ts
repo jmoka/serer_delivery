@@ -83,11 +83,17 @@ export class RestauranteService {
   }
 
   async meusPedidos(restaurantId: number, filtros: { status?: string; limite?: number }) {
-    return this.pedidos.listar({
+    const resultado = await this.pedidos.listar({
       empresa_id: restaurantId,
       status: filtros.status,
       limite: filtros.limite ?? 50,
     });
+    const idsDelivery = (resultado.pedidos ?? []).filter((p: any) => p.canal !== 'presencial').map((p: any) => p.id);
+    const pracas = await this.pracasPorPedido(idsDelivery);
+    resultado.pedidos = (resultado.pedidos ?? []).map((p: any) => (
+      p.canal !== 'presencial' ? { ...p, pracas: pracas[p.id] ?? [] } : p
+    ));
+    return resultado;
   }
 
   async cancelarPedidoAdmin(restaurantId: number, pedidoId: number, motivo: string) {
@@ -159,15 +165,72 @@ export class RestauranteService {
 
   // Painel de controle de entregas: tudo que está "em voo" agora (pronto aguardando
   // atribuição, indo buscar, ou já saiu pra entrega), com dados de quem está entregando.
-  async listarEntregas(restaurantId: number) {
-    const { data, error } = await this.supabase.client
+  // Contador leve (head:true, sem trazer linha nenhuma) pro badge de "pedido novo" no
+  // ícone/menu de Delivery — mesmo padrão do contarSolicitacoesPendentes de motoboy.
+  // 'pending' é o único status que o app já trata como "chegou, ainda não foi visto"
+  // (dashboard usa esse mesmo status pro alerta sonoro + flash de título da aba).
+  async contarPedidosNovos(restaurantId: number) {
+    const { count, error } = await this.supabase.client
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'pending')
+      .eq('canal', 'delivery');
+    if (error) throw error;
+    return { count: count ?? 0 };
+  }
+
+  // Agrupa itens de delivery por praça (setor da impressora) e diz se aquela praça já
+  // terminou tudo — usado nos painéis Delivery/Pedidos pra dar autonomia de ver "falta só
+  // o Bar" sem precisar entrar pedido por pedido. Pedido sem item roteado ainda (recém
+  // confirmed, antes do KDS existir) volta [] pra esse pedido — não é erro, é cedo demais.
+  private async pracasPorPedido(orderIds: number[]): Promise<Record<number, { setor: string; pronto: boolean; itens: string[] }[]>> {
+    if (!orderIds.length) return {};
+    const { data } = await this.supabase.client
+      .from('order_items')
+      .select('order_id, quantity, status, products(name), impressoras(setor)')
+      .in('order_id', orderIds)
+      .not('impressora_id', 'is', null)
+      .neq('status', 'cancelado');
+    const porPedido: Record<number, { setor: string; pronto: boolean; itens: string[] }[]> = {};
+    for (const it of (data ?? []) as any[]) {
+      const setor = it.impressoras?.setor;
+      if (!setor) continue;
+      if (!porPedido[it.order_id]) porPedido[it.order_id] = [];
+      let grupo = porPedido[it.order_id].find((g) => g.setor === setor);
+      if (!grupo) { grupo = { setor, pronto: true, itens: [] }; porPedido[it.order_id].push(grupo); }
+      if (it.status !== 'pronto') grupo.pronto = false;
+      grupo.itens.push(`${it.quantity}x ${it.products?.name}`);
+    }
+    return porPedido;
+  }
+
+  async listarEntregas(
+    restaurantId: number,
+    filtros: { historico?: string; dataInicio?: string; dataFim?: string; pedido?: string; cliente?: string } = {},
+  ) {
+    const historico = filtros.historico === 'true';
+
+    let q = this.supabase.client
       .from('orders')
       .select(
         'id, status, total, payment_method, motoboy_id, entrega_propria, motoboy_lat, motoboy_lng, motoboy_location_at, created_at, updated_at, customer_id',
       )
-      .eq('restaurant_id', restaurantId)
-      .in('status', ['ready', 'motoboy_collecting', 'out_for_delivery'])
-      .order('created_at', { ascending: true });
+      .eq('restaurant_id', restaurantId);
+
+    if (historico) {
+      // Histórico usa 'updated_at' como data de referência: é o momento do último
+      // update de status, que pra um pedido 'delivered' é quando foi entregue.
+      q = q.eq('status', 'delivered');
+      if (filtros.dataInicio) q = q.gte('updated_at', filtros.dataInicio);
+      if (filtros.dataFim) q = q.lte('updated_at', filtros.dataFim);
+      if (filtros.pedido) q = q.eq('id', Number(filtros.pedido) || 0);
+      q = q.order('updated_at', { ascending: false }).limit(200);
+    } else {
+      q = q.in('status', ['ready', 'motoboy_collecting', 'out_for_delivery']).order('created_at', { ascending: true });
+    }
+
+    const { data, error } = await q;
     if (error) throw error;
 
     const motoboyIds = [...new Set((data ?? []).map((o) => o.motoboy_id).filter(Boolean))];
@@ -184,11 +247,19 @@ export class RestauranteService {
     const motoboyMap = Object.fromEntries((motoboys ?? []).map((m: any) => [m.id, m]));
     const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c]));
 
-    const entregas = (data ?? []).map((o) => ({
+    let entregas = (data ?? []).map((o) => ({
       ...o,
       motoboy: o.motoboy_id ? motoboyMap[o.motoboy_id] ?? null : null,
       cliente: o.customer_id ? customerMap[o.customer_id] ?? null : null,
     }));
+
+    // Busca por nome de cliente filtra em memória pois o nome vem de uma
+    // segunda tabela (customers), não dá pra fazer no mesmo .eq/.ilike do orders.
+    if (historico && filtros.cliente?.trim()) {
+      const termo = filtros.cliente.trim().toLowerCase();
+      entregas = entregas.filter((e) => (e.cliente as any)?.name?.toLowerCase().includes(termo));
+    }
+
     return { entregas };
   }
 
@@ -1257,6 +1328,34 @@ export class RestauranteService {
       : { data: [] as any[] };
     const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c.name]));
 
+    // Pedido de delivery pode ter itens em mais de uma praça (ex: bebida no Bar, prato na
+    // Cozinha) — quem prepara só uma parte precisa saber o que mais compõe o pedido, pra
+    // não soltar cedo demais / saber que precisa combinar o envio junto. Busca em lote quais
+    // OUTRAS praças têm item desse mesmo pedido (nunca da própria impressora atual). Só pra
+    // delivery — comanda de salão já é vista inteira junto na Comanda (ver ComandaModal).
+    const orderIdsDelivery = [...new Set(
+      itensValidos.filter((i) => !(i.orders?.mesa_id || i.orders?.garcom_id || i.orders?.cliente_mesa_nome)).map((i) => i.order_id),
+    )];
+    const outrasPracasPorPedido: Record<number, { setor: string; pronto: boolean; itens: string[] }[]> = {};
+    if (orderIdsDelivery.length) {
+      const { data: itensOutrasPracas } = await this.supabase.client
+        .from('order_items')
+        .select('order_id, quantity, status, products(name), impressoras(setor)')
+        .in('order_id', orderIdsDelivery)
+        .neq('impressora_id', impressoraId)
+        .not('impressora_id', 'is', null)
+        .neq('status', 'cancelado');
+      for (const it of (itensOutrasPracas ?? []) as any[]) {
+        const setor = it.impressoras?.setor;
+        if (!setor) continue;
+        if (!outrasPracasPorPedido[it.order_id]) outrasPracasPorPedido[it.order_id] = [];
+        let grupo = outrasPracasPorPedido[it.order_id].find((g) => g.setor === setor);
+        if (!grupo) { grupo = { setor, pronto: true, itens: [] }; outrasPracasPorPedido[it.order_id].push(grupo); }
+        if (it.status !== 'pronto') grupo.pronto = false;
+        grupo.itens.push(`${it.quantity}x ${it.products?.name}`);
+      }
+    }
+
     return {
       itens: itensValidos.map((i) => {
         const ehSalao = !!(i.orders?.mesa_id || i.orders?.garcom_id || i.orders?.cliente_mesa_nome);
@@ -1294,6 +1393,7 @@ export class RestauranteService {
           pedido_total: i.orders?.total ?? null,
           pedido_payment_method: i.orders?.payment_method ?? null,
           pedido_created_at: i.orders?.created_at ?? null,
+          outras_pracas: ehSalao ? [] : (outrasPracasPorPedido[i.order_id] ?? []),
         };
       }),
     };
@@ -1340,7 +1440,7 @@ export class RestauranteService {
   async iniciarPreparoItem(itemId: number, restaurantId: number) {
     const { data: item } = await this.supabase.client
       .from('order_items')
-      .select('id, order_id, orders(restaurant_id)')
+      .select('id, order_id, orders(restaurant_id, canal, status)')
       .eq('id', itemId)
       .maybeSingle();
     if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
@@ -1352,6 +1452,17 @@ export class RestauranteService {
       .update({ status: 'preparando', preparando_em: new Date().toISOString() })
       .eq('id', itemId);
     if (error) throw error;
+
+    // Espelha o que marcarItemPronto já faz do outro lado (todas as praças prontas ->
+    // 'ready'): o primeiro item que entra em preparo avança o pedido de 'confirmed' pra
+    // 'preparing' — mantém o acompanhamento do cliente ("Em preparo") funcionando mesmo
+    // sem nenhuma tela mexer no status do pedido inteiro diretamente. Antes só a Cozinha
+    // fazia essa transição manual (botão do pedido inteiro), dessincronizada do status
+    // real dos itens nas outras praças (Produção/Bar).
+    const pedido = (item as any).orders;
+    if (pedido?.canal !== 'presencial' && pedido?.status === 'confirmed') {
+      await this.supabase.client.from('orders').update({ status: 'preparing', updated_at: new Date().toISOString() }).eq('id', item.order_id);
+    }
 
     return { ok: true };
   }
@@ -1684,11 +1795,19 @@ export class RestauranteService {
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`)
       .order('created_at', { ascending: false });
 
-    const pedidos = ordersData ?? [];
+    const pedidosBrutos = ordersData ?? [];
     const saidas = (caixa.saidas ?? []) as any[];
     const entradas = (caixa.entradas ?? []) as any[];
-    const pagamentosPorComanda = await this.buscarPagamentosPorComanda(pedidos);
-    const resumo = this.calcularResumo(pedidos, saidas, caixa.valor_inicial, entradas, pagamentosPorComanda);
+    const pagamentosPorComanda = await this.buscarPagamentosPorComanda(pedidosBrutos);
+    const resumo = this.calcularResumo(pedidosBrutos, saidas, caixa.valor_inicial, entradas, pagamentosPorComanda);
+
+    // Dá autonomia pro painel Delivery ver, sem abrir cada pedido, quais praças (Cozinha/
+    // Bar/Drinks...) já terminaram e quais faltam antes de liberar pro motoboy.
+    const idsDelivery = pedidosBrutos.filter((p: any) => p.canal !== 'presencial').map((p: any) => p.id);
+    const pracas = await this.pracasPorPedido(idsDelivery);
+    const pedidos = pedidosBrutos.map((p: any) => (
+      p.canal !== 'presencial' ? { ...p, pracas: pracas[p.id] ?? [] } : p
+    ));
 
     return {
       status_restaurante,
@@ -2925,6 +3044,11 @@ export class RestauranteService {
         ...i,
         product_name: prodMap[i.product_id] ?? `Produto #${i.product_id}`,
       }));
+    }
+
+    if ((resultado.pedido as any).canal !== 'presencial') {
+      const pracas = await this.pracasPorPedido([pedidoId]);
+      (resultado as any).pracas = pracas[pedidoId] ?? [];
     }
 
     return resultado;

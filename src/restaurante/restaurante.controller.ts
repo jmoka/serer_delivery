@@ -41,8 +41,13 @@ export class RestauranteController {
   }
 
   @Get('entregas')
-  listarEntregas(@Req() req: any) {
-    return this.service.listarEntregas(req.restaurantId);
+  listarEntregas(@Req() req: any, @Query() query: any) {
+    return this.service.listarEntregas(req.restaurantId, query);
+  }
+
+  @Get('pedidos/novos/count')
+  contarPedidosNovos(@Req() req: any) {
+    return this.service.contarPedidosNovos(req.restaurantId);
   }
 
   @Get('pedidos')

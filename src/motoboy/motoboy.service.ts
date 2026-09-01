@@ -825,6 +825,61 @@ export class MotoboyService {
     return { ok: true, pedido_id: pedidoId, tipo, status: update.status ?? pedido.status };
   }
 
+  // Agrega pedidos prontos de TODAS as lojas afiliadas do motoboy de uma vez — antes o
+  // app só escutava a loja marcada como "ativa" (estabelecimentoAtivo no frontend), que
+  // fixa na afiliação mais recente e nunca troca sozinha. Resultado real observado: motoboy
+  // afiliado a 3 lojas só recebia alerta da 3ª (última aceita), perdendo pedido pronto nas
+  // outras duas mesmo com o app aberto. Sem isso, "todo motoboy afiliado recebe o alerta"
+  // (regra de negócio do toggle "Usar motoboy") nunca era verdade na prática.
+  async pedidosDisponiveisTodos(motoboyId: number) {
+    const { data: afiliacoes, error: afError } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .select('restaurant_id')
+      .eq('motoboy_id', motoboyId)
+      .eq('status', 'aceito')
+      .eq('bloqueado', false);
+    if (afError) throw afError;
+    const restaurantIds = [...new Set((afiliacoes ?? []).map((a) => a.restaurant_id))];
+    if (restaurantIds.length === 0) return { pedidos: [] };
+
+    const { data: lojas, error: lojasError } = await this.supabase.client
+      .from('restaurants')
+      .select('id, name')
+      .in('id', restaurantIds)
+      .eq('usa_motoboy', true);
+    if (lojasError) throw lojasError;
+    const idsValidos = (lojas ?? []).map((r) => r.id);
+    const nomeLoja = Object.fromEntries((lojas ?? []).map((r) => [r.id, r.name]));
+    if (idsValidos.length === 0) return { pedidos: [] };
+
+    const { data, error } = await this.supabase.client
+      .from('orders')
+      .select('id, restaurant_id, total, status, payment_method, created_at, customer_id')
+      .in('restaurant_id', idsValidos)
+      .eq('status', 'ready')
+      .is('motoboy_id', null)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+
+    const pedidos = await Promise.all(
+      (data ?? []).map(async (p) => {
+        const { data: c } = p.customer_id
+          ? await this.supabase.client
+              .from('customers')
+              .select('name, phone_e164, address_json')
+              .eq('id', p.customer_id)
+              .maybeSingle()
+          : { data: null };
+        const { data: itensRaw } = await this.supabase.client
+          .from('order_items')
+          .select('id, quantity, unit_price, product_id')
+          .eq('order_id', p.id);
+        return { ...p, restaurant_name: nomeLoja[p.restaurant_id], cliente: c, itens: itensRaw ?? [] };
+      }),
+    );
+    return { pedidos };
+  }
+
   async pedidosDisponiveis(motoboyId: number, restaurantId: number) {
     await this.exigirAfiliacaoAceita(motoboyId, restaurantId);
     await this.exigirUsaMotoboy(restaurantId);

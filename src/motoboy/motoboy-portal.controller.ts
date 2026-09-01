@@ -47,9 +47,14 @@ export class MotoboyPortalController {
     return this.service.ganhosPorDia(req.motoboyId, restaurantId ? Number(restaurantId) : undefined, de, ate);
   }
 
+  // Sem restaurant_id, agrega pedidos disponíveis de TODAS as lojas afiliadas do motoboy
+  // de uma vez (ver pedidosDisponiveisTodos) — é o modo usado pelo polling de alerta do
+  // app, pra não perder pedido pronto de uma loja só porque outra está "ativa" no momento.
   @Get('pedidos/disponiveis')
-  disponiveis(@Query('restaurant_id', ParseIntPipe) restaurantId: number, @Req() req: any) {
-    return this.service.pedidosDisponiveis(req.motoboyId, restaurantId);
+  disponiveis(@Query('restaurant_id') restaurantId: string | undefined, @Req() req: any) {
+    return restaurantId
+      ? this.service.pedidosDisponiveis(req.motoboyId, Number(restaurantId))
+      : this.service.pedidosDisponiveisTodos(req.motoboyId);
   }
 
   @Get('pedidos')
