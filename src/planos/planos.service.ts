@@ -110,12 +110,14 @@ export class PlanosService {
         periodicidade: body.periodicidade,
         tipo: body.tipo ?? 'saas',
         limite_produtos: body.limite_produtos ?? null,
+        limite_impressoras: body.limite_impressoras ?? null,
         piso_faturamento: body.piso_faturamento ?? null,
         trial_dias: body.trial_dias ?? 0,
         ativo: body.ativo ?? true,
         inclui_delivery: body.inclui_delivery ?? true,
         inclui_salao: body.inclui_salao ?? false,
         inclui_gdoor: body.inclui_gdoor ?? false,
+        cobra_comissao: body.cobra_comissao ?? false,
       })
       .select()
       .single();
@@ -132,12 +134,14 @@ export class PlanosService {
     if (body.periodicidade !== undefined) campos.periodicidade = body.periodicidade;
     if (body.tipo !== undefined) campos.tipo = body.tipo;
     if (body.limite_produtos !== undefined) campos.limite_produtos = body.limite_produtos;
+    if (body.limite_impressoras !== undefined) campos.limite_impressoras = body.limite_impressoras;
     if (body.piso_faturamento !== undefined) campos.piso_faturamento = body.piso_faturamento;
     if (body.trial_dias !== undefined) campos.trial_dias = body.trial_dias;
     if (body.ativo !== undefined) campos.ativo = body.ativo;
     if (body.inclui_delivery !== undefined) campos.inclui_delivery = body.inclui_delivery;
     if (body.inclui_salao !== undefined) campos.inclui_salao = body.inclui_salao;
     if (body.inclui_gdoor !== undefined) campos.inclui_gdoor = body.inclui_gdoor;
+    if (body.cobra_comissao !== undefined) campos.cobra_comissao = body.cobra_comissao;
 
     const { data, error } = await this.supabase.client
       .from('planos')
@@ -176,6 +180,39 @@ export class PlanosService {
       .order('created_at', { ascending: false });
     if (error) throw error;
     return { assinaturas: data ?? [] };
+  }
+
+  // Comissão de uma venda só entra na fatura do plano se o pagamento daquele
+  // pedido NÃO teve split PagBank ativo — se teve, a plataforma já recebeu a
+  // comissão na hora (ver PagamentosService.buildSplits/getPagBankClient).
+  // Pedido sem linha em `pagamentos` (recebimento manual ou dinheiro) conta
+  // como sem split, ou seja, entra na comissão devida — é exatamente o caso
+  // que motivou essa cobrança existir. `plataforma_comissoes` já é populada
+  // incondicionalmente por um trigger de banco (on_order_delivered), então
+  // só precisa ler e filtrar aqui.
+  private async buscarComissoesNaoColetadas(restaurantId: number, inicio: Date, fim: Date) {
+    const { data: comissoesRaw, error: comErro } = await this.supabase.client
+      .from('plataforma_comissoes')
+      .select('id, pedido_id, valor_venda, comissao_pct, comissao_valor, criado_em')
+      .eq('empresa_id', restaurantId)
+      .gte('criado_em', inicio.toISOString())
+      .lt('criado_em', fim.toISOString());
+    if (comErro) throw comErro;
+
+    const pedidoIds = (comissoesRaw ?? []).map((c: any) => c.pedido_id);
+    let splitPorPedido = new Map<number, boolean>();
+    if (pedidoIds.length > 0) {
+      const { data: pagamentosRows, error: pagErro } = await this.supabase.client
+        .from('pagamentos')
+        .select('order_id, split_ativo')
+        .in('order_id', pedidoIds);
+      if (pagErro) throw pagErro;
+      splitPorPedido = new Map((pagamentosRows ?? []).map((p: any) => [p.order_id, !!p.split_ativo]));
+    }
+
+    const comissoes = (comissoesRaw ?? []).filter((c: any) => !splitPorPedido.get(c.pedido_id));
+    const total = comissoes.reduce((acc: number, c: any) => acc + (c.comissao_valor ?? 0), 0);
+    return { comissoes, total: parseFloat(total.toFixed(2)) };
   }
 
   private async buscarAssinaturaRaw(titular: Titular) {
@@ -321,6 +358,28 @@ export class PlanosService {
     }
   }
 
+  // ── Limite de impressoras ───────────────────────────────────────
+
+  async verificarLimiteImpressoras(restaurantId: number) {
+    const assinatura = await this.buscarAssinaturaRaw({ restaurantId });
+    if (!assinatura || assinatura.status === 'cancelada') return; // loja sem plano = sem limite
+    const limite = assinatura.planos?.limite_impressoras;
+    if (limite == null) return; // ilimitado
+
+    const { count, error } = await this.supabase.client
+      .from('impressoras')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId)
+      .eq('ativo', true);
+    if (error) throw error;
+
+    if ((count ?? 0) >= limite) {
+      throw new ForbiddenException(
+        `Limite de ${limite} impressoras do plano "${assinatura.planos.nome}" atingido. Faça upgrade de plano para cadastrar mais impressoras.`,
+      );
+    }
+  }
+
   // ── Faturamento / geração lazy de fatura ────────────────────────
 
   private async diasTolerancia() {
@@ -406,6 +465,7 @@ export class PlanosService {
       // então sempre cobra o valor cheio do plano.
       let isento = false;
       let valorFatura = plano.valor;
+      let comissaoValor = 0;
       if ('restaurantId' in titular) {
         const { data: faturamentoRows, error: fatErro } = await this.supabase.client
           .from('orders')
@@ -419,6 +479,14 @@ export class PlanosService {
         const faturamento = (faturamentoRows ?? []).reduce((acc, o: any) => acc + (o.total ?? 0), 0);
         isento = plano.piso_faturamento != null && faturamento < plano.piso_faturamento;
         valorFatura = isento ? 0 : plano.valor;
+
+        // Comissão é cobrada por fora da isenção do piso — reflete venda que
+        // já aconteceu, não é mensalidade fixa que faça sentido isentar.
+        if (plano.cobra_comissao) {
+          const { total } = await this.buscarComissoesNaoColetadas(titular.restaurantId, inicioPeriodo, fimPeriodo);
+          comissaoValor = total;
+          valorFatura += comissaoValor;
+        }
       }
 
       const vencimento = somarDias(fimPeriodo, 5);
@@ -428,7 +496,12 @@ export class PlanosService {
         periodo_inicio: inicioPeriodo.toISOString(),
         periodo_fim: fimPeriodo.toISOString(),
         valor: valorFatura,
-        status: isento ? 'isenta' : 'pendente',
+        comissao_valor: comissaoValor,
+        // Isenção do piso só zera a mensalidade — se ainda sobrou comissão a
+        // cobrar, a fatura continua "pendente" (senão a comissão nunca seria
+        // cobrada, já que fatura "isenta" não entra na checagem de bloqueio
+        // nem tem botão de pagar).
+        status: isento && comissaoValor === 0 ? 'isenta' : 'pendente',
         vencimento: vencimento.toISOString(),
       };
       if ('restaurantId' in titular) novaFatura.restaurant_id = titular.restaurantId;
@@ -489,12 +562,20 @@ export class PlanosService {
     const status = await this.sincronizarPeriodo({ restaurantId });
     const { assinatura, faturas } = await this.buscarAssinaturaPorRestaurante(restaurantId);
 
-    const { count: produtosAtivos, error } = await this.supabase.client
-      .from('products')
-      .select('id', { count: 'exact', head: true })
-      .eq('restaurant_id', restaurantId)
-      .eq('is_active', true);
+    const [{ count: produtosAtivos, error }, { count: impressorasAtivas, error: errorImp }] = await Promise.all([
+      this.supabase.client
+        .from('products')
+        .select('id', { count: 'exact', head: true })
+        .eq('restaurant_id', restaurantId)
+        .eq('is_active', true),
+      this.supabase.client
+        .from('impressoras')
+        .select('id', { count: 'exact', head: true })
+        .eq('restaurant_id', restaurantId)
+        .eq('ativo', true),
+    ]);
     if (error) throw error;
+    if (errorImp) throw errorImp;
 
     return {
       ...status,
@@ -502,6 +583,8 @@ export class PlanosService {
       faturas,
       produtos_ativos: produtosAtivos ?? 0,
       limite_produtos: assinatura.planos?.limite_produtos ?? null,
+      impressoras_ativas: impressorasAtivas ?? 0,
+      limite_impressoras: assinatura.planos?.limite_impressoras ?? null,
     };
   }
 
@@ -584,6 +667,14 @@ export class PlanosService {
   async buscarFaturaDoRestaurante(restaurantId: number, id: number) {
     const fatura = await this.buscarFatura(id);
     if (fatura.restaurant_id !== restaurantId) throw new NotFoundException('Fatura não encontrada');
+    if (fatura.comissao_valor > 0) {
+      const { comissoes } = await this.buscarComissoesNaoColetadas(
+        restaurantId,
+        new Date(fatura.periodo_inicio),
+        new Date(fatura.periodo_fim),
+      );
+      return { ...fatura, comissoes };
+    }
     return fatura;
   }
 

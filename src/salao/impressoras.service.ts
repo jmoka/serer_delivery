@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { PlanosService } from '../planos/planos.service';
 
 export interface ImpressoraBody {
   nome: string;
@@ -14,7 +15,10 @@ export interface ImpressoraBody {
 
 @Injectable()
 export class ImpressorasService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private planos: PlanosService,
+  ) {}
 
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
@@ -28,6 +32,7 @@ export class ImpressorasService {
 
   async criar(restaurantId: number, body: ImpressoraBody) {
     if (!body.nome || !body.setor) throw new BadRequestException('Nome e setor são obrigatórios');
+    await this.planos.verificarLimiteImpressoras(restaurantId);
 
     const { data, error } = await this.supabase.client
       .from('impressoras')

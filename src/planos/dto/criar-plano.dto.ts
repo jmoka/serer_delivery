@@ -23,6 +23,11 @@ export class CriarPlanoDto {
   limite_produtos?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  limite_impressoras?: number;
+
+  @IsOptional()
   @IsNumber()
   @Min(0)
   piso_faturamento?: number;
@@ -47,4 +52,10 @@ export class CriarPlanoDto {
   @IsOptional()
   @IsBoolean()
   inclui_gdoor?: boolean;
+
+  // Cobra comissão sobre vendas sem split PagBank ativo, além da mensalidade
+  // (ver PlanosService.buscarComissoesNaoColetadas).
+  @IsOptional()
+  @IsBoolean()
+  cobra_comissao?: boolean;
 }

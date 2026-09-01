@@ -19,9 +19,10 @@ import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AgenteImpressaoModule } from '../agente-impressao/agente-impressao.module';
 import { GdoorModule } from '../gdoor/gdoor.module';
+import { PlanosModule } from '../planos/planos.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, AgenteImpressaoModule, GdoorModule],
+  imports: [AuthModule, SupabaseModule, AgenteImpressaoModule, GdoorModule, PlanosModule],
   controllers: [
     SalaoController,
     GarcomAuthController,

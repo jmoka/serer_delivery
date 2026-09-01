@@ -155,6 +155,7 @@ export class PagamentosService {
         valor: pedido.total,
         pix_code: pixCode,
         pix_qr_url: pixQrUrl,
+        split_ativo: !!splitConfig,
       })
       .select()
       .single();
@@ -223,6 +224,7 @@ export class PagamentosService {
         status: statusPagamento,
         valor: pedido.total,
         pago_em: statusPagamento === 'paid' ? new Date().toISOString() : null,
+        split_ativo: !!splitConfig,
       })
       .select()
       .single();
@@ -253,7 +255,7 @@ export class PagamentosService {
 
     const { data, error } = await this.supabase.client
       .from('pagamentos')
-      .select('id, tipo, status, valor, pix_code, pix_qr_url, pagbank_order_id, pago_em, criado_em')
+      .select('id, tipo, status, valor, pix_code, pix_qr_url, pagbank_order_id, pago_em, criado_em, split_ativo')
       .eq('order_id', orderId)
       .order('criado_em', { ascending: false });
 
