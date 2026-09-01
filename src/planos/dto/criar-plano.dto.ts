@@ -58,4 +58,8 @@ export class CriarPlanoDto {
   @IsOptional()
   @IsBoolean()
   cobra_comissao?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  inclui_favicon_personalizado?: boolean;
 }

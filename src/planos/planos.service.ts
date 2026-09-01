@@ -118,6 +118,7 @@ export class PlanosService {
         inclui_salao: body.inclui_salao ?? false,
         inclui_gdoor: body.inclui_gdoor ?? false,
         cobra_comissao: body.cobra_comissao ?? false,
+        inclui_favicon_personalizado: body.inclui_favicon_personalizado ?? false,
       })
       .select()
       .single();
@@ -142,6 +143,7 @@ export class PlanosService {
     if (body.inclui_salao !== undefined) campos.inclui_salao = body.inclui_salao;
     if (body.inclui_gdoor !== undefined) campos.inclui_gdoor = body.inclui_gdoor;
     if (body.cobra_comissao !== undefined) campos.cobra_comissao = body.cobra_comissao;
+    if (body.inclui_favicon_personalizado !== undefined) campos.inclui_favicon_personalizado = body.inclui_favicon_personalizado;
 
     const { data, error } = await this.supabase.client
       .from('planos')
@@ -267,6 +269,7 @@ export class PlanosService {
           modulo_delivery: plano.inclui_delivery,
           modulo_salao: plano.inclui_salao,
           modulo_gdoor: plano.inclui_gdoor,
+          modulo_favicon_personalizado: plano.inclui_favicon_personalizado,
           updated_at: new Date().toISOString(),
         })
         .eq('id', titular.restaurantId);

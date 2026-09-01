@@ -317,7 +317,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, pagamento_manual, payment_config')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, pagamento_manual, payment_config')
       .eq('custom_domain', dominio)
       .maybeSingle();
 
@@ -335,7 +335,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, pagamento_manual, payment_config')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, pagamento_manual, payment_config')
       .eq('slug', slug)
       .maybeSingle();
 
