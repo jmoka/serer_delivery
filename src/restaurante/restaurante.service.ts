@@ -42,6 +42,16 @@ export class RestauranteService {
     return resultado;
   }
 
+  // Usado pelo portal de Cozinha/KDS por token (sem login de dono) pra saber se o
+  // vocabulário deve ser "Cozinha"/"Preparo" (Restaurante) ou "Embalagem" (outros tipos).
+  async tipoRestaurantePorId(restaurantId: number): Promise<boolean> {
+    const [{ data: restaurante }, { data: tipoRestaurante }] = await Promise.all([
+      this.supabase.client.from('restaurants').select('type_id').eq('id', restaurantId).maybeSingle(),
+      this.supabase.client.from('establishment_types').select('id').eq('name', 'Restaurante').maybeSingle(),
+    ]);
+    return restaurante?.type_id === tipoRestaurante?.id;
+  }
+
   private async buscarMinhaEmpresa(userId: string) {
     // payment_config nunca sai daqui em claro — tem rota própria mascarada
     // (GET /restaurante/config, ver getConfig() nesta mesma classe).

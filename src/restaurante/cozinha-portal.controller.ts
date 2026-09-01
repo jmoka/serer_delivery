@@ -12,8 +12,9 @@ export class CozinhaPortalController {
   ) {}
 
   @Get('me')
-  me(@Req() req: any) {
-    return { restaurante: { id: req.cozinhaRestaurantId, name: req.cozinhaRestaurantName } };
+  async me(@Req() req: any) {
+    const tipo_restaurante = await this.service.tipoRestaurantePorId(req.cozinhaRestaurantId);
+    return { restaurante: { id: req.cozinhaRestaurantId, name: req.cozinhaRestaurantName, tipo_restaurante } };
   }
 
   // Resgate de token: chamado uma vez, logo depois que a tela abre com o token
