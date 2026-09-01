@@ -861,8 +861,30 @@ export class MotoboyService {
       .order('created_at', { ascending: true });
     if (error) throw error;
 
+    // Alerta final de "pronto" vai só pra quem demonstrou interesse quando o pedido foi pra
+    // produção (ver pedidosEmProducaoTodos/registrarInteresse) — cria o efeito de fila/
+    // concorrência. Se NINGUÉM demonstrou interesse a tempo (motoboy só abriu o app depois,
+    // ou feature nova sem uso ainda), cai no fallback de mostrar pra todo mundo — pra nenhum
+    // pedido ficar esquecido sem ninguém avisado.
+    const orderIds = (data ?? []).map((p) => p.id);
+    const interessadosPorPedido = new Map<number, Set<number>>();
+    if (orderIds.length) {
+      const { data: interesses } = await this.supabase.client
+        .from('pedido_interesses_motoboy')
+        .select('order_id, motoboy_id')
+        .in('order_id', orderIds);
+      for (const i of interesses ?? []) {
+        if (!interessadosPorPedido.has(i.order_id)) interessadosPorPedido.set(i.order_id, new Set());
+        interessadosPorPedido.get(i.order_id)!.add(i.motoboy_id);
+      }
+    }
+    const dataFiltrada = (data ?? []).filter((p) => {
+      const interessados = interessadosPorPedido.get(p.id);
+      return !interessados || interessados.size === 0 || interessados.has(motoboyId);
+    });
+
     const pedidos = await Promise.all(
-      (data ?? []).map(async (p) => {
+      dataFiltrada.map(async (p) => {
         const { data: c } = p.customer_id
           ? await this.supabase.client
               .from('customers')
@@ -878,6 +900,105 @@ export class MotoboyService {
       }),
     );
     return { pedidos };
+  }
+
+  // Pedidos em produção (confirmed/preparing, ainda sem motoboy) de todas as lojas
+  // afiliadas — motoboy pode demonstrar interesse ANTES do pedido ficar pronto, criando o
+  // efeito de fila/concorrência: quando ficar pronto, só quem demonstrou interesse aqui
+  // recebe o alerta final (ver pedidosDisponiveisTodos). `meu_interesse` e
+  // `total_interessados` deixam o app mostrar "você já está concorrendo" / "2 motoboys
+  // concorrendo" sem precisar de outra chamada.
+  async pedidosEmProducaoTodos(motoboyId: number) {
+    const { data: afiliacoes, error: afError } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .select('restaurant_id')
+      .eq('motoboy_id', motoboyId)
+      .eq('status', 'aceito')
+      .eq('bloqueado', false);
+    if (afError) throw afError;
+    const restaurantIds = [...new Set((afiliacoes ?? []).map((a) => a.restaurant_id))];
+    if (restaurantIds.length === 0) return { pedidos: [] };
+
+    const { data: lojas } = await this.supabase.client
+      .from('restaurants')
+      .select('id, name')
+      .in('id', restaurantIds)
+      .eq('usa_motoboy', true);
+    const idsValidos = (lojas ?? []).map((r) => r.id);
+    const nomeLoja = Object.fromEntries((lojas ?? []).map((r) => [r.id, r.name]));
+    if (idsValidos.length === 0) return { pedidos: [] };
+
+    const { data, error } = await this.supabase.client
+      .from('orders')
+      .select('id, restaurant_id, total, payment_method, created_at, customer_id, canal')
+      .in('restaurant_id', idsValidos)
+      .in('status', ['confirmed', 'preparing'])
+      .eq('canal', 'delivery')
+      .is('motoboy_id', null)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    if (!data?.length) return { pedidos: [] };
+
+    const orderIds = data.map((p) => p.id);
+    const { data: interesses } = await this.supabase.client
+      .from('pedido_interesses_motoboy')
+      .select('order_id, motoboy_id')
+      .in('order_id', orderIds);
+    const interessadosPorPedido = new Map<number, number[]>();
+    for (const i of interesses ?? []) {
+      if (!interessadosPorPedido.has(i.order_id)) interessadosPorPedido.set(i.order_id, []);
+      interessadosPorPedido.get(i.order_id)!.push(i.motoboy_id);
+    }
+
+    // Mesmo endereço/cliente que o card de "disponíveis" já mostra — motoboy decide se
+    // vale a pena demonstrar interesse olhando pra onde vai antes do pedido ficar pronto.
+    const customerIds = [...new Set(data.map((p) => p.customer_id).filter(Boolean))];
+    const { data: customers } = customerIds.length
+      ? await this.supabase.client.from('customers').select('id, name, phone_e164, address_json').in('id', customerIds)
+      : { data: [] as any[] };
+    const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c]));
+
+    const pedidos = data.map((p) => {
+      const interessados = interessadosPorPedido.get(p.id) ?? [];
+      return {
+        ...p,
+        restaurant_name: nomeLoja[p.restaurant_id],
+        cliente: p.customer_id ? customerMap[p.customer_id] ?? null : null,
+        meu_interesse: interessados.includes(motoboyId),
+        total_interessados: interessados.length,
+      };
+    });
+    return { pedidos };
+  }
+
+  async registrarInteresse(motoboyId: number, pedidoId: number) {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('id, restaurant_id, status')
+      .eq('id', pedidoId)
+      .maybeSingle();
+    if (!pedido) throw new NotFoundException('Pedido não encontrado');
+    if (!['confirmed', 'preparing'].includes(pedido.status)) {
+      throw new BadRequestException('Esse pedido não está mais disponível pra demonstrar interesse');
+    }
+    await this.exigirAfiliacaoAceita(motoboyId, pedido.restaurant_id);
+    await this.exigirUsaMotoboy(pedido.restaurant_id);
+
+    const { error } = await this.supabase.client
+      .from('pedido_interesses_motoboy')
+      .upsert({ order_id: pedidoId, motoboy_id: motoboyId }, { onConflict: 'order_id,motoboy_id', ignoreDuplicates: true });
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  async removerInteresse(motoboyId: number, pedidoId: number) {
+    const { error } = await this.supabase.client
+      .from('pedido_interesses_motoboy')
+      .delete()
+      .eq('order_id', pedidoId)
+      .eq('motoboy_id', motoboyId);
+    if (error) throw error;
+    return { ok: true };
   }
 
   async pedidosDisponiveis(motoboyId: number, restaurantId: number) {

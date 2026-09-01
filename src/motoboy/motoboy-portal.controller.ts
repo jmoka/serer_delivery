@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { MotoboyGuard } from '../auth/motoboy.guard';
 import { MotoboyService } from './motoboy.service';
 
@@ -55,6 +55,23 @@ export class MotoboyPortalController {
     return restaurantId
       ? this.service.pedidosDisponiveis(req.motoboyId, Number(restaurantId))
       : this.service.pedidosDisponiveisTodos(req.motoboyId);
+  }
+
+  // Pedidos em produção (ainda sem motoboy) de todas as lojas afiliadas — motoboy demonstra
+  // interesse aqui, antes do pedido ficar pronto (ver pedidosEmProducaoTodos).
+  @Get('pedidos/em-producao')
+  emProducao(@Req() req: any) {
+    return this.service.pedidosEmProducaoTodos(req.motoboyId);
+  }
+
+  @Post('pedidos/:id/interesse')
+  demonstrarInteresse(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.registrarInteresse(req.motoboyId, id);
+  }
+
+  @Delete('pedidos/:id/interesse')
+  desistirInteresse(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.removerInteresse(req.motoboyId, id);
   }
 
   @Get('pedidos')
