@@ -60,6 +60,28 @@ export class RestauranteMotoboysController {
     return this.service.revisarSolicitacao(id, req.restaurantId);
   }
 
+  // ── Solicitações de repasse (motoboy pede o resgate, restaurante paga e confirma) ──
+
+  @Get('repasses/count')
+  repassesCount(@Req() req: any) {
+    return this.service.contarSolicitacoesRepassePendentes(req.restaurantId);
+  }
+
+  @Get('repasses')
+  repasses(@Query('status') status: string | undefined, @Req() req: any) {
+    return this.service.listarSolicitacoesRepasse(req.restaurantId, status);
+  }
+
+  @Patch('repasses/:id/pagar')
+  pagarRepasse(@Param('id', ParseIntPipe) id: number, @Body() body: { comprovante: string }, @Req() req: any) {
+    return this.service.confirmarPagamentoRepasse(req.restaurantId, id, body.comprovante);
+  }
+
+  @Patch('repasses/:id/recusar')
+  recusarRepasse(@Param('id', ParseIntPipe) id: number, @Body() body: { motivo: string }, @Req() req: any) {
+    return this.service.recusarSolicitacaoRepasse(req.restaurantId, id, body.motivo);
+  }
+
   @Patch(':motoboyId/remover')
   remover(@Param('motoboyId', ParseIntPipe) motoboyId: number, @Req() req: any) {
     return this.service.removerAfiliacao(motoboyId, req.restaurantId);

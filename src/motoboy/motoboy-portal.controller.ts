@@ -13,7 +13,7 @@ export class MotoboyPortalController {
   }
 
   @Patch('me')
-  atualizarMe(@Body() body: { name?: string; phone?: string; foto_perfil?: string }, @Req() req: any) {
+  atualizarMe(@Body() body: { name?: string; phone?: string; foto_perfil?: string; chave_pix?: string }, @Req() req: any) {
     return this.service.atualizarPerfilMotoboy(req.motoboyId, body);
   }
 
@@ -72,6 +72,26 @@ export class MotoboyPortalController {
   @Delete('pedidos/:id/interesse')
   desistirInteresse(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.removerInteresse(req.motoboyId, id);
+  }
+
+  // ── Saldo e solicitação de repasse ───────────────────────────────────────────────
+
+  @Get('saldo')
+  saldo(@Req() req: any) {
+    return this.service.saldoPorEstabelecimento(req.motoboyId);
+  }
+
+  @Post('repasses')
+  criarRepasse(
+    @Body() body: { restaurant_id: number; valor: number; nota_fiscal?: string },
+    @Req() req: any,
+  ) {
+    return this.service.criarSolicitacaoRepasse(req.motoboyId, Number(body.restaurant_id), Number(body.valor), body.nota_fiscal);
+  }
+
+  @Get('repasses')
+  minhasRepasses(@Req() req: any) {
+    return this.service.minhasSolicitacoesRepasse(req.motoboyId);
   }
 
   @Get('pedidos')

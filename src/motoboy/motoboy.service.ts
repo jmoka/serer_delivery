@@ -384,6 +384,112 @@ export class MotoboyService {
     return { count: count ?? 0 };
   }
 
+  // ── Solicitações de repasse (motoboy pede, restaurante paga e confirma) ────────────
+
+  private async uploadImagemRepasse(prefixo: string, id: number | string, base64: string): Promise<string> {
+    const matches = base64.match(/^data:(image\/\w+);base64,(.+)$/);
+    const mimeType = matches ? matches[1] : 'image/jpeg';
+    const raw = matches ? matches[2] : base64;
+    const buffer = Buffer.from(raw, 'base64');
+    const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+    const path = `${prefixo}-${id}-${Date.now()}.${ext}`;
+
+    const { error: uploadError } = await this.supabase.client.storage
+      .from('comprovantes-pix')
+      .upload(path, buffer, { contentType: mimeType, upsert: true });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = this.supabase.client.storage.from('comprovantes-pix').getPublicUrl(path);
+    return publicUrl;
+  }
+
+  async listarSolicitacoesRepasse(restaurantId: number, status?: string) {
+    let q = this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .select('id, motoboy_id, valor_solicitado, chave_pix_motoboy, nota_fiscal_url, comprovante_pagamento_url, status, motivo_recusa, criado_em, respondido_em, motoboys(name, phone)')
+      .eq('restaurant_id', restaurantId)
+      .order('criado_em', { ascending: false });
+    if (status) q = q.eq('status', status);
+    const { data, error } = await q;
+    if (error) throw error;
+    return { solicitacoes: (data ?? []).map((s: any) => ({ ...s, motoboy_nome: s.motoboys?.name, motoboy_phone: s.motoboys?.phone })) };
+  }
+
+  async contarSolicitacoesRepassePendentes(restaurantId: number) {
+    const { count, error } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'pendente');
+    if (error) throw error;
+    return { count: count ?? 0 };
+  }
+
+  // Confirma o pagamento: sobe o comprovante e marca 'pago' as comissões pendentes mais
+  // antigas (FIFO) daquele motoboy+restaurante até a soma bater ou passar o valor
+  // solicitado — nunca quebra a comissão de um pedido ao meio. Mantém o relatório antigo
+  // (getRelatorioMotoboy/registrarRepasseMotoboy) coerente sem precisar mexer nele.
+  async confirmarPagamentoRepasse(restaurantId: number, solicitacaoId: number, comprovanteBase64: string) {
+    const { data: solicitacao } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .select('id, motoboy_id, restaurant_id, valor_solicitado, status')
+      .eq('id', solicitacaoId)
+      .maybeSingle();
+    if (!solicitacao || solicitacao.restaurant_id !== restaurantId) throw new NotFoundException('Solicitação não encontrada');
+    if (solicitacao.status !== 'pendente') throw new BadRequestException('Essa solicitação já foi respondida');
+    if (!comprovanteBase64) throw new BadRequestException('Anexe o comprovante de pagamento');
+
+    const url = await this.uploadImagemRepasse('comprovante-repasse', solicitacaoId, comprovanteBase64);
+
+    const { data: comissoesPendentes } = await this.supabase.client
+      .from('motoboy_comissoes')
+      .select('id, comissao_valor')
+      .eq('motoboy_id', solicitacao.motoboy_id)
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'pendente')
+      .order('criado_em', { ascending: true });
+
+    let acumulado = 0;
+    const idsParaPagar: number[] = [];
+    for (const c of comissoesPendentes ?? []) {
+      if (acumulado >= Number(solicitacao.valor_solicitado)) break;
+      idsParaPagar.push(c.id);
+      acumulado += Number(c.comissao_valor);
+    }
+    if (idsParaPagar.length) {
+      await this.supabase.client
+        .from('motoboy_comissoes')
+        .update({ status: 'pago', pago_em: new Date().toISOString() })
+        .in('id', idsParaPagar);
+    }
+
+    const { error } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .update({ status: 'pago', comprovante_pagamento_url: url, respondido_em: new Date().toISOString() })
+      .eq('id', solicitacaoId);
+    if (error) throw error;
+
+    return { ok: true };
+  }
+
+  async recusarSolicitacaoRepasse(restaurantId: number, solicitacaoId: number, motivo: string) {
+    if (!motivo?.trim()) throw new BadRequestException('Informe o motivo da recusa');
+    const { data: solicitacao } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .select('id, restaurant_id, status')
+      .eq('id', solicitacaoId)
+      .maybeSingle();
+    if (!solicitacao || solicitacao.restaurant_id !== restaurantId) throw new NotFoundException('Solicitação não encontrada');
+    if (solicitacao.status !== 'pendente') throw new BadRequestException('Essa solicitação já foi respondida');
+
+    const { error } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .update({ status: 'recusada', motivo_recusa: motivo.trim(), respondido_em: new Date().toISOString() })
+      .eq('id', solicitacaoId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
   async aceitarSolicitacao(id: number, restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')
@@ -1001,6 +1107,106 @@ export class MotoboyService {
     return { ok: true };
   }
 
+  // ── Saldo e solicitação de repasse (lado motoboy) ───────────────────────────────
+
+  // Saldo por estabelecimento afiliado = comissão pendente menos o que já está em
+  // solicitação pendente (aguardando o restaurante confirmar) — evita pedir a mesma
+  // grana duas vezes enquanto uma solicitação anterior ainda não foi respondida.
+  async saldoPorEstabelecimento(motoboyId: number) {
+    const { data: afiliacoes } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .select('restaurant_id, restaurants(name)')
+      .eq('motoboy_id', motoboyId)
+      .eq('status', 'aceito')
+      .eq('bloqueado', false);
+    const lista = (afiliacoes ?? []) as any[];
+    if (!lista.length) return { saldo: [] };
+    const restaurantIds = lista.map((a) => a.restaurant_id);
+
+    const { data: comissoes } = await this.supabase.client
+      .from('motoboy_comissoes')
+      .select('restaurant_id, comissao_valor')
+      .eq('motoboy_id', motoboyId)
+      .eq('status', 'pendente')
+      .in('restaurant_id', restaurantIds);
+
+    const { data: solicitacoesPendentes } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .select('restaurant_id, valor_solicitado')
+      .eq('motoboy_id', motoboyId)
+      .eq('status', 'pendente')
+      .in('restaurant_id', restaurantIds);
+
+    const devidoPorLoja = new Map<number, number>();
+    for (const c of comissoes ?? []) devidoPorLoja.set(c.restaurant_id, (devidoPorLoja.get(c.restaurant_id) ?? 0) + Number(c.comissao_valor));
+    const solicitadoPorLoja = new Map<number, number>();
+    for (const s of solicitacoesPendentes ?? []) solicitadoPorLoja.set(s.restaurant_id, (solicitadoPorLoja.get(s.restaurant_id) ?? 0) + Number(s.valor_solicitado));
+
+    const saldo = lista.map((a) => {
+      const devido = devidoPorLoja.get(a.restaurant_id) ?? 0;
+      const emSolicitacao = solicitadoPorLoja.get(a.restaurant_id) ?? 0;
+      return {
+        restaurant_id: a.restaurant_id,
+        restaurant_name: a.restaurants?.name,
+        saldo_devido: Math.round(devido * 100) / 100,
+        em_solicitacao: Math.round(emSolicitacao * 100) / 100,
+        saldo_disponivel: Math.round(Math.max(devido - emSolicitacao, 0) * 100) / 100,
+      };
+    });
+    return { saldo };
+  }
+
+  async criarSolicitacaoRepasse(motoboyId: number, restaurantId: number, valor: number, notaFiscalBase64?: string) {
+    await this.exigirAfiliacaoAceita(motoboyId, restaurantId);
+    if (!(valor > 0)) throw new BadRequestException('Valor deve ser maior que zero');
+
+    const { data: motoboy } = await this.supabase.client
+      .from('motoboys')
+      .select('chave_pix')
+      .eq('id', motoboyId)
+      .maybeSingle();
+    if (!motoboy?.chave_pix?.trim()) {
+      throw new BadRequestException('Cadastre sua chave PIX no perfil antes de solicitar o resgate');
+    }
+
+    const { saldo } = await this.saldoPorEstabelecimento(motoboyId);
+    const item = saldo.find((s) => s.restaurant_id === restaurantId);
+    const disponivel = item?.saldo_disponivel ?? 0;
+    if (valor > disponivel + 0.01) {
+      throw new BadRequestException(`Valor solicitado (${valor.toFixed(2)}) maior que o saldo disponível (${disponivel.toFixed(2)})`);
+    }
+
+    const { data: criada, error } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .insert({
+        motoboy_id: motoboyId,
+        restaurant_id: restaurantId,
+        valor_solicitado: valor,
+        chave_pix_motoboy: motoboy.chave_pix.trim(),
+      })
+      .select('id')
+      .single();
+    if (error) throw error;
+
+    if (notaFiscalBase64) {
+      const url = await this.uploadImagemRepasse('nota-fiscal', criada.id, notaFiscalBase64);
+      await this.supabase.client.from('motoboy_repasse_solicitacoes').update({ nota_fiscal_url: url }).eq('id', criada.id);
+    }
+
+    return { ok: true, id: criada.id };
+  }
+
+  async minhasSolicitacoesRepasse(motoboyId: number) {
+    const { data, error } = await this.supabase.client
+      .from('motoboy_repasse_solicitacoes')
+      .select('id, restaurant_id, valor_solicitado, status, motivo_recusa, nota_fiscal_url, comprovante_pagamento_url, criado_em, respondido_em, restaurants(name)')
+      .eq('motoboy_id', motoboyId)
+      .order('criado_em', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return { solicitacoes: (data ?? []).map((s: any) => ({ ...s, restaurant_name: s.restaurants?.name })) };
+  }
+
   async pedidosDisponiveis(motoboyId: number, restaurantId: number) {
     await this.exigirAfiliacaoAceita(motoboyId, restaurantId);
     await this.exigirUsaMotoboy(restaurantId);
@@ -1176,7 +1382,7 @@ export class MotoboyService {
     const { data: mb } = await this.supabase.client
       .from('motoboys')
       .select(
-        'id, name, phone, email, foto_perfil_url, precisa_completar_cadastro, status_plataforma, motivo_recusa_plataforma, revisoes_solicitadas',
+        'id, name, phone, email, foto_perfil_url, chave_pix, precisa_completar_cadastro, status_plataforma, motivo_recusa_plataforma, revisoes_solicitadas',
       )
       .eq('id', motoboyId)
       .maybeSingle();
@@ -1196,7 +1402,7 @@ export class MotoboyService {
   // identidade de login (Supabase Auth); troca de e-mail passa por
   // authService.updateEmail no frontend, e o trigger sync_user_profile_email
   // mantém motoboys.email em dia.
-  async atualizarPerfilMotoboy(motoboyId: number, body: { name?: string; phone?: string; foto_perfil?: string }) {
+  async atualizarPerfilMotoboy(motoboyId: number, body: { name?: string; phone?: string; foto_perfil?: string; chave_pix?: string }) {
     if (body.phone && !PHONE_RE.test(body.phone)) throw new BadRequestException('Telefone inválido');
 
     const campos: Record<string, any> = {};
@@ -1205,6 +1411,7 @@ export class MotoboyService {
       campos.name = body.name.trim();
     }
     if (body.phone !== undefined) campos.phone = body.phone || null;
+    if (body.chave_pix !== undefined) campos.chave_pix = body.chave_pix.trim() || null;
     if (body.foto_perfil) {
       const matches = body.foto_perfil.match(/^data:([\w/+-]+);base64,(.+)$/);
       const mimeType = matches ? matches[1] : 'image/jpeg';
