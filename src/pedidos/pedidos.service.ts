@@ -244,7 +244,22 @@ export class PedidosService {
 
     const { data, error } = await query;
     if (error) throw error;
-    return { pedidos: data, total: data?.length ?? 0 };
+
+    // Cliente pode ter pedidos de estabelecimentos de tipos diferentes no
+    // historico — o rotulo de status (Cozinha/Preparo vs Embalagem) depende do
+    // tipo de CADA pedido, nao de um so valor pra lista inteira.
+    const restaurantIds = [...new Set((data ?? []).map((p: any) => p.restaurant_id))];
+    let tipoRestaurantePorId = new Map<number, boolean>();
+    if (restaurantIds.length > 0) {
+      const [{ data: restaurantesTipo }, { data: tipoRestauranteRow }] = await Promise.all([
+        this.supabase.client.from('restaurants').select('id, type_id').in('id', restaurantIds),
+        this.supabase.client.from('establishment_types').select('id').eq('name', 'Restaurante').maybeSingle(),
+      ]);
+      tipoRestaurantePorId = new Map((restaurantesTipo ?? []).map((r: any) => [r.id, r.type_id === tipoRestauranteRow?.id]));
+    }
+    const pedidos = (data ?? []).map((p: any) => ({ ...p, tipo_restaurante: tipoRestaurantePorId.get(p.restaurant_id) ?? true }));
+
+    return { pedidos, total: pedidos.length };
   }
 
   // Uso público (controller) — exige provar posse do pedido (admin ou dono).
@@ -269,7 +284,7 @@ export class PedidosService {
     if (error) throw error;
     if (!pedido) throw new NotFoundException(`Pedido ${id} não encontrado`);
 
-    const [{ data: itensRaw }, { data: cliente }, { data: empresa }, { data: motoboy }, { data: pagamento }] = await Promise.all([
+    const [{ data: itensRaw }, { data: cliente }, { data: empresaRaw }, { data: motoboy }, { data: pagamento }, { data: tipoRestauranteRow }] = await Promise.all([
       this.supabase.client
         .from('order_items')
         .select('id, quantity, unit_price, product_id, combo_nome, combo_quantidade, status, enviado_em, preparando_em')
@@ -279,14 +294,20 @@ export class PedidosService {
         : Promise.resolve({ data: null }),
       this.supabase.client
         .from('restaurants')
-        .select('id, name, comissao_pct, address, lat, lng')
+        .select('id, name, comissao_pct, address, lat, lng, type_id')
         .eq('id', pedido.restaurant_id)
         .maybeSingle(),
       pedido.motoboy_id
         ? this.supabase.client.from('motoboys').select('id, name, phone').eq('id', pedido.motoboy_id).maybeSingle()
         : Promise.resolve({ data: null }),
       this.supabase.client.from('pagamentos').select('id, valor, tipo, status').eq('order_id', id).eq('status', 'paid').maybeSingle(),
+      this.supabase.client.from('establishment_types').select('id').eq('name', 'Restaurante').maybeSingle(),
     ]);
+
+    // Vocabulario do painel de acompanhamento do cliente (Cozinha/Preparo vs
+    // Embalagem) depende do tipo do estabelecimento DESSE pedido, nao do usuario
+    // logado — o cliente pode ter pedidos de tipos diferentes no historico.
+    const empresa = empresaRaw ? { ...empresaRaw, tipo_restaurante: empresaRaw.type_id === tipoRestauranteRow?.id } : null;
 
     // Enrich items with product names
     let itens = itensRaw ?? [];
