@@ -38,7 +38,7 @@ export class GeocodingService {
     try {
       await this.aguardarRateLimit();
 
-      const userAgent = this.config.get('NOMINATIM_USER_AGENT') ?? 'DeliveryHub/1.0';
+      const userAgent = this.config.get('NOMINATIM_USER_AGENT') ?? 'PediuVai/1.0';
       const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(texto)}&format=json&limit=1`;
       const res = await fetch(url, { headers: { 'User-Agent': userAgent } });
       if (!res.ok) return null;
