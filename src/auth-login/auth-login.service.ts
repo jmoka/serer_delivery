@@ -2,6 +2,7 @@ import { BadRequestException, HttpException, HttpStatus, Injectable, Unauthorize
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseService } from '../supabase/supabase.service';
+import { TwoFactorService } from '../two-factor/two-factor.service';
 
 // Bloqueio por conta após várias senhas erradas seguidas no login principal
 // (cliente/dono/admin, via Supabase Auth) — mesmo padrão já aplicado ao garçom
@@ -28,6 +29,7 @@ export class AuthLoginService {
 
   constructor(
     private supabase: SupabaseService,
+    private twoFactor: TwoFactorService,
     config: ConfigService,
   ) {
     this.authClient = createClient(
@@ -50,7 +52,7 @@ export class AuthLoginService {
 
     const { data: perfil } = await this.supabase.client
       .from('user_profiles')
-      .select('id, tentativas_login_falhas, bloqueado_login_ate')
+      .select('id, tentativas_login_falhas, bloqueado_login_ate, two_factor_method')
       .eq('email', emailNormalizado)
       .maybeSingle();
 
@@ -83,6 +85,37 @@ export class AuthLoginService {
       await this.supabase.client.from('user_profiles').update({ tentativas_login_falhas: 0, bloqueado_login_ate: null }).eq('id', perfil.id);
     }
 
-    return { access_token: data.session.access_token, refresh_token: data.session.refresh_token };
+    const session = { access_token: data.session.access_token, refresh_token: data.session.refresh_token };
+
+    // 2FA opt-in: contas com two_factor_method='none' (default, imensa maioria)
+    // seguem exatamente como antes — a sessão só fica "retida" pra quem
+    // ativou 2FA no /admin ou /restaurante (ver TwoFactorService).
+    if (perfil?.two_factor_method === 'totp' || perfil?.two_factor_method === 'email') {
+      let challengeId: string;
+      try {
+        ({ challengeId } = await this.twoFactor.criarDesafio({
+          userId: perfil.id,
+          method: perfil.two_factor_method,
+          email: emailNormalizado,
+          session,
+        }));
+      } catch {
+        // Falha ao enviar o código (Resend fora do ar/domínio não verificado,
+        // Redis indisponível etc.) — nunca deixa cair num 500 cru: quem tem
+        // 2FA por email ativo ficaria sem conseguir logar e sem entender
+        // por quê. Mensagem clara em vez de "Internal server error".
+        throw new HttpException(
+          { message: 'Não foi possível enviar o código de verificação agora. Tente novamente em instantes.' },
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      return { requires2fa: true, method: perfil.two_factor_method, challenge_id: challengeId };
+    }
+
+    return session;
+  }
+
+  verifyTwoFactor(challengeId: string, code: string) {
+    return this.twoFactor.verificarDesafio(challengeId, code);
   }
 }

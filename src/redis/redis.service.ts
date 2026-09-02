@@ -42,4 +42,36 @@ export class RedisService {
       this.logger.warn(`Falha ao gravar cache ${key}: ${(err as Error).message}`);
     }
   }
+
+  // Variantes "strict" (fail-closed), pro desafio de 2FA — diferente do cache
+  // acima (best-effort, ok pular se Redis cair), aqui o Redis indisponível
+  // PRECISA bloquear a operação, nunca deixar o login pular o segundo fator
+  // silenciosamente. Lançam erro em vez de engolir a falha.
+  async setJSONStrict(key: string, value: unknown, ttlSeconds: number): Promise<void> {
+    if (!this.client) throw new Error('Redis indisponível — tente novamente em instantes.');
+    await this.client.set(key, JSON.stringify(value), 'EX', ttlSeconds);
+  }
+
+  // Leitura não-destrutiva — usada pro desafio de 2FA continuar disponível
+  // pra novas tentativas até acertar o código ou estourar o limite/expirar.
+  async getJSONStrict<T>(key: string): Promise<T | null> {
+    if (!this.client) throw new Error('Redis indisponível — tente novamente em instantes.');
+    const raw = await this.client.get(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  }
+
+  async del(key: string): Promise<void> {
+    if (!this.client) throw new Error('Redis indisponível — tente novamente em instantes.');
+    await this.client.del(key);
+  }
+
+  // Contador de tentativas com TTL (ex. tentativas erradas de código 2FA por
+  // challenge_id) — incrementa e devolve o total atual; primeira chamada seta
+  // o TTL, chamadas seguintes só incrementam.
+  async incrWithTtl(key: string, ttlSeconds: number): Promise<number> {
+    if (!this.client) throw new Error('Redis indisponível — tente novamente em instantes.');
+    const total = await this.client.incr(key);
+    if (total === 1) await this.client.expire(key, ttlSeconds);
+    return total;
+  }
 }

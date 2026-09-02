@@ -15,4 +15,14 @@ export class AuthLoginController {
   login(@Body() body: { email: string; password: string }) {
     return this.service.login(body.email, body.password);
   }
+
+  // Segundo passo do login quando a conta tem 2FA ativo (ver AuthLoginService.login,
+  // que devolve requires2fa+challenge_id em vez dos tokens direto). Rate-limit mais
+  // apertado que o login: challenge_id só existe pra quem já acertou a senha, mas o
+  // código de 6 dígitos ainda pode ser tentado por força bruta.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('verify-2fa')
+  verify2fa(@Body() body: { challenge_id: string; code: string }) {
+    return this.service.verifyTwoFactor(body.challenge_id, body.code);
+  }
 }

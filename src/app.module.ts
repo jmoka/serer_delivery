@@ -29,6 +29,7 @@ import { InstalacoesModule } from './instalacoes/instalacoes.module';
 import { LicencaModule } from './licenca/licenca.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
 import { AuthLoginModule } from './auth-login/auth-login.module';
+import { TwoFactorModule } from './two-factor/two-factor.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { AuthLoginModule } from './auth-login/auth-login.module';
     LicencaModule,
     UsuariosModule,
     AuthLoginModule,
+    TwoFactorModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
