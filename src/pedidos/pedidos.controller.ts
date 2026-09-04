@@ -126,4 +126,11 @@ export class PedidosController {
   ) {
     return this.service.uploadComprovanteCliente(id, req.userId, body.base64);
   }
+
+  // Cliente escolhe pular o anexo agora e avisa que vai mostrar/pagar em pessoa
+  @Patch(':id/pular-comprovante')
+  @UseGuards(JwtGuard)
+  pularComprovante(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.pularComprovante(id, req.userId);
+  }
 }

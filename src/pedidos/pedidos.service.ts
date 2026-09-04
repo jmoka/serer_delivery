@@ -277,7 +277,7 @@ export class PedidosService {
   async buscarBruto(id: number) {
     const { data: pedido, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, troco_para, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, entrega_pagamento, status, payment_method, canal, retirada_balcao, pago_em, comprovante_pagamento_url, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
+      .select('id, total, troco_para, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, entrega_pagamento, status, payment_method, canal, retirada_balcao, pago_em, comprovante_pagamento_url, comprovante_pulado, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -622,5 +622,25 @@ export class PedidosService {
       .eq('id', id);
 
     return { url: publicUrl };
+  }
+
+  // Cliente optou por pular o anexo agora e vai mostrar/pagar em pessoa (motoboy
+  // na entrega ou no balcão em retirada) — dono vê essa intenção explícita em
+  // vez de só "cliente ainda não anexou nada" (silêncio, pode ser esquecimento).
+  async pularComprovante(id: number, userId: string) {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('id, user_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (!pedido) throw new NotFoundException(`Pedido ${id} não encontrado`);
+    if (pedido.user_id !== userId) throw new ForbiddenException('Sem permissão para este pedido');
+
+    await this.supabase.client
+      .from('orders')
+      .update({ comprovante_pulado: true, updated_at: new Date().toISOString() })
+      .eq('id', id);
+
+    return { ok: true };
   }
 }
