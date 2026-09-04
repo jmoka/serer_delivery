@@ -232,7 +232,7 @@ export class PedidosService {
   }) {
     let query = this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, status, payment_method, restaurant_id, customer_id, user_id, created_at, pago_em, canal')
+      .select('id, total, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, status, payment_method, restaurant_id, customer_id, user_id, created_at, pago_em, canal, retirada_balcao')
       .order('created_at', { ascending: false })
       .limit(filtros.limite ?? 50);
 
@@ -277,7 +277,7 @@ export class PedidosService {
   async buscarBruto(id: number) {
     const { data: pedido, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, troco_para, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, entrega_pagamento, status, payment_method, canal, pago_em, comprovante_pagamento_url, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
+      .select('id, total, troco_para, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, entrega_pagamento, status, payment_method, canal, retirada_balcao, pago_em, comprovante_pagamento_url, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -328,6 +328,7 @@ export class PedidosService {
     troco_para?: number;
     user_id: string;
     itens: { product_id?: number; combo_id?: number; quantity: number }[];
+    retirada_balcao?: boolean;
   }) {
     if (!body.itens?.length) throw new BadRequestException('Pedido precisa de pelo menos 1 item');
 
@@ -370,11 +371,18 @@ export class PedidosService {
     // Busca frete do restaurante e soma ao total
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('frete_motoboy, motoboy_comissao_tipo, lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km')
+      .select('frete_motoboy, motoboy_comissao_tipo, lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, permite_retirada_balcao')
       .eq('id', body.restaurant_id)
       .maybeSingle();
 
-    const frete = parseFloat(rest?.frete_motoboy ?? 0);
+    // Cliente escolheu retirar no balcão — nunca confia só no flag do body, exige
+    // que o estabelecimento tenha habilitado a opção (mesma regra de nunca confiar
+    // em preço/config vindo do cliente).
+    if (body.retirada_balcao && !rest?.permite_retirada_balcao) {
+      throw new BadRequestException('Este estabelecimento não oferece retirada no balcão');
+    }
+    const retiradaBalcao = !!body.retirada_balcao;
+    const frete = retiradaBalcao ? 0 : parseFloat(rest?.frete_motoboy ?? 0);
 
     // Resolve customer_id — busca existente ou cria novo ao primeiro pedido. Precisa vir
     // antes do cálculo de excedente de km, que depende do customerId pra achar lat/lng.
@@ -412,18 +420,21 @@ export class PedidosService {
 
     // Geocodifica o endereço do cliente em background (best-effort) — só quando a comissão
     // do motoboy for por km, pra não gastar chamadas do Nominatim à toa. Nunca trava o checkout.
-    if (customerId && rest?.motoboy_comissao_tipo === 'km') {
+    if (customerId && !retiradaBalcao && rest?.motoboy_comissao_tipo === 'km') {
       this.geocodificarEnderecoCliente(customerId).catch(() => {});
     }
 
-    const { distanciaKm, valorExcedente, foraDoRaio } = await this.calcularExcedenteDistancia(
-      customerId,
-      rest?.lat ?? null,
-      rest?.lng ?? null,
-      parseFloat(rest?.km_incluso_frete ?? 1),
-      parseFloat(rest?.valor_km_excedente ?? 0),
-      rest?.raio_maximo_entrega_km != null ? parseFloat(rest.raio_maximo_entrega_km) : null,
-    );
+    // Retirada no balcão não tem distância/excedente/raio — o cliente vem buscar.
+    const { distanciaKm, valorExcedente, foraDoRaio } = retiradaBalcao
+      ? { distanciaKm: null as number | null, valorExcedente: 0, foraDoRaio: false }
+      : await this.calcularExcedenteDistancia(
+          customerId,
+          rest?.lat ?? null,
+          rest?.lng ?? null,
+          parseFloat(rest?.km_incluso_frete ?? 1),
+          parseFloat(rest?.valor_km_excedente ?? 0),
+          rest?.raio_maximo_entrega_km != null ? parseFloat(rest.raio_maximo_entrega_km) : null,
+        );
     if (foraDoRaio) {
       throw new BadRequestException(`Esse endereço fica a ${distanciaKm}km, fora do raio de entrega do estabelecimento (${rest?.raio_maximo_entrega_km}km).`);
     }
@@ -448,6 +459,7 @@ export class PedidosService {
         user_id: body.user_id,
         total: parseFloat(total.toFixed(2)),
         frete_cobrado: parseFloat(frete.toFixed(2)),
+        retirada_balcao: retiradaBalcao,
         distancia_entrega_km: distanciaKm,
         frete_excedente_cobrado: parseFloat(valorExcedente.toFixed(2)),
         status: 'pending',

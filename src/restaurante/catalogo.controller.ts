@@ -201,7 +201,7 @@ export class CatalogoController {
 
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, logo_url, slug, aparencia, frete_motoboy, pagamento_manual, payment_config')
+      .select('id, name, logo_url, slug, aparencia, frete_motoboy, permite_retirada_balcao, pagamento_manual, payment_config')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
       .eq('modulo_delivery', true);
@@ -244,7 +244,7 @@ export class CatalogoController {
 
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, logo_url, slug, aparencia, frete_motoboy, pagamento_manual, payment_config')
+      .select('id, name, logo_url, slug, aparencia, frete_motoboy, permite_retirada_balcao, pagamento_manual, payment_config')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
       .eq('modulo_delivery', true);
@@ -360,7 +360,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, modulo_servicos, pagamento_manual, payment_config')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, permite_retirada_balcao, modulo_delivery, modulo_favicon_personalizado, modulo_servicos, pagamento_manual, payment_config')
       .eq('custom_domain', dominio)
       .maybeSingle();
 
@@ -378,7 +378,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, modulo_servicos, pagamento_manual, payment_config')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, permite_retirada_balcao, modulo_delivery, modulo_favicon_personalizado, modulo_servicos, pagamento_manual, payment_config')
       .eq('slug', slug)
       .maybeSingle();
 

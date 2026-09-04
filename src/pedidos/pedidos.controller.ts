@@ -81,6 +81,7 @@ export class PedidosController {
       payment_method: string;
       troco_para?: number;
       itens: { product_id: number; quantity: number }[];
+      retirada_balcao?: boolean;
     },
     @Req() req: any,
   ) {

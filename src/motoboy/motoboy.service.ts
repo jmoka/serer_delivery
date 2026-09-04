@@ -963,6 +963,7 @@ export class MotoboyService {
       .select('id, restaurant_id, total, status, payment_method, created_at, customer_id')
       .in('restaurant_id', idsValidos)
       .eq('status', 'ready')
+      .eq('retirada_balcao', false)
       .is('motoboy_id', null)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -1040,6 +1041,7 @@ export class MotoboyService {
       .in('restaurant_id', idsValidos)
       .in('status', ['confirmed', 'preparing'])
       .eq('canal', 'delivery')
+      .eq('retirada_balcao', false)
       .is('motoboy_id', null)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -1216,6 +1218,7 @@ export class MotoboyService {
       .select('id, total, status, payment_method, created_at, customer_id')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'ready')
+      .eq('retirada_balcao', false)
       .is('motoboy_id', null)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -1255,6 +1258,7 @@ export class MotoboyService {
       .eq('id', pedidoId)
       .eq('restaurant_id', pedido.restaurant_id)
       .eq('status', 'ready')
+      .eq('retirada_balcao', false)
       .is('motoboy_id', null)
       .select('id');
     if (error) throw error;
@@ -1279,6 +1283,7 @@ export class MotoboyService {
       .update({ motoboy_id: motoboyId, status: 'motoboy_collecting', updated_at: new Date().toISOString() })
       .eq('id', pedidoId)
       .eq('restaurant_id', pedido.restaurant_id)
+      .eq('retirada_balcao', false)
       .in('status', ['ready', 'preparing', 'confirmed'])
       .is('motoboy_id', null)
       .select('id');
