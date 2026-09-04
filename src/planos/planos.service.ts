@@ -270,6 +270,7 @@ export class PlanosService {
           modulo_salao: plano.inclui_salao,
           modulo_gdoor: plano.inclui_gdoor,
           modulo_favicon_personalizado: plano.inclui_favicon_personalizado,
+          modulo_servicos: plano.inclui_servicos,
           updated_at: new Date().toISOString(),
         })
         .eq('id', titular.restaurantId);

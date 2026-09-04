@@ -15,9 +15,10 @@ import { MotoboyModule } from '../motoboy/motoboy.module';
 import { SalaoModule } from '../salao/salao.module';
 import { PlanosModule } from '../planos/planos.module';
 import { UsuariosModule } from '../usuarios/usuarios.module';
+import { ServicosModule } from '../servicos/servicos.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, CategoriasModule, ProdutosModule, PedidosModule, MotoboyModule, SalaoModule, PlanosModule, UsuariosModule],
+  imports: [AuthModule, SupabaseModule, CategoriasModule, ProdutosModule, PedidosModule, MotoboyModule, SalaoModule, PlanosModule, UsuariosModule, ServicosModule],
   controllers: [RestauranteController, OnboardingController, CatalogoController, CozinhaPortalController, KdsPortalController],
   providers: [RestauranteService, CozinhaGuard],
 })

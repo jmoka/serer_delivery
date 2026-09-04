@@ -5,6 +5,7 @@ import { RedisService } from '../redis/redis.service';
 import { haversineKm } from '../common/geo.util';
 import { normalizarDominio } from '../common/dominio.util';
 import { CombosService } from '../combos/combos.service';
+import { ServicosService } from '../servicos/servicos.service';
 import { DEFAULT_APARENCIA_MARKETPLACE } from '../plataforma/aparencia-marketplace.constants';
 import * as os from 'os';
 
@@ -22,6 +23,7 @@ export class CatalogoController {
     private supabase: SupabaseService,
     private supabaseJwt: SupabaseJwtService,
     private combosService: CombosService,
+    private servicosService: ServicosService,
     private redis: RedisService,
   ) {}
 
@@ -98,10 +100,10 @@ export class CatalogoController {
 
     let q = this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, aparencia, frete_motoboy, lat, lng')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, aparencia, frete_motoboy, lat, lng, modulo_delivery, modulo_servicos')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
-      .eq('modulo_delivery', true);
+      .or('modulo_delivery.eq.true,modulo_servicos.eq.true');
 
     if (query.state) q = q.ilike('state', query.state);
     if (query.city) q = q.ilike('city', query.city);
@@ -174,7 +176,7 @@ export class CatalogoController {
       .select('state, city, neighborhood')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
-      .eq('modulo_delivery', true);
+      .or('modulo_delivery.eq.true,modulo_servicos.eq.true');
     if (error) throw error;
 
     const vistos = new Set<string>();
@@ -281,6 +283,47 @@ export class CatalogoController {
     return resultado;
   }
 
+  // Vitrine de serviços (orçamento) de todos os estabelecimentos com o módulo
+  // ativo — mesmo padrão de todosOsProdutos()/todosOsCombos(), sem checagem de
+  // estoque (serviço não tem quantidade_estoque).
+  @Get('servicos')
+  async todosOsServicos() {
+    const cacheKey = 'catalogo:servicos:marketplace';
+    const cached = await this.redis.getJSON<{ servicos: any[] }>(cacheKey);
+    if (cached) return cached;
+
+    const { data: restaurantes } = await this.supabase.client
+      .from('restaurants')
+      .select('id, name, logo_url, slug, aparencia')
+      .not('slug', 'is', null)
+      .eq('bloqueado', false)
+      .eq('modulo_servicos', true);
+
+    if (!restaurantes?.length) return { servicos: [] };
+
+    const restIds = restaurantes.map((r) => r.id);
+    const restMap = Object.fromEntries(restaurantes.map((r) => [r.id, r]));
+
+    const { data: servicos, error } = await this.supabase.client
+      .from('services')
+      .select('id, name, description, image_url, categoria, preco_min, preco_max, restaurant_id')
+      .eq('is_active', true)
+      .in('restaurant_id', restIds)
+      .order('name')
+      .limit(200);
+
+    if (error) throw error;
+
+    const resultado = {
+      servicos: (servicos ?? []).map((s) => ({
+        ...s,
+        restaurante: restMap[s.restaurant_id] ?? null,
+      })).filter((s) => s.restaurante),
+    };
+    await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    return resultado;
+  }
+
   // Item (produto ou combo) em destaque pago no marketplace — restaurante
   // comprou um pacote (ver módulo marketplace-boost) pra aparecer num dos 4
   // carrosséis da home. "Ativo" é sempre calculado por data aqui mesmo (sem
@@ -317,7 +360,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, pagamento_manual, payment_config')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, modulo_servicos, pagamento_manual, payment_config')
       .eq('custom_domain', dominio)
       .maybeSingle();
 
@@ -335,7 +378,7 @@ export class CatalogoController {
 
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, pagamento_manual, payment_config')
+      .select('id, name, address, logo_url, business_hours, slug, aparencia, frete_motoboy, modulo_delivery, modulo_favicon_personalizado, modulo_servicos, pagamento_manual, payment_config')
       .eq('slug', slug)
       .maybeSingle();
 
@@ -389,6 +432,10 @@ export class CatalogoController {
     const combosDisponiveis = await this.combosService.listarComDisponibilidade(restaurante.id);
     const combos = combosDisponiveis.filter((c) => c.disponivel).map((c) => ({ ...c, tipo: 'combo' }));
 
-    return { restaurante, cardapio, destaques, promos, combos };
+    const servicos = restaurante.modulo_servicos
+      ? await this.servicosService.listarServicosAtivos(restaurante.id)
+      : [];
+
+    return { restaurante, cardapio, destaques, promos, combos, servicos };
   }
 }

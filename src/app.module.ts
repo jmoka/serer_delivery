@@ -24,6 +24,7 @@ import { SalaoModule } from './salao/salao.module';
 import { AgenteImpressaoModule } from './agente-impressao/agente-impressao.module';
 import { GdoorModule } from './gdoor/gdoor.module';
 import { PlanosModule } from './planos/planos.module';
+import { ServicosModule } from './servicos/servicos.module';
 import { MarketplaceBoostModule } from './marketplace-boost/marketplace-boost.module';
 import { InstalacoesModule } from './instalacoes/instalacoes.module';
 import { LicencaModule } from './licenca/licenca.module';
@@ -66,6 +67,7 @@ import { TwoFactorModule } from './two-factor/two-factor.module';
     AgenteImpressaoModule,
     GdoorModule,
     PlanosModule,
+    ServicosModule,
     MarketplaceBoostModule,
     InstalacoesModule,
     LicencaModule,

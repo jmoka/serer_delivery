@@ -28,6 +28,7 @@ export class EmpresasController {
     modulo_salao?: boolean;
     modulo_gdoor?: boolean;
     modulo_favicon_personalizado?: boolean;
+    modulo_servicos?: boolean;
   }) {
     return this.service.criar(body);
   }

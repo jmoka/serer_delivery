@@ -53,6 +53,10 @@ export class CriarPlanoDto {
   @IsBoolean()
   inclui_gdoor?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  inclui_servicos?: boolean;
+
   // Cobra comissão sobre vendas sem split PagBank ativo, além da mensalidade
   // (ver PlanosService.buscarComissoesNaoColetadas).
   @IsOptional()

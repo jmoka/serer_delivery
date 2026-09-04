@@ -16,7 +16,7 @@ export class EmpresasService {
   async listar(apenasAtivo?: boolean) {
     let query = this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, created_at')
+      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, created_at')
       .order('name');
 
     const { data, error } = await query;
@@ -29,7 +29,7 @@ export class EmpresasService {
     // (GET /empresas/:id/config, ver empresas.controller.ts).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, comissao_pct, user_id, slug, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, created_at')
+      .select('id, name, address, logo_url, business_hours, comissao_pct, user_id, slug, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, created_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -68,6 +68,7 @@ export class EmpresasService {
     modulo_salao?: boolean;
     modulo_gdoor?: boolean;
     modulo_favicon_personalizado?: boolean;
+    modulo_servicos?: boolean;
   }) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
@@ -82,6 +83,7 @@ export class EmpresasService {
         modulo_salao: body.modulo_salao ?? false,
         modulo_gdoor: body.modulo_gdoor ?? false,
         modulo_favicon_personalizado: body.modulo_favicon_personalizado ?? false,
+        modulo_servicos: body.modulo_servicos ?? false,
       })
       .select()
       .single();
@@ -102,6 +104,7 @@ export class EmpresasService {
     modulo_salao: boolean;
     modulo_gdoor: boolean;
     modulo_favicon_personalizado: boolean;
+    modulo_servicos: boolean;
   }>) {
     // Delega ao serviço central pra manter user_profiles.role sincronizado
     // com o vínculo — editar só restaurants.user_id aqui deixava o dono sem
@@ -123,6 +126,7 @@ export class EmpresasService {
     if (body.modulo_salao !== undefined) payload.modulo_salao = body.modulo_salao;
     if (body.modulo_gdoor !== undefined) payload.modulo_gdoor = body.modulo_gdoor;
     if (body.modulo_favicon_personalizado !== undefined) payload.modulo_favicon_personalizado = body.modulo_favicon_personalizado;
+    if (body.modulo_servicos !== undefined) payload.modulo_servicos = body.modulo_servicos;
 
     const { data, error } = await this.supabase.client
       .from('restaurants')

@@ -60,6 +60,10 @@ export class AtualizarPlanoDto {
 
   @IsOptional()
   @IsBoolean()
+  inclui_servicos?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   cobra_comissao?: boolean;
 
   @IsOptional()
