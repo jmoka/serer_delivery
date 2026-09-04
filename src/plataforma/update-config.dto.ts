@@ -47,4 +47,15 @@ export class UpdateConfigDto {
   @IsOptional()
   @IsObject()
   aparencia_marketplace?: Record<string, any>;
+
+  // Stripe Connect — chave da plataforma (uma só, nunca por restaurante)
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  stripe_secret_key?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  stripe_webhook_secret?: string;
 }

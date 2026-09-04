@@ -103,6 +103,14 @@ export class PlataformaService {
         ? `${'•'.repeat(8)}${String(cfg.pagbank_platform_token).slice(-4)}`
         : null,
       configurado: !!(cfg.pagbank_platform_token && cfg.pagbank_platform_account_id),
+      // Stripe Connect — chave da plataforma, usada pra onboarding Express de todos os restaurantes
+      stripe_secret_key_masked: cfg.stripe_secret_key
+        ? `${'•'.repeat(8)}${String(cfg.stripe_secret_key).slice(-4)}`
+        : null,
+      stripe_webhook_secret_masked: cfg.stripe_webhook_secret
+        ? `${'•'.repeat(8)}${String(cfg.stripe_webhook_secret).slice(-4)}`
+        : null,
+      stripe_configurado: !!cfg.stripe_secret_key,
       // Instalação individual (mono-estabelecimento)
       modo_individual: cfg.modo_individual ?? false,
       modo_individual_restaurant_id: cfg.modo_individual_restaurant_id ?? null,
@@ -153,6 +161,8 @@ export class PlataformaService {
     plano_dias_tolerancia?: number;
     motoboy_limite_revisoes?: number;
     aparencia_marketplace?: Record<string, any>;
+    stripe_secret_key?: string;
+    stripe_webhook_secret?: string;
   }) {
     const { data: atual } = await this.supabase.client
       .from('platform_settings')
@@ -192,6 +202,12 @@ export class PlataformaService {
         ...(cfg.aparencia_marketplace ?? DEFAULT_APARENCIA_MARKETPLACE),
         ...body.aparencia_marketplace,
       };
+    }
+    if (body.stripe_secret_key?.trim()) {
+      novo.stripe_secret_key = body.stripe_secret_key.trim();
+    }
+    if (body.stripe_webhook_secret?.trim()) {
+      novo.stripe_webhook_secret = body.stripe_webhook_secret.trim();
     }
 
     const { error } = await this.supabase.client

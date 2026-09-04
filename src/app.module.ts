@@ -16,6 +16,7 @@ import { ProdutosModule } from './produtos/produtos.module';
 import { PedidosModule } from './pedidos/pedidos.module';
 import { PlataformaModule } from './plataforma/plataforma.module';
 import { PagamentosModule } from './pagamentos/pagamentos.module';
+import { StripeModule } from './stripe/stripe.module';
 import { RestauranteModule } from './restaurante/restaurante.module';
 import { MotoboyModule } from './motoboy/motoboy.module';
 import { PerfilModule } from './perfil/perfil.module';
@@ -59,6 +60,7 @@ import { TwoFactorModule } from './two-factor/two-factor.module';
     PedidosModule,
     PlataformaModule,
     PagamentosModule,
+    StripeModule,
     RestauranteModule,
     MotoboyModule,
     PerfilModule,
