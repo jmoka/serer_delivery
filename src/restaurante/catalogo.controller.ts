@@ -392,8 +392,9 @@ export class CatalogoController {
   // e só quando o restaurante está em modo manual (checkout gera o QR local com ela).
   private exporPagamentoPublico(r: any) {
     const chave_pix = r.pagamento_manual ? (r.payment_config?.chave_pix ?? null) : null;
+    const stripe_disponivel = !r.pagamento_manual && !!r.payment_config?.stripe_charges_enabled;
     const { payment_config, ...resto } = r;
-    return { ...resto, chave_pix };
+    return { ...resto, chave_pix, stripe_disponivel };
   }
 
   private async montarCardapio(restauranteRaw: any) {

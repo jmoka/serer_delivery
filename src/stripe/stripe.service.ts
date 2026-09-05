@@ -155,4 +155,76 @@ export class StripeService {
     if (!webhookSecret) throw new BadRequestException('Webhook do Stripe não configurado');
     return client.webhooks.constructEvent(payload, assinatura, webhookSecret);
   }
+
+  // Cobrança do cliente — destination charge: o PaymentIntent vive na conta da
+  // PLATAFORMA (por isso não usa Stripe-Account header), o valor líquido é
+  // transferido pra conta conectada da loja (transfer_data.destination) e a
+  // comissão fica retida automaticamente via application_fee_amount — mesmo
+  // resultado do split do PagBank, só que resolvido pela própria Stripe.
+  async criarPaymentIntent(params: { restaurantId: number; orderId: number; valorReais: number }) {
+    const client = await this.getClient();
+
+    const [{ data: restaurante }, { data: plat }] = await Promise.all([
+      this.supabase.client
+        .from('restaurants')
+        .select('stripe_account_id, comissao_pct, payment_config')
+        .eq('id', params.restaurantId)
+        .maybeSingle(),
+      this.supabase.client.from('platform_settings').select('config').eq('id', 1).maybeSingle(),
+    ]);
+
+    if (!restaurante?.stripe_account_id) {
+      throw new BadRequestException('Restaurante não conectou uma conta Stripe');
+    }
+    if (!restaurante.payment_config?.stripe_charges_enabled) {
+      throw new BadRequestException('Conta Stripe do restaurante ainda não está ativa para receber pagamentos');
+    }
+
+    const comissaoPct: number = restaurante.comissao_pct ?? (plat?.config as any)?.comissao_padrao_pct ?? 5;
+    const valorCentavos = Math.round(params.valorReais * 100);
+    const taxaCentavos = Math.round(valorCentavos * comissaoPct / 100);
+
+    const intent = await client.paymentIntents.create({
+      amount: valorCentavos,
+      currency: 'brl',
+      payment_method_types: ['card'],
+      application_fee_amount: taxaCentavos,
+      transfer_data: { destination: restaurante.stripe_account_id },
+      metadata: { order_id: String(params.orderId) },
+    });
+
+    return { client_secret: intent.client_secret, payment_intent_id: intent.id };
+  }
+
+  // payment_intent.* do webhook — assinado pela própria Stripe, então (diferente
+  // do PagBank) dá pra confiar direto no status do evento sem reconsultar a API.
+  async processarPaymentIntent(intent: Stripe.PaymentIntent) {
+    const { data: pagamento } = await this.supabase.client
+      .from('pagamentos')
+      .select('id, order_id, status')
+      .eq('stripe_payment_intent_id', intent.id)
+      .maybeSingle();
+
+    if (!pagamento || pagamento.status === 'paid') return;
+
+    const pago = intent.status === 'succeeded';
+    const novoStatus = pago ? 'paid' : intent.status === 'canceled' ? 'declined' : pagamento.status;
+
+    await this.supabase.client
+      .from('pagamentos')
+      .update({
+        status: novoStatus,
+        pago_em: pago ? new Date().toISOString() : null,
+        webhook_recebido_em: new Date().toISOString(),
+        atualizado_em: new Date().toISOString(),
+      })
+      .eq('id', pagamento.id);
+
+    if (pago) {
+      await this.supabase.client
+        .from('orders')
+        .update({ status: 'preparing', pago_em: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('id', pagamento.order_id);
+    }
+  }
 }

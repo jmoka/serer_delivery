@@ -8,5 +8,6 @@ import { AuthModule } from '../auth/auth.module';
   imports: [AuthModule],
   controllers: [StripeController, StripeWebhookController],
   providers: [StripeService],
+  exports: [StripeService],
 })
 export class StripeModule {}

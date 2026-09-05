@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, ForbiddenException, NotFoundException 
 import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PagBankClient } from './pagbank.client';
+import { StripeService } from '../stripe/stripe.service';
 
 const STATUS_PAGOS = ['PAID', 'COMPLETED', 'AVAILABLE'];
 
@@ -22,6 +23,7 @@ export class PagamentosService {
   constructor(
     private supabase: SupabaseService,
     private config: ConfigService,
+    private stripeService: StripeService,
   ) {}
 
   private async buscarPedido(orderId: number) {
@@ -245,6 +247,40 @@ export class PagamentosService {
       charge_id: charge?.id,
       split_ativo: !!splitConfig,
     };
+  }
+
+  async criarStripe(body: { order_id: number }, callerUserId: string) {
+    const pedido = await this.buscarPedido(body.order_id);
+    if (pedido.user_id !== callerUserId) {
+      throw new ForbiddenException('Este pedido não pertence a você');
+    }
+    if (pedido.status !== 'pending') {
+      throw new BadRequestException('Pedido não está pendente de pagamento');
+    }
+
+    const { client_secret, payment_intent_id } = await this.stripeService.criarPaymentIntent({
+      restaurantId: pedido.restaurant_id,
+      orderId: pedido.id,
+      valorReais: pedido.total,
+    });
+
+    const { data: pagamento, error } = await this.supabase.client
+      .from('pagamentos')
+      .insert({
+        order_id: pedido.id,
+        gateway: 'stripe',
+        stripe_payment_intent_id: payment_intent_id,
+        tipo: 'credit_card',
+        status: 'pending',
+        valor: pedido.total,
+        split_ativo: true,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    return { pagamento_id: pagamento.id, client_secret };
   }
 
   async buscarPorPedido(orderId: number, callerUserId: string, callerRole: string) {

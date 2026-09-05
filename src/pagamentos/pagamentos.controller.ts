@@ -35,6 +35,13 @@ export class PagamentosController {
     return this.service.criarCartao(body, req.userId);
   }
 
+  // Cliente paga com cartão via Stripe Connect (Payment Element no frontend)
+  @Post('stripe')
+  @UseGuards(JwtGuard)
+  criarStripe(@Body() body: { order_id: number }, @Req() req: any) {
+    return this.service.criarStripe(body, req.userId);
+  }
+
   // Consulta pagamentos de um pedido
   @Get('pedido/:id')
   @UseGuards(JwtGuard)

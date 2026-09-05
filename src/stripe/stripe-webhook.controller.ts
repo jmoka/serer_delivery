@@ -25,6 +25,11 @@ export class StripeWebhookController {
       await this.service.sincronizarConta(conta);
     }
 
+    if (evento.type === 'payment_intent.succeeded' || evento.type === 'payment_intent.payment_failed' || evento.type === 'payment_intent.canceled') {
+      const intent = evento.data.object as Stripe.PaymentIntent;
+      await this.service.processarPaymentIntent(intent);
+    }
+
     return { recebido: true };
   }
 }
