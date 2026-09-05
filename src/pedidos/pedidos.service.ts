@@ -339,7 +339,7 @@ export class PedidosService {
     const prodIds = itensDiretos.map((i) => i.product_id as number);
     const { data: produtos, error: errProd } = await this.supabase.client
       .from('products')
-      .select('id, price, is_active')
+      .select('id, price, preco_promo, is_active')
       .in('id', prodIds.length ? prodIds : [0]);
 
     if (errProd) throw errProd;
@@ -361,7 +361,7 @@ export class PedidosService {
     const linhasDiretas: ItemExpandido[] = itensDiretos.map((item) => ({
       product_id: item.product_id as number,
       quantity: item.quantity,
-      unit_price: prodMap[item.product_id as number].price,
+      unit_price: prodMap[item.product_id as number].preco_promo ?? prodMap[item.product_id as number].price,
     }));
 
     const linhasFinais = [...linhasDiretas, ...linhasCombo];

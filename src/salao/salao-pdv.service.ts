@@ -580,7 +580,7 @@ export class SalaoPdvService {
     const prodIds = itensDiretos.map((i) => i.product_id as number);
     const { data: produtos, error: errProd } = await this.supabase.client
       .from('products')
-      .select('id, price, is_active')
+      .select('id, price, preco_promo, is_active')
       .in('id', prodIds.length ? prodIds : [0]);
     if (errProd) throw errProd;
 
@@ -604,7 +604,7 @@ export class SalaoPdvService {
     const linhasDiretas: (ItemExpandido & { observacao?: string })[] = itensDiretos.map((i) => ({
       product_id: i.product_id as number,
       quantity: i.quantity,
-      unit_price: prodMap[i.product_id as number].price,
+      unit_price: prodMap[i.product_id as number].preco_promo ?? prodMap[i.product_id as number].price,
       observacao: i.observacao,
     }));
 
@@ -984,13 +984,13 @@ export class SalaoPdvService {
 
     const { data: itens } = await this.supabase.client
       .from('order_items')
-      .select('quantity, products(name, price)')
+      .select('quantity, unit_price, products(name)')
       .eq('order_id', id);
 
     const itensFormatados = (itens ?? []).map((i: any) => ({
       product_name: i.products?.name,
       quantity: i.quantity,
-      unit_price: i.products?.price,
+      unit_price: i.unit_price,
     }));
 
     const { data: pagamentos } = await this.supabase.client
