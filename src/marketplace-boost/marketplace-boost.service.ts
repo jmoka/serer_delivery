@@ -71,6 +71,41 @@ export class MarketplaceBoostService {
     return this.vagasConfiguradas();
   }
 
+  // Perfis nomeados de vagas (ex: "Padrão", "Black Friday") — só um registro
+  // congelado da configuração no momento de salvar, não tem conceito de
+  // "ativo"; aplicar um preset só chama salvarVagas() de novo com o config dele.
+  async listarPresetsVagas() {
+    const { data, error } = await this.supabase.client
+      .from('marketplace_boost_vagas_presets')
+      .select('*')
+      .order('criado_em', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async criarPresetVagas(nome: string, config: Record<string, number>) {
+    const { data, error } = await this.supabase.client
+      .from('marketplace_boost_vagas_presets')
+      .insert({ nome, config })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async removerPresetVagas(id: number) {
+    const { error } = await this.supabase.client.from('marketplace_boost_vagas_presets').delete().eq('id', id);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  async aplicarPresetVagas(id: number) {
+    const { data: preset } = await this.supabase.client
+      .from('marketplace_boost_vagas_presets').select('config').eq('id', id).maybeSingle();
+    if (!preset) throw new NotFoundException('Perfil de vagas não encontrado');
+    return this.salvarVagas(preset.config as Record<string, number>);
+  }
+
   private async vagasOcupadas(carrossel: string): Promise<number> {
     const { data, error } = await this.supabase.client
       .from('marketplace_boosts')

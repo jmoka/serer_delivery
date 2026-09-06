@@ -24,6 +24,26 @@ export class MarketplaceBoostAdminController {
     return this.service.salvarVagas(body);
   }
 
+  @Get('vagas/presets')
+  listarPresetsVagas() {
+    return this.service.listarPresetsVagas();
+  }
+
+  @Post('vagas/presets')
+  criarPresetVagas(@Body() body: { nome: string; config: Record<string, number> }) {
+    return this.service.criarPresetVagas(body.nome, body.config);
+  }
+
+  @Post('vagas/presets/:id/aplicar')
+  aplicarPresetVagas(@Param('id', ParseIntPipe) id: number) {
+    return this.service.aplicarPresetVagas(id);
+  }
+
+  @Delete('vagas/presets/:id')
+  removerPresetVagas(@Param('id', ParseIntPipe) id: number) {
+    return this.service.removerPresetVagas(id);
+  }
+
   @Get('pacotes')
   listar() {
     return this.service.listarPacotesAdmin();
