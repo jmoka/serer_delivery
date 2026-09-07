@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { normalizarDominio, validarFormatoDominio, isDominioReservado } from '../common/dominio.util';
 import { CategoriasService } from '../categorias/categorias.service';
@@ -1512,6 +1512,40 @@ export class RestauranteService {
         await this.supabase.client.from('orders').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', item.order_id);
       }
     }
+
+    return { ok: true };
+  }
+
+  // Produção/Bar confirmando a entrega em nome do garçom — mesma mutação que
+  // SalaoService.confirmarEntregaItem (tela do garçom), só que sem exigir a comanda ser
+  // desse garçom específico: aqui quem confirma é o estabelecimento, com controle total.
+  // Força status pra 'pronto' se ainda estava 'preparando' (fluxo do Bar pode pular
+  // direto de 'enviado' pra 'pronto' via marcarItemPronto, mas cobre o caso geral).
+  async confirmarEntregaGarcom(itemId: number, restaurantId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, pronto_em, orders(restaurant_id)')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
+    }
+    if (item.status !== 'preparando' && item.status !== 'pronto') {
+      throw new ForbiddenException('Item ainda não está em preparo');
+    }
+
+    const agora = new Date().toISOString();
+    const update: Record<string, unknown> = {
+      entregue_garcom: true, entregue_em: agora, garcom_nao_entregou: false,
+    };
+    if (item.status === 'preparando') {
+      update.status = 'pronto';
+      update.pronto_em = item.pronto_em ?? agora;
+    }
+
+    const { error } = await this.supabase.client.from('order_items').update(update).eq('id', itemId);
+    if (error) throw error;
 
     return { ok: true };
   }

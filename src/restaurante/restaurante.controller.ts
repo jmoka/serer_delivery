@@ -331,6 +331,11 @@ export class RestauranteController {
     return this.service.iniciarPreparoItem(id, req.restaurantId);
   }
 
+  @Patch('kds/itens/:id/entregar-garcom')
+  kdsEntregarGarcom(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.confirmarEntregaGarcom(id, req.restaurantId);
+  }
+
   @Patch('kds/itens/:id/voltar')
   kdsVoltar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.voltarStatusItem(id, req.restaurantId);
