@@ -174,11 +174,15 @@ export class SalaoController {
   @Post('comandas/:id/pagamento')
   registrarPagamento(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { valor: number; forma_pagamento: string; valor_recebido?: number; troco_via_pix?: boolean },
+    @Body() body: {
+      valor: number; forma_pagamento: string; valor_recebido?: number; troco_via_pix?: boolean;
+      gorjeta_estimada_incluida?: number; troco_do_garcom?: boolean; taxa_cartao_nao_paga?: boolean;
+    },
     @Req() req: any,
   ) {
     return this.service.registrarPagamentoComoGarcom(
       id, req.garcomId, body.valor, body.forma_pagamento, req.garcomPermissoes?.pagamento_parcial !== false, body.valor_recebido, body.troco_via_pix,
+      body.gorjeta_estimada_incluida, body.troco_do_garcom, body.taxa_cartao_nao_paga,
     );
   }
 

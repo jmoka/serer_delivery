@@ -199,7 +199,7 @@ export class SalaoPdvService {
       .order('id', { ascending: true });
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco, troco_via_pix')
+      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco, troco_via_pix, troco_e_gorjeta, taxa_cartao_prejuizo')
       .eq('order_id', id)
       .order('criado_em', { ascending: true });
     const saldo = await this.salaoService.saldoDevedor(id);
@@ -240,14 +240,20 @@ export class SalaoPdvService {
   }
 
   // Pagamento parcial registrado pelo caixa — mesma regra do garçom (não fecha sozinho).
-  async registrarPagamentoParcial(id: number, restaurantId: number, valor: number, formaPagamento: string, valorRecebido?: number, trocoViaPix = false) {
+  async registrarPagamentoParcial(
+    id: number, restaurantId: number, valor: number, formaPagamento: string, valorRecebido?: number, trocoViaPix = false,
+    gorjetaEstimadaIncluida = 0, trocoDoGarcom = false, taxaCartaoNaoPaga = false,
+  ) {
     const comanda = await this.buscarComanda(id, restaurantId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
       throw new BadRequestException('Comanda já foi paga ou cancelada');
     }
     const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
     const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
-    return this.salaoService.registrarPagamento(id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador, taxaCartaoValor, trocoViaPix);
+    return this.salaoService.registrarPagamento(
+      id, 'estabelecimento', valor, formaPagamento, restaurantId, valorRecebido, identificador, taxaCartaoValor,
+      trocoViaPix, gorjetaEstimadaIncluida, trocoDoGarcom, taxaCartaoNaoPaga,
+    );
   }
 
   private async buscarPagamento(comandaId: number, pagamentoId: number) {
@@ -313,6 +319,7 @@ export class SalaoPdvService {
 
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     const anterior = await this.buscarPagamento(comandaId, pagamentoId);
+    await this.salaoService.validarValorPagamento(comandaId, valor, anterior.valor);
     await this.salaoService.estornarPagamentoEmDinheiro(restaurantId, identificador, anterior);
 
     const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valor, formaPagamento);
@@ -1070,7 +1077,10 @@ export class SalaoPdvService {
   // do caixa do estabelecimento — não cobra na comanda nem entra no gorjeta_valor (que
   // alimenta o relatório de repasse do garçom, senão contaria a mesma gorjeta 2x: o
   // garçom já ficou com o dinheiro na mão, não tem o que repassar).
-  async pagar(id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number, gorjetaDireta?: boolean, trocoViaPix = false) {
+  async pagar(
+    id: number, restaurantId: number, formaPagamento: string, gorjetaValor?: number, valorRecebido?: number, gorjetaDireta?: boolean,
+    trocoViaPix = false, trocoDoGarcom = false, taxaCartaoNaoPaga = false,
+  ) {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
     const comanda = await this.buscarComanda(id, restaurantId);
@@ -1107,15 +1117,22 @@ export class SalaoPdvService {
     }
     const gorjeta = gorjetaDireta ? 0 : (gorjetaValor ?? 0);
     const valorACobrarBase = parseFloat(gorjeta.toFixed(2));
-    const taxaCartaoValor = await this.salaoService.calcularTaxaCartao(restaurantId, valorACobrarBase, formaPagamento);
+    const taxaCartaoCalculada = await this.salaoService.calcularTaxaCartao(restaurantId, valorACobrarBase, formaPagamento);
+    // Taxa de cartão não cobrada do cliente aqui também: a maquininha desconta de qualquer
+    // jeito, então vira prejuízo do estabelecimento (orders.taxa_cartao_prejuizo_valor),
+    // não taxa cobrada do cliente — mesma regra de registrarPagamento (salao.service.ts).
+    const taxaViraPrejuizo = taxaCartaoNaoPaga && (formaPagamento === 'credit_card' || formaPagamento === 'debit_card');
+    const taxaCartaoValor = taxaViraPrejuizo ? 0 : taxaCartaoCalculada;
+    const taxaCartaoPrejuizo = taxaViraPrejuizo ? taxaCartaoCalculada : 0;
     // A essa altura o saldo dos itens já está zerado — só falta cobrar a gorjeta (se houver).
     const valorACobrar = parseFloat((valorACobrarBase + taxaCartaoValor).toFixed(2));
     let troco: number | null = null;
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valorACobrar) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
       troco = parseFloat((valorRecebido - valorACobrar).toFixed(2));
-      // Troco via Pix não sai da espécie física do caixa — não precisa checar fundo.
-      if (troco > 0 && !trocoViaPix) {
+      // Troco via Pix e troco que fica com o garçom (vira gorjeta, nunca sai da gaveta)
+      // não saem da espécie física do caixa — não precisa checar fundo pra nenhum dos dois.
+      if (troco > 0 && !trocoViaPix && !trocoDoGarcom) {
         const saldoEspecie = await this.salaoService.saldoEspecieDisponivel(restaurantId);
         if (saldoEspecie < troco) {
           throw new BadRequestException(
@@ -1129,13 +1146,19 @@ export class SalaoPdvService {
       const identificador = `Comanda #${comanda.numero_comanda ?? id}`;
       await this.salaoService.registrarEntradaCaixa(restaurantId, `Venda em dinheiro - ${identificador}`, valorRecebido, 'venda_dinheiro');
       if (troco && troco > 0) {
-        if (trocoViaPix) {
+        if (trocoDoGarcom) {
+          await this.salaoService.registrarSaidaCaixa(restaurantId, `Gorjeta (troco) - ${identificador}`, troco, 'gorjeta');
+        } else if (trocoViaPix) {
           await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco via Pix - ${identificador}`, troco, 'troco_pix', 'pix');
         } else {
           await this.salaoService.registrarSaidaCaixa(restaurantId, `Troco - ${identificador}`, troco, 'troco');
         }
       }
     }
+    // Troco que ficou com o garçom soma na gorjeta oficial (mesmo campo que alimenta o
+    // repasse em getRelatorioGarcom/resumoTurno) — sem isso, esse valor não apareceria em
+    // lugar nenhum do relatório do garçom, mesmo tendo saído do caixa como "gorjeta".
+    const gorjetaComTrocoGarcom = parseFloat((gorjeta + (trocoDoGarcom && troco && troco > 0 ? troco : 0)).toFixed(2));
 
     // Se a comanda ficou pendente (fiado) num caixa que já fechou, realoca pro caixa
     // que estiver aberto agora, no momento do pagamento — não fica presa a um caixa fechado.
@@ -1162,8 +1185,10 @@ export class SalaoPdvService {
         payment_method: formaPagamento,
         total: parseFloat(totalFinal.toFixed(2)),
         // Direto pro garçom não conta gorjeta_valor — é isso que alimenta o repasse
-        // (ver getRelatorioGarcom) e o valor cobrado da comanda.
-        gorjeta_valor: gorjetaDireta ? null : (gorjetaValor ?? null),
+        // (ver getRelatorioGarcom) e o valor cobrado da comanda. Troco que ficou com o
+        // garçom (trocoDoGarcom) soma aqui dentro (ver gorjetaComTrocoGarcom acima).
+        gorjeta_valor: gorjetaDireta ? null : (gorjetaComTrocoGarcom || null),
+        taxa_cartao_prejuizo_valor: taxaCartaoPrejuizo || null,
         caixa_id: caixaId,
         pago_em: new Date().toISOString(),
       })
@@ -1220,8 +1245,9 @@ export class SalaoPdvService {
 
     return {
       ok: true, total: parseFloat(totalFinal.toFixed(2)), total_geral: totalGeralRecibo,
-      taxa_cartao_valor: taxaCartaoTotalRecibo, valor_cobrado: valorACobrar,
-      troco, troco_via_pix: troco && troco > 0 ? trocoViaPix : false, recibo, pagamentos: pagamentos ?? [],
+      taxa_cartao_valor: taxaCartaoTotalRecibo, taxa_cartao_prejuizo: taxaCartaoPrejuizo || 0, valor_cobrado: valorACobrar,
+      troco, troco_via_pix: troco && troco > 0 ? trocoViaPix : false, troco_do_garcom: troco && troco > 0 ? trocoDoGarcom : false,
+      recibo, pagamentos: pagamentos ?? [],
     };
   }
 

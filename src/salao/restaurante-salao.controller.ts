@@ -121,10 +121,16 @@ export class RestauranteSalaoController {
   @Post('comandas/:id/pagamento')
   registrarPagamentoParcial(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { valor: number; forma_pagamento: string; valor_recebido?: number; troco_via_pix?: boolean },
+    @Body() body: {
+      valor: number; forma_pagamento: string; valor_recebido?: number; troco_via_pix?: boolean;
+      gorjeta_estimada_incluida?: number; troco_do_garcom?: boolean; taxa_cartao_nao_paga?: boolean;
+    },
     @Req() req: any,
   ) {
-    return this.service.registrarPagamentoParcial(id, req.restaurantId, body.valor, body.forma_pagamento, body.valor_recebido, body.troco_via_pix);
+    return this.service.registrarPagamentoParcial(
+      id, req.restaurantId, body.valor, body.forma_pagamento, body.valor_recebido, body.troco_via_pix,
+      body.gorjeta_estimada_incluida, body.troco_do_garcom, body.taxa_cartao_nao_paga,
+    );
   }
 
   @Patch('comandas/:id/pagamentos/:pagamentoId')
@@ -241,9 +247,15 @@ export class RestauranteSalaoController {
   @Post('comandas/:id/pagar')
   pagar(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { forma_pagamento: string; gorjeta_valor?: number; valor_recebido?: number; gorjeta_direta?: boolean; troco_via_pix?: boolean },
+    @Body() body: {
+      forma_pagamento: string; gorjeta_valor?: number; valor_recebido?: number; gorjeta_direta?: boolean; troco_via_pix?: boolean;
+      troco_do_garcom?: boolean; taxa_cartao_nao_paga?: boolean;
+    },
     @Req() req: any,
   ) {
-    return this.service.pagar(id, req.restaurantId, body.forma_pagamento, body.gorjeta_valor, body.valor_recebido, body.gorjeta_direta, body.troco_via_pix);
+    return this.service.pagar(
+      id, req.restaurantId, body.forma_pagamento, body.gorjeta_valor, body.valor_recebido, body.gorjeta_direta, body.troco_via_pix,
+      body.troco_do_garcom, body.taxa_cartao_nao_paga,
+    );
   }
 }

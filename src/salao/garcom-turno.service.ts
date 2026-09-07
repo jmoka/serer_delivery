@@ -64,6 +64,21 @@ export class GarcomTurnoService {
           .in('order_id', orderIds)
       : { data: [] as any[] };
 
+    // Troco que o cliente deixou pro garçom (ver troco_e_gorjeta em comanda_pagamentos)
+    // conta como gorjeta de verdade aqui, mesmo nunca tendo entrado em orders.gorjeta_valor
+    // (que só existe pro fechamento final via `pagar`, em salao-pdv.service.ts).
+    const { data: pagamentosTrocoGorjeta } = orderIds.length
+      ? await this.supabase.client
+          .from('comanda_pagamentos')
+          .select('order_id, troco')
+          .in('order_id', orderIds)
+          .eq('troco_e_gorjeta', true)
+      : { data: [] as any[] };
+    const trocoGorjetaPorComanda = new Map<number, number>();
+    for (const pg of (pagamentosTrocoGorjeta ?? []) as any[]) {
+      trocoGorjetaPorComanda.set(pg.order_id, (trocoGorjetaPorComanda.get(pg.order_id) ?? 0) + (pg.troco ?? 0));
+    }
+
     const { data: itens } = orderIds.length
       ? await this.supabase.client
           .from('order_items')
@@ -72,7 +87,7 @@ export class GarcomTurnoService {
       : { data: [] as any[] };
 
     const total_vendido = pedidosPagos.reduce((s, p) => s + (p.total ?? 0), 0);
-    const total_gorjeta = pedidosPagos.reduce((s, p) => s + (p.gorjeta_valor ?? 0), 0);
+    const total_gorjeta = pedidosPagos.reduce((s, p) => s + (p.gorjeta_valor ?? 0) + (trocoGorjetaPorComanda.get(p.id) ?? 0), 0);
     const total_comissao = ((comissoes ?? []) as any[]).reduce((s, c) => s + (c.valor_calculado ?? 0), 0);
 
     // Comandas ainda abertas do garçom (não filtra por intervalo — é o estado atual, igual
@@ -113,7 +128,7 @@ export class GarcomTurnoService {
         cliente_nome: p.cliente_mesa_nome ?? null,
         data: p.created_at,
         total: p.total ?? 0,
-        gorjeta: p.gorjeta_valor ?? 0,
+        gorjeta: (p.gorjeta_valor ?? 0) + (trocoGorjetaPorComanda.get(p.id) ?? 0),
       }))
       .sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
 

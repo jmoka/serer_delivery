@@ -366,6 +366,26 @@ export class SalaoService {
     return parseFloat(saldo.toFixed(2));
   }
 
+  // Garante que um pagamento (novo ou em edição) nunca ultrapasse o que a comanda ainda
+  // deve — sem isso, um erro de digitação (ex: 240000 em vez de 24,00) vira sobra de caixa
+  // sem ninguém perceber, porque o fechamento (fecharComanda) só barra saldo > 0 (falta
+  // pagar), nunca saldo bem negativo (pago a mais). `valorAnteriorExcluido` soma de volta
+  // ao limite numa edição — o valor antigo sai do saldo, o novo entra, não dá pra comparar
+  // o novo valor contra o saldo já calculado sem o antigo. `gorjetaEstimadaIncluida` soma a
+  // gorjeta que a tela já está mostrando dentro do valor total a cobrar (ver "Total geral"
+  // no modal) — sem isso, um pagamento que cobre produtos + gorjeta sugerida numa tacada só
+  // era barrado achando que só o saldo dos produtos era o teto (bug real: comanda de R$34 +
+  // R$3,40 de gorjeta sugerida, garçom tentou cobrar R$38 e levou "maior que R$34,00").
+  async validarValorPagamento(comandaId: number, valor: number, valorAnteriorExcluido = 0, gorjetaEstimadaIncluida = 0) {
+    const { saldo } = await this.saldoDevedor(comandaId);
+    const limite = saldo + valorAnteriorExcluido + Math.max(gorjetaEstimadaIncluida, 0);
+    if (valor > limite + 0.01) {
+      throw new BadRequestException(
+        `Valor informado (R$ ${valor.toFixed(2)}) é maior que o saldo devedor da comanda (R$ ${limite.toFixed(2)}). Confira o valor digitado.`,
+      );
+    }
+  }
+
   // Registra um pagamento parcial — não fecha a comanda sozinho, só abate do saldo devedor.
   // Chamado tanto pelo garçom (informar forma de pagamento) quanto pelo caixa (conferência).
   // Em dinheiro, valorRecebido é o que o cliente entregou — troco é calculado e vira saída
@@ -380,16 +400,22 @@ export class SalaoService {
     identificador?: string,
     taxaCartaoValor?: number,
     trocoViaPix = false,
+    gorjetaEstimadaIncluida = 0,
+    trocoDoGarcom = false,
+    taxaCartaoNaoPaga = false,
   ) {
     if (!valor || valor <= 0) throw new BadRequestException('Valor precisa ser maior que zero');
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
+    await this.validarValorPagamento(comandaId, valor, 0, gorjetaEstimadaIncluida);
 
     let troco: number | null = null;
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       if (valorRecebido < valor) throw new BadRequestException('Valor recebido não pode ser menor que o valor a pagar');
       troco = parseFloat((valorRecebido - valor).toFixed(2));
-      // Troco via Pix não sai da espécie física do caixa — não precisa checar fundo.
-      if (troco > 0 && !trocoViaPix) {
+      // Troco via Pix não sai da espécie física do caixa — não precisa checar fundo. Troco
+      // que fica com o garçom (vira gorjeta) também não — é dinheiro que já estava na mão
+      // dele, não volta pro caixa físico do estabelecimento nem precisa de fundo reservado.
+      if (troco > 0 && !trocoViaPix && !trocoDoGarcom) {
         const saldoEspecie = await this.saldoEspecieDisponivel(restaurantId);
         if (saldoEspecie < troco) {
           throw new BadRequestException(
@@ -399,19 +425,32 @@ export class SalaoService {
       }
     }
 
+    // Taxa de cartão não cobrada do cliente: a maquininha desconta de qualquer jeito, então
+    // vira prejuízo do estabelecimento (taxa_cartao_prejuizo), não taxa cobrada do cliente
+    // (taxa_cartao_valor fica null — não infla o saldo devedor da comanda, senão o cliente
+    // ficaria devendo uma taxa que nunca foi avisado).
+    const taxaViraPrejuizo = taxaCartaoNaoPaga && (formaPagamento === 'credit_card' || formaPagamento === 'debit_card');
     const { error } = await this.supabase.client
       .from('comanda_pagamentos')
       .insert({
         order_id: comandaId, valor, forma_pagamento: formaPagamento, origem,
-        valor_recebido: valorRecebido ?? null, troco, taxa_cartao_valor: taxaCartaoValor || null,
+        valor_recebido: valorRecebido ?? null, troco,
+        taxa_cartao_valor: taxaViraPrejuizo ? null : (taxaCartaoValor || null),
+        taxa_cartao_prejuizo: taxaViraPrejuizo ? (taxaCartaoValor || null) : null,
         troco_via_pix: !!(troco && troco > 0 && trocoViaPix),
+        troco_e_gorjeta: !!(troco && troco > 0 && trocoDoGarcom),
       });
     if (error) throw error;
 
     if (formaPagamento === 'cash' && valorRecebido !== undefined) {
       await this.registrarEntradaCaixa(restaurantId, `Venda em dinheiro${identificador ? ` - ${identificador}` : ''}`, valorRecebido, 'venda_dinheiro');
       if (troco && troco > 0) {
-        if (trocoViaPix) {
+        if (trocoDoGarcom) {
+          // Ainda sai do caixa físico (o garçom leva o dinheiro), só que categorizado como
+          // gorjeta em vez de devolução ao cliente — ver total_gorjeta em
+          // getRelatorioGarcom/resumoTurno, que soma troco_e_gorjeta no repasse do garçom.
+          await this.registrarSaidaCaixa(restaurantId, `Gorjeta (troco)${identificador ? ` - ${identificador}` : ''}`, troco, 'gorjeta');
+        } else if (trocoViaPix) {
           await this.registrarSaidaCaixa(restaurantId, `Troco via Pix${identificador ? ` - ${identificador}` : ''}`, troco, 'troco_pix', 'pix');
         } else {
           await this.registrarSaidaCaixa(restaurantId, `Troco${identificador ? ` - ${identificador}` : ''}`, troco, 'troco');
@@ -424,7 +463,10 @@ export class SalaoService {
 
   // Permissão default true (opt-out) — preserva o comportamento de quem já usava
   // isso sem restrição antes da permissão existir; dono desativa por garçom se quiser.
-  async registrarPagamentoComoGarcom(comandaId: number, garcomId: number, valor: number, formaPagamento: string, podePagamentoParcial = true, valorRecebido?: number, trocoViaPix = false) {
+  async registrarPagamentoComoGarcom(
+    comandaId: number, garcomId: number, valor: number, formaPagamento: string, podePagamentoParcial = true,
+    valorRecebido?: number, trocoViaPix = false, gorjetaEstimadaIncluida = 0, trocoDoGarcom = false, taxaCartaoNaoPaga = false,
+  ) {
     if (!podePagamentoParcial) throw new ForbiddenException('Você não tem permissão para registrar pagamento parcial');
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
@@ -432,7 +474,10 @@ export class SalaoService {
     }
     const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
     const taxaCartaoValor = await this.calcularTaxaCartao(comanda.restaurant_id, valor, formaPagamento);
-    return this.registrarPagamento(comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador, taxaCartaoValor, trocoViaPix);
+    return this.registrarPagamento(
+      comandaId, 'garcom', valor, formaPagamento, comanda.restaurant_id, valorRecebido, identificador, taxaCartaoValor,
+      trocoViaPix, gorjetaEstimadaIncluida, trocoDoGarcom, taxaCartaoNaoPaga,
+    );
   }
 
   private async buscarPagamentoDoGarcom(comandaId: number, pagamentoId: number) {
@@ -460,6 +505,7 @@ export class SalaoService {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
 
     const pagamentoAnterior = await this.buscarPagamentoDoGarcom(comandaId, pagamentoId);
+    await this.validarValorPagamento(comandaId, valor, pagamentoAnterior.valor);
     const identificador = `Comanda #${comanda.numero_comanda ?? comandaId}`;
     // Estorna o que foi creditado com o valor/forma antigos antes de aplicar o novo —
     // senão corrigir um valor errado soma os dois no caixa físico.
@@ -724,7 +770,7 @@ export class SalaoService {
 
     const { data: pagamentos } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco, troco_via_pix')
+      .select('id, valor, forma_pagamento, origem, criado_em, taxa_cartao_valor, valor_recebido, troco, troco_via_pix, troco_e_gorjeta, taxa_cartao_prejuizo')
       .eq('order_id', comandaId)
       .order('criado_em', { ascending: true });
     const saldo = await this.saldoDevedor(comandaId);

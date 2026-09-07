@@ -1636,19 +1636,19 @@ export class RestauranteService {
   // resto pelo caixa) — orders.payment_method só guarda a última forma usada no
   // fechamento, então pra decompor certo o "por forma de pagamento" precisa ir direto
   // no ledger de comanda_pagamentos. Delivery continua com pagamento único (sem mudança).
-  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { order_id: number; valor: number; valor_recebido: number | null; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>> {
+  private async buscarPagamentosPorComanda(pedidos: any[]): Promise<Map<number, { order_id: number; valor: number; valor_recebido: number | null; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number; troco_e_gorjeta: boolean; taxa_cartao_prejuizo: number }[]>> {
     const idsComanda = pedidos.filter((p: any) => p.canal === 'presencial').map((p: any) => p.id);
-    const mapa = new Map<number, { order_id: number; valor: number; valor_recebido: number | null; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number }[]>();
+    const mapa = new Map<number, { order_id: number; valor: number; valor_recebido: number | null; forma_pagamento: string; origem: string; troco: number; criado_em: string; taxa_cartao_valor: number; troco_e_gorjeta: boolean; taxa_cartao_prejuizo: number }[]>();
     if (!idsComanda.length) return mapa;
 
     const { data } = await this.supabase.client
       .from('comanda_pagamentos')
-      .select('order_id, valor, valor_recebido, forma_pagamento, origem, troco, criado_em, taxa_cartao_valor')
+      .select('order_id, valor, valor_recebido, forma_pagamento, origem, troco, criado_em, taxa_cartao_valor, troco_e_gorjeta, taxa_cartao_prejuizo')
       .in('order_id', idsComanda);
 
     for (const p of (data ?? []) as any[]) {
       if (!mapa.has(p.order_id)) mapa.set(p.order_id, []);
-      mapa.get(p.order_id)!.push({ order_id: p.order_id, valor: p.valor, valor_recebido: p.valor_recebido ?? null, forma_pagamento: p.forma_pagamento, origem: p.origem, troco: p.troco ?? 0, criado_em: p.criado_em, taxa_cartao_valor: p.taxa_cartao_valor ?? 0 });
+      mapa.get(p.order_id)!.push({ order_id: p.order_id, valor: p.valor, valor_recebido: p.valor_recebido ?? null, forma_pagamento: p.forma_pagamento, origem: p.origem, troco: p.troco ?? 0, criado_em: p.criado_em, taxa_cartao_valor: p.taxa_cartao_valor ?? 0, troco_e_gorjeta: !!p.troco_e_gorjeta, taxa_cartao_prejuizo: p.taxa_cartao_prejuizo ?? 0 });
     }
     return mapa;
   }
@@ -1658,7 +1658,7 @@ export class RestauranteService {
     saidas: any[],
     valor_inicial: number,
     entradas: any[] = [],
-    pagamentosPorComanda?: Map<number, { valor: number; valor_recebido?: number | null; forma_pagamento: string; taxa_cartao_valor?: number }[]>,
+    pagamentosPorComanda?: Map<number, { valor: number; valor_recebido?: number | null; forma_pagamento: string; taxa_cartao_valor?: number; taxa_cartao_prejuizo?: number }[]>,
   ) {
     const entregues = pedidos.filter((p) => this.STATUS_VENDA_FINALIZADA.includes(p.status));
     const total_saidas = saidas.reduce((s: number, e: any) => s + (e.valor ?? 0), 0);
@@ -2577,6 +2577,11 @@ export class RestauranteService {
       if (!row) continue;
       row.total_vendido += p.total ?? 0;
       row.total_gorjeta += p.gorjeta_valor ?? 0;
+      // Troco que o cliente deixou pro garçom (ver troco_e_gorjeta em comanda_pagamentos)
+      // conta como gorjeta de verdade no repasse, mesmo nunca tendo entrado em
+      // orders.gorjeta_valor (aquele campo só existe pro fechamento final via `pagar`).
+      const pagamentosComanda = pagamentosPorComanda.get(p.id) ?? [];
+      row.total_gorjeta += pagamentosComanda.reduce((s, pg) => s + (pg.troco_e_gorjeta ? pg.troco : 0), 0);
     }
 
     for (const c of (comissoes ?? []) as any[]) {
@@ -2649,10 +2654,18 @@ export class RestauranteService {
       .map((p: any) => {
         const pagamentos = pagamentosPorComanda.get(p.id) ?? [];
         const taxa_cartao = pagamentos.reduce((s, pg) => s + (pg.taxa_cartao_valor ?? 0), 0);
+        // Prejuízo da taxa de cartão não cobrada do cliente (ver taxa_cartao_nao_paga em
+        // registrarPagamento) — a maquininha desconta de qualquer jeito, então isso é
+        // dinheiro que o estabelecimento não vai ver, mostrado à parte pra não parecer
+        // erro de contagem no fechamento.
+        const taxa_cartao_prejuizo = pagamentos.reduce((s, pg) => s + (pg.taxa_cartao_prejuizo ?? 0), 0);
+        // Troco que o cliente deixou pro garçom conta como gorjeta de verdade, mesmo nunca
+        // tendo entrado em orders.gorjeta_valor (só existe pro fechamento final via `pagar`).
+        const trocoGorjeta = pagamentos.reduce((s, pg) => s + (pg.troco_e_gorjeta ? pg.troco : 0), 0);
         const formas_pagamento = pagamentos.length
           ? [...new Set(pagamentos.map((pg) => pg.forma_pagamento))].join(' + ')
           : null;
-        const gorjeta = p.gorjeta_valor ?? 0;
+        const gorjeta = (p.gorjeta_valor ?? 0) + trocoGorjeta;
         return {
           order_id: p.id,
           numero_comanda: p.numero_comanda,
@@ -2672,6 +2685,7 @@ export class RestauranteService {
           total: p.total ?? 0,
           gorjeta,
           taxa_cartao,
+          taxa_cartao_prejuizo,
           formas_pagamento,
           total_geral: (p.total ?? 0) + gorjeta + taxa_cartao,
         };
