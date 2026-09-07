@@ -24,6 +24,11 @@ export class AgenteImpressaoController {
     return this.service.jobsPendentes(req.agenteRestaurantId);
   }
 
+  @Get('versao')
+  versaoAgente() {
+    return this.service.versaoAgente();
+  }
+
   @Post('jobs/:id/concluido')
   marcarConcluido(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.marcarConcluido(id, req.agenteRestaurantId);

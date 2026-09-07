@@ -2,9 +2,19 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 
+// Bump manual a cada novo release do agente Python (junto com o rebuild do
+// .exe em print-agent/releases/) — é o que os agentes já instalados comparam
+// pra saber se tem versão mais nova, sem precisar de infra de auto-update.
+const VERSAO_ATUAL_AGENTE = '1.1.0';
+const URL_DOWNLOAD_AGENTE = 'https://raw.githubusercontent.com/jmoka/deliveryhub_white_label/main/print-agent/releases/DeliveryHubAgente.exe';
+
 @Injectable()
 export class AgenteImpressaoService {
   constructor(private supabase: SupabaseService) {}
+
+  versaoAgente() {
+    return { versao: VERSAO_ATUAL_AGENTE, download_url: URL_DOWNLOAD_AGENTE };
+  }
 
   async gerarToken(restaurantId: number) {
     const token = crypto.randomUUID();
