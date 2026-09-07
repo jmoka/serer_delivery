@@ -57,7 +57,7 @@ export class AgenteImpressaoService {
   async jobsPendentes(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('impressao_jobs')
-      .select('id, conteudo, impressoras(nome_sistema)')
+      .select('id, conteudo, criado_em, impressoras(nome_sistema)')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'pendente')
       .order('criado_em', { ascending: true });
@@ -65,7 +65,12 @@ export class AgenteImpressaoService {
 
     return (data ?? [])
       .filter((j: any) => j.impressoras?.nome_sistema)
-      .map((j: any) => ({ id: j.id, conteudo: j.conteudo, nome_sistema: j.impressoras.nome_sistema }));
+      .map((j: any) => ({
+        id: j.id,
+        conteudo: j.conteudo,
+        criado_em: j.criado_em,
+        nome_sistema: j.impressoras.nome_sistema,
+      }));
   }
 
   // Dono clica "Testar impressão" numa impressora cadastrada — só funciona se ela
@@ -127,6 +132,18 @@ export class AgenteImpressaoService {
     const { error } = await this.supabase.client
       .from('impressao_jobs')
       .update({ status: 'erro', erro_msg: mensagem ?? 'Erro desconhecido' })
+      .eq('id', jobId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  // Chamado pelo agente Python quando o usuário descarta um job pendente na tela
+  // de revisão (ao ligar o agente), em vez de imprimir — não passa pela impressora.
+  async marcarCancelado(jobId: number, restaurantId: number) {
+    await this.garantirJobDoRestaurante(jobId, restaurantId);
+    const { error } = await this.supabase.client
+      .from('impressao_jobs')
+      .update({ status: 'cancelado' })
       .eq('id', jobId);
     if (error) throw error;
     return { ok: true };

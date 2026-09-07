@@ -33,4 +33,9 @@ export class AgenteImpressaoController {
   marcarErro(@Param('id', ParseIntPipe) id: number, @Body() body: { mensagem?: string }, @Req() req: any) {
     return this.service.marcarErro(id, req.agenteRestaurantId, body.mensagem ?? 'Erro desconhecido');
   }
+
+  @Post('jobs/:id/cancelado')
+  marcarCancelado(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.marcarCancelado(id, req.agenteRestaurantId);
+  }
 }
