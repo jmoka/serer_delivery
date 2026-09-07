@@ -15,6 +15,9 @@ export interface ItemComandaBody {
   combo_id?: number;
   quantity: number;
   observacao?: string;
+  // Item já foi feito/servido — só está sendo registrado na comanda, não deve
+  // gerar ticket de preparo. Nasce em status 'sem_preparo' em vez de 'pendente'.
+  nao_enviar_cozinha?: boolean;
 }
 
 @Injectable()
@@ -819,16 +822,17 @@ export class SalaoService {
       await Promise.all(
         itensCombo.map(async (i) => {
           const linhas = await this.combosService.expandir(i.combo_id as number, i.quantity, comanda.restaurant_id);
-          return linhas.map((l) => ({ ...l, observacao: i.observacao }));
+          return linhas.map((l) => ({ ...l, observacao: i.observacao, nao_enviar_cozinha: i.nao_enviar_cozinha }));
         }),
       )
     ).flat();
 
-    const linhasDiretas: (ItemExpandido & { observacao?: string })[] = itensDiretos.map((i) => ({
+    const linhasDiretas: (ItemExpandido & { observacao?: string; nao_enviar_cozinha?: boolean })[] = itensDiretos.map((i) => ({
       product_id: i.product_id as number,
       quantity: i.quantity,
       unit_price: prodMap[i.product_id as number].preco_promo ?? prodMap[i.product_id as number].price,
       observacao: i.observacao,
+      nao_enviar_cozinha: i.nao_enviar_cozinha,
     }));
 
     const linhasFinais = [...linhasDiretas, ...linhasCombo];
@@ -842,7 +846,7 @@ export class SalaoService {
         observacao: l.observacao?.trim() || null,
         combo_nome: l.combo_nome ?? null,
         combo_quantidade: l.combo_quantidade ?? null,
-        status: 'pendente',
+        status: l.nao_enviar_cozinha ? 'sem_preparo' : 'pendente',
       })),
     );
     if (error) throw error;
@@ -863,9 +867,10 @@ export class SalaoService {
       .eq('order_id', comandaId)
       .maybeSingle();
     if (!item) throw new NotFoundException('Item não encontrado');
-    // Depois de enviado pro setor, só o estabelecimento (PDV) pode remover — o garçom
-    // não edita/cancela mais nada que já foi impresso/pra fila de preparo.
-    if (item.status !== 'pendente') throw new ForbiddenException('Item já foi enviado — só o estabelecimento pode alterar');
+    // Depois de enviado pro setor (ou marcado como "já feito", sem passar pela
+    // cozinha), só o estabelecimento (PDV) pode remover — o garçom não edita/cancela
+    // mais nada que já saiu do estado editável.
+    if (item.status !== 'pendente') throw new ForbiddenException('Item já foi enviado ou marcado como feito — só o estabelecimento pode alterar');
     return item;
   }
 

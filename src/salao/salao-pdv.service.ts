@@ -603,16 +603,17 @@ export class SalaoPdvService {
       await Promise.all(
         itensCombo.map(async (i) => {
           const linhas = await this.combos.expandir(i.combo_id as number, i.quantity, restaurantId);
-          return linhas.map((l) => ({ ...l, observacao: i.observacao }));
+          return linhas.map((l) => ({ ...l, observacao: i.observacao, nao_enviar_cozinha: i.nao_enviar_cozinha }));
         }),
       )
     ).flat();
 
-    const linhasDiretas: (ItemExpandido & { observacao?: string })[] = itensDiretos.map((i) => ({
+    const linhasDiretas: (ItemExpandido & { observacao?: string; nao_enviar_cozinha?: boolean })[] = itensDiretos.map((i) => ({
       product_id: i.product_id as number,
       quantity: i.quantity,
       unit_price: prodMap[i.product_id as number].preco_promo ?? prodMap[i.product_id as number].price,
       observacao: i.observacao,
+      nao_enviar_cozinha: i.nao_enviar_cozinha,
     }));
 
     const linhasFinais = [...linhasDiretas, ...linhasCombo];
@@ -626,7 +627,7 @@ export class SalaoPdvService {
         observacao: l.observacao?.trim() || null,
         combo_nome: l.combo_nome ?? null,
         combo_quantidade: l.combo_quantidade ?? null,
-        status: 'pendente',
+        status: l.nao_enviar_cozinha ? 'sem_preparo' : 'pendente',
       })),
     );
     if (error) throw error;
