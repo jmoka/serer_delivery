@@ -32,4 +32,27 @@ export class StripeWebhookController {
 
     return { recebido: true };
   }
+
+  // Endpoint SEPARADO — precisa ser cadastrado no dashboard Stripe com escopo "Contas
+  // conectadas" (Connect), não "Sua conta". payout.paid é disparado pela conta conectada
+  // (da loja) quando a Stripe efetivamente manda o dinheiro pro banco dela; o ID da conta
+  // vem em `evento.account`, não no corpo do evento.
+  @Post('webhook-connect')
+  async webhookConnect(@Req() req: any, @Headers('stripe-signature') assinatura: string) {
+    if (!assinatura) throw new BadRequestException('Assinatura ausente');
+
+    let evento: Stripe.Event;
+    try {
+      evento = await this.service.construirEventoConnect(req.body, assinatura);
+    } catch {
+      throw new BadRequestException('Assinatura inválida');
+    }
+
+    if (evento.type === 'payout.paid') {
+      const payout = evento.data.object as Stripe.Payout;
+      await this.service.processarPayout(payout, (evento as any).account);
+    }
+
+    return { recebido: true };
+  }
 }

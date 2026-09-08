@@ -36,6 +36,13 @@ export class StripeService {
     return cfg.stripe_webhook_secret || this.config.get<string>('STRIPE_WEBHOOK_SECRET') || '';
   }
 
+  // Endpoint SEPARADO (escopo "Contas conectadas" no dashboard Stripe) — payout.paid
+  // chega assinado com um segredo diferente do endpoint normal (escopo "Sua conta").
+  private async getConnectWebhookSecret(): Promise<string> {
+    const cfg = await this.getPlatformConfig();
+    return cfg.stripe_connect_webhook_secret || this.config.get<string>('STRIPE_CONNECT_WEBHOOK_SECRET') || '';
+  }
+
   private statusDaConta(conta: Stripe.Account): 'ativo' | 'em_verificacao' | 'pendente' {
     if (conta.charges_enabled && conta.payouts_enabled) return 'ativo';
     if (conta.details_submitted) return 'em_verificacao';
@@ -158,6 +165,12 @@ export class StripeService {
     return client.webhooks.constructEvent(payload, assinatura, webhookSecret);
   }
 
+  async construirEventoConnect(payload: Buffer, assinatura: string): Promise<Stripe.Event> {
+    const [client, webhookSecret] = await Promise.all([this.getClient(), this.getConnectWebhookSecret()]);
+    if (!webhookSecret) throw new BadRequestException('Webhook Connect do Stripe não configurado');
+    return client.webhooks.constructEvent(payload, assinatura, webhookSecret);
+  }
+
   // Cobrança do cliente — destination charge: o PaymentIntent vive na conta da
   // PLATAFORMA (por isso não usa Stripe-Account header), o valor líquido é
   // transferido pra conta conectada da loja (transfer_data.destination) e a
@@ -212,6 +225,26 @@ export class StripeService {
     const pago = intent.status === 'succeeded';
     const novoStatus = pago ? 'paid' : intent.status === 'canceled' ? 'declined' : pagamento.status;
 
+    // Dados de conferência (tarifa Stripe, comissão retida, valor líquido que a loja
+    // recebe) só dão pra buscar depois do pagamento — o intent do próprio evento não
+    // vem com o balance_transaction expandido, precisa buscar o charge à parte.
+    let dadosFinanceiros: Record<string, any> = {};
+    if (pago) {
+      const chargeId = typeof intent.latest_charge === 'string' ? intent.latest_charge : (intent.latest_charge as any)?.id;
+      if (chargeId) {
+        const client = await this.getClient();
+        const charge = await client.charges.retrieve(chargeId, { expand: ['balance_transaction'] });
+        const bt = charge.balance_transaction as Stripe.BalanceTransaction | null;
+        const transferId = typeof charge.transfer === 'string' ? charge.transfer : (charge.transfer as any)?.id ?? null;
+        dadosFinanceiros = {
+          stripe_transfer_id: transferId,
+          stripe_taxa_valor: bt ? bt.fee / 100 : null,
+          comissao_valor: intent.application_fee_amount != null ? intent.application_fee_amount / 100 : null,
+          valor_liquido_loja: intent.application_fee_amount != null ? (intent.amount - intent.application_fee_amount) / 100 : null,
+        };
+      }
+    }
+
     await this.supabase.client
       .from('pagamentos')
       .update({
@@ -219,11 +252,44 @@ export class StripeService {
         pago_em: pago ? new Date().toISOString() : null,
         webhook_recebido_em: new Date().toISOString(),
         atualizado_em: new Date().toISOString(),
+        ...dadosFinanceiros,
       })
       .eq('id', pagamento.id);
 
     if (pago) {
       await this.pedidosService.confirmarPagamento(pagamento.order_id);
     }
+  }
+
+  // payout.paid do webhook Connect (evento da conta CONECTADA, não da plataforma —
+  // precisa do endpoint configurado no dashboard Stripe pra "escutar eventos de contas
+  // conectadas"). Um payout agrupa vários repasses de uma vez só; balanceTransactions
+  // com o filtro `payout` devolve exatamente as transferências (`type: 'transfer'`)
+  // incluídas nesse payout, e `source` de cada uma é o ID do Transfer — o mesmo que
+  // já gravamos em pagamentos.stripe_transfer_id no momento do pagamento.
+  async processarPayout(payout: Stripe.Payout, contaConectadaId: string | undefined) {
+    if (!contaConectadaId) return;
+    const client = await this.getClient();
+
+    const transferIds: string[] = [];
+    let startingAfter: string | undefined;
+    do {
+      const pagina = await client.balanceTransactions.list(
+        { payout: payout.id, limit: 100, starting_after: startingAfter },
+        { stripeAccount: contaConectadaId },
+      );
+      for (const t of pagina.data) {
+        if (t.type === 'transfer' && typeof t.source === 'string') transferIds.push(t.source);
+      }
+      startingAfter = pagina.has_more ? pagina.data[pagina.data.length - 1]?.id : undefined;
+    } while (startingAfter);
+
+    if (!transferIds.length) return;
+
+    await this.supabase.client
+      .from('pagamentos')
+      .update({ stripe_payout_id: payout.id, repasse_em: new Date().toISOString() })
+      .in('stripe_transfer_id', transferIds)
+      .is('repasse_em', null);
   }
 }

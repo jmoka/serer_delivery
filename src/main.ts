@@ -33,10 +33,12 @@ async function bootstrap() {
   // Webhook do Stripe precisa do corpo cru (Buffer) pra verificar a
   // assinatura — tem que vir ANTES do json() global, senão o body já
   // chega parseado (objeto) e a verificação de assinatura falha sempre.
+  // webhook-connect é o endpoint separado (escopo "Contas conectadas") pra payout.paid.
   app.use('/stripe/webhook', raw({ type: 'application/json' }));
+  app.use('/stripe/webhook-connect', raw({ type: 'application/json' }));
   // Uploads de foto/documento do motoboy vêm em base64 no corpo JSON — acima do default (~100kb)
   app.use((req, res, next) => {
-    if (req.originalUrl === '/stripe/webhook') return next();
+    if (req.originalUrl === '/stripe/webhook' || req.originalUrl === '/stripe/webhook-connect') return next();
     return json({ limit: '12mb' })(req, res, next);
   });
   // Valida e sanitiza todos os DTOs globalmente — nunca confiar só no frontend

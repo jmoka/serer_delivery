@@ -110,6 +110,9 @@ export class PlataformaService {
       stripe_webhook_secret_masked: cfg.stripe_webhook_secret
         ? `${'•'.repeat(8)}${String(cfg.stripe_webhook_secret).slice(-4)}`
         : null,
+      stripe_connect_webhook_secret_masked: cfg.stripe_connect_webhook_secret
+        ? `${'•'.repeat(8)}${String(cfg.stripe_connect_webhook_secret).slice(-4)}`
+        : null,
       stripe_configurado: !!cfg.stripe_secret_key,
       // Instalação individual (mono-estabelecimento)
       modo_individual: cfg.modo_individual ?? false,
@@ -163,6 +166,7 @@ export class PlataformaService {
     aparencia_marketplace?: Record<string, any>;
     stripe_secret_key?: string;
     stripe_webhook_secret?: string;
+    stripe_connect_webhook_secret?: string;
   }) {
     const { data: atual } = await this.supabase.client
       .from('platform_settings')
@@ -208,6 +212,9 @@ export class PlataformaService {
     }
     if (body.stripe_webhook_secret?.trim()) {
       novo.stripe_webhook_secret = body.stripe_webhook_secret.trim();
+    }
+    if (body.stripe_connect_webhook_secret?.trim()) {
+      novo.stripe_connect_webhook_secret = body.stripe_connect_webhook_secret.trim();
     }
 
     const { error } = await this.supabase.client

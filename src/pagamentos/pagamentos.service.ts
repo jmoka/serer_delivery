@@ -298,6 +298,83 @@ export class PagamentosService {
     return { pagamentos: data ?? [] };
   }
 
+  // Tela do estabelecimento: quanto entrou, quanto a Stripe/plataforma reteve e quanto
+  // efetivamente cai na conta da loja — sem a tarifa da Stripe (esse custo é da
+  // plataforma, não afeta o valor que a loja recebe, ver processarPaymentIntent).
+  async listarStripeRestaurante(restaurantId: number, opts: { page?: number; limit?: number } = {}) {
+    const page = opts.page ?? 1;
+    const limit = opts.limit ?? 50;
+
+    const { data, error, count } = await this.supabase.client
+      .from('pagamentos')
+      .select('id, order_id, valor, comissao_valor, valor_liquido_loja, status, repasse_em, pago_em, criado_em, orders!inner(restaurant_id)', { count: 'exact' })
+      .eq('gateway', 'stripe')
+      .eq('orders.restaurant_id', restaurantId)
+      .order('criado_em', { ascending: false })
+      .range((page - 1) * limit, page * limit - 1);
+
+    if (error) throw error;
+
+    return {
+      pagamentos: (data ?? []).map((p: any) => ({
+        id: p.id,
+        order_id: p.order_id,
+        valor: p.valor,
+        comissao_valor: p.comissao_valor,
+        valor_liquido: p.valor_liquido_loja,
+        status: p.status,
+        repasse_em: p.repasse_em,
+        pago_em: p.pago_em,
+        criado_em: p.criado_em,
+      })),
+      total: count ?? 0,
+      page,
+      limit,
+    };
+  }
+
+  // Mesma tela pro admin, olhando qualquer loja — aqui sim entra a tarifa da Stripe,
+  // pra dar pra ver a margem líquida real da plataforma (comissao_valor - stripe_taxa_valor).
+  async listarStripeAdmin(opts: { restaurantId?: number; page?: number; limit?: number } = {}) {
+    const page = opts.page ?? 1;
+    const limit = opts.limit ?? 50;
+
+    let query = this.supabase.client
+      .from('pagamentos')
+      .select(
+        'id, order_id, valor, comissao_valor, stripe_taxa_valor, valor_liquido_loja, status, repasse_em, pago_em, criado_em, orders!inner(restaurant_id, restaurants(name))',
+        { count: 'exact' },
+      )
+      .eq('gateway', 'stripe')
+      .order('criado_em', { ascending: false });
+
+    if (opts.restaurantId) query = query.eq('orders.restaurant_id', opts.restaurantId);
+
+    const { data, error, count } = await query.range((page - 1) * limit, page * limit - 1);
+    if (error) throw error;
+
+    return {
+      pagamentos: (data ?? []).map((p: any) => ({
+        id: p.id,
+        order_id: p.order_id,
+        restaurant_id: p.orders?.restaurant_id,
+        restaurante_nome: p.orders?.restaurants?.name,
+        valor: p.valor,
+        comissao_valor: p.comissao_valor,
+        stripe_taxa_valor: p.stripe_taxa_valor,
+        margem_liquida_plataforma: p.comissao_valor != null && p.stripe_taxa_valor != null ? p.comissao_valor - p.stripe_taxa_valor : null,
+        valor_liquido_loja: p.valor_liquido_loja,
+        status: p.status,
+        repasse_em: p.repasse_em,
+        pago_em: p.pago_em,
+        criado_em: p.criado_em,
+      })),
+      total: count ?? 0,
+      page,
+      limit,
+    };
+  }
+
   async processarWebhook(evento: any) {
     const payload = evento?.data ?? evento;
     const pagbankOrderId: string = payload?.id ?? payload?.reference_id;

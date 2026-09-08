@@ -58,4 +58,12 @@ export class UpdateConfigDto {
   @IsString()
   @MaxLength(500)
   stripe_webhook_secret?: string;
+
+  // Segredo de um endpoint de webhook SEPARADO, escopo "Contas conectadas" (Connect) —
+  // payout.paid é evento da conta conectada, chega assinado com outra chave, diferente
+  // do endpoint normal (escopo "Sua conta") usado pra payment_intent/account.updated.
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  stripe_connect_webhook_secret?: string;
 }
