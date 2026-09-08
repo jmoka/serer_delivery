@@ -2,12 +2,14 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { SupabaseService } from '../supabase/supabase.service';
+import { PedidosService } from '../pedidos/pedidos.service';
 
 @Injectable()
 export class StripeService {
   constructor(
     private supabase: SupabaseService,
     private config: ConfigService,
+    private pedidosService: PedidosService,
   ) {}
 
   // Chave é da PLATAFORMA (uma só, nunca por restaurante) — DB tem
@@ -221,10 +223,7 @@ export class StripeService {
       .eq('id', pagamento.id);
 
     if (pago) {
-      await this.supabase.client
-        .from('orders')
-        .update({ status: 'preparing', pago_em: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq('id', pagamento.order_id);
+      await this.pedidosService.confirmarPagamento(pagamento.order_id);
     }
   }
 }

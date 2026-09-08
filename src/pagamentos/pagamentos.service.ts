@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PagBankClient } from './pagbank.client';
 import { StripeService } from '../stripe/stripe.service';
+import { PedidosService } from '../pedidos/pedidos.service';
 
 const STATUS_PAGOS = ['PAID', 'COMPLETED', 'AVAILABLE'];
 
@@ -24,6 +25,7 @@ export class PagamentosService {
     private supabase: SupabaseService,
     private config: ConfigService,
     private stripeService: StripeService,
+    private pedidosService: PedidosService,
   ) {}
 
   private async buscarPedido(orderId: number) {
@@ -234,10 +236,7 @@ export class PagamentosService {
     if (error) throw error;
 
     if (statusPagamento === 'paid') {
-      await this.supabase.client
-        .from('orders')
-        .update({ status: 'preparing', updated_at: new Date().toISOString() })
-        .eq('id', pedido.id);
+      await this.pedidosService.confirmarPagamento(pedido.id);
     }
 
     return {
@@ -345,10 +344,7 @@ export class PagamentosService {
       .eq('id', pagamento.id);
 
     if (pago) {
-      await this.supabase.client
-        .from('orders')
-        .update({ status: 'preparing', pago_em: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq('id', pagamento.order_id);
+      await this.pedidosService.confirmarPagamento(pagamento.order_id);
     }
 
     return { processado: true, status: novoStatus, order_id: pagamento.order_id };

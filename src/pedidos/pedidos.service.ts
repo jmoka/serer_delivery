@@ -543,6 +543,19 @@ export class PedidosService {
     return data;
   }
 
+  // Chamado pelos gateways de pagamento (Stripe/PagBank) quando o pagamento online é
+  // confirmado. Precisa passar por 'confirmed' (não pular direto pra 'preparing') pra
+  // disparar rotearItensParaSetor — sem isso o item nunca aparece em Cozinha/Bar/Produção
+  // nem gera job de impressão, mesmo com o pedido pago. Quem decide avançar pra preparo
+  // (ou, no caso do Bar, pular direto pra pronto) é o estabelecimento, não o pagamento.
+  async confirmarPagamento(id: number) {
+    const { data } = await this.supabase.client.from('orders').select('status').eq('id', id).maybeSingle();
+    if (!data || data.status !== 'pending') return;
+
+    await this.atualizarStatus(id, 'confirmed');
+    await this.supabase.client.from('orders').update({ pago_em: new Date().toISOString() }).eq('id', id);
+  }
+
   async cancelar(id: number) {
     return this.atualizarStatus(id, 'canceled');
   }
