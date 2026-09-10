@@ -1209,7 +1209,7 @@ export class RestauranteService {
   private static readonly CAMPOS_CARDAPIO_IMPRESSO = [
     'usar_logo', 'rodape', 'observacao_geral', 'imagem_fundo', 'ocultar_titulo_categoria',
     'ordem_categorias', 'ordem_grupos', 'fonte_item_px', 'fonte_titulo_px', 'fonte_nome_restaurante_px',
-    'produtos_excluidos',
+    'produtos_excluidos', 'layout_colunas',
   ] as const;
 
   async updateCardapioImpressoConfig(restaurantId: number, body: Record<string, any>) {
