@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
 
 export class AtualizarPlanoDto {
   @IsOptional()
@@ -69,4 +69,9 @@ export class AtualizarPlanoDto {
   @IsOptional()
   @IsBoolean()
   inclui_favicon_personalizado?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  pacote_boost_ids?: number[];
 }

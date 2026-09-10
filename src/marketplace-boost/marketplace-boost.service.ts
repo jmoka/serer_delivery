@@ -193,17 +193,34 @@ export class MarketplaceBoostService {
 
   // ── Lado dono ──
 
+  // Ids de pacotes que vêm inclusos de graça no plano atual do restaurante
+  // (assinatura não cancelada) — vazio se não tiver assinatura ou não
+  // informar restaurantId (uso pelo admin, sem contexto de restaurante).
+  private async pacotesInclusosDoRestaurante(restaurantId?: number): Promise<Set<number>> {
+    if (!restaurantId) return new Set();
+    const { data: assinatura } = await this.supabase.client
+      .from('assinaturas').select('plano_id, status').eq('restaurant_id', restaurantId).maybeSingle();
+    if (!assinatura || assinatura.status === 'cancelada') return new Set();
+
+    const { data: vinculos } = await this.supabase.client
+      .from('plano_pacotes_boost').select('pacote_id').eq('plano_id', assinatura.plano_id);
+    return new Set((vinculos ?? []).map((v: any) => v.pacote_id));
+  }
+
   // Lista pacotes ativos com vagas restantes calculadas — dono só vê o que
   // ainda cabe comprar. Um pacote agora pode cobrir vários carrosséis (sua
   // "composição", vinda do preset congelado em config); só é comprável
   // (disponivel=true) se TODOS os carrosséis da composição ainda tiverem
-  // vaga suficiente pra quantidade exigida naquele carrossel.
-  async listarPacotesDisponiveis() {
-    const [{ data: pacotes, error }, vagasConfig, carrosseis, ocupadas] = await Promise.all([
+  // vaga suficiente pra quantidade exigida naquele carrossel. Quando chamado
+  // com restaurantId (lado do dono), marca os pacotes que já vêm de graça no
+  // plano atual dele.
+  async listarPacotesDisponiveis(restaurantId?: number) {
+    const [{ data: pacotes, error }, vagasConfig, carrosseis, ocupadas, inclusos] = await Promise.all([
       this.supabase.client.from('marketplace_boost_pacotes').select('*').eq('ativo', true).order('preco'),
       this.vagasConfiguradas(),
       this.listarCarrosseisDisponiveis(),
       this.vagasOcupadasTodas(),
+      this.pacotesInclusosDoRestaurante(restaurantId),
     ]);
     if (error) throw error;
 
@@ -221,6 +238,7 @@ export class MarketplaceBoostService {
         return {
           ...p,
           composicao,
+          incluso_no_plano: inclusos.has(p.id),
           disponivel: composicao.every((c) => c.vagas_disponiveis >= c.qtd),
         };
       }),
@@ -313,10 +331,12 @@ export class MarketplaceBoostService {
       }
     }
 
-    // Campanha concedida pelo admin (cortesia/venda manual fora do fluxo de
-    // pagamento) já nasce paga — não passa pelo PagBank.
+    // Campanha já nasce paga (sem passar pelo PagBank) quando concedida pelo
+    // admin (cortesia/venda manual) OU quando o pacote vem incluso de graça
+    // no plano atual do restaurante.
+    const gratis = opts.cortesiaAdmin || (await this.pacotesInclusosDoRestaurante(restaurantId)).has(pacoteId);
     const agora = new Date();
-    const camposCortesia = opts.cortesiaAdmin
+    const camposCortesia = gratis
       ? { pago_em: agora.toISOString(), fim_em: somarDias(agora, pacote.dias).toISOString() }
       : {};
 
@@ -347,6 +367,32 @@ export class MarketplaceBoostService {
     if (error) throw error;
     if (!data) throw new NotFoundException('Campanha não encontrada');
     return data;
+  }
+
+  // Remove de vez uma campanha que ainda não foi paga — "encerrar" não serve
+  // pra esse caso, pois nunca teve fim_em calculado. Uma campanha já paga tem
+  // histórico de cobrança real (PagBank ou cortesia) e deve ser encerrada,
+  // não apagada. `restaurantId` opcional restringe ao dono (lado do
+  // restaurante); omitido, é a versão irrestrita (admin).
+  private async removerBoostNaoPagoInterno(boostId: number, restaurantId?: number) {
+    const { data: boost } = await this.supabase.client
+      .from('marketplace_boosts').select('id, pago_em, restaurant_id').eq('id', boostId).maybeSingle();
+    if (!boost || (restaurantId !== undefined && boost.restaurant_id !== restaurantId)) {
+      throw new NotFoundException('Campanha não encontrada');
+    }
+    if (boost.pago_em) throw new ConflictException('Campanha já paga não pode ser excluída — encerre em vez disso');
+
+    const { error } = await this.supabase.client.from('marketplace_boosts').delete().eq('id', boostId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  async removerBoostNaoPago(boostId: number) {
+    return this.removerBoostNaoPagoInterno(boostId);
+  }
+
+  async removerBoostNaoPagoDoRestaurante(restaurantId: number, boostId: number) {
+    return this.removerBoostNaoPagoInterno(boostId, restaurantId);
   }
 
   async buscarBoostDoRestaurante(restaurantId: number, boostId: number) {

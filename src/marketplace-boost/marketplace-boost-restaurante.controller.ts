@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { MarketplaceBoostService } from './marketplace-boost.service';
 import { CriarBoostDto } from './dto/criar-boost.dto';
@@ -10,8 +10,8 @@ export class MarketplaceBoostRestauranteController {
   constructor(private service: MarketplaceBoostService) {}
 
   @Get('pacotes')
-  pacotes() {
-    return this.service.listarPacotesDisponiveis();
+  pacotes(@Req() req: any) {
+    return this.service.listarPacotesDisponiveis(req.restaurantId);
   }
 
   @Get()
@@ -32,5 +32,10 @@ export class MarketplaceBoostRestauranteController {
   @Post(':id/pagar')
   pagar(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() body: PagarFaturaDto) {
     return this.service.pagarBoost(req.restaurantId, id, body);
+  }
+
+  @Delete(':id')
+  remover(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.service.removerBoostNaoPagoDoRestaurante(req.restaurantId, id);
   }
 }

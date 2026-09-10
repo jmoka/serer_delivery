@@ -60,11 +60,18 @@ export class PlanosService {
   async listarPlanos() {
     const { data, error } = await this.supabase.client
       .from('planos')
-      .select('*')
+      .select('*, plano_pacotes_boost(pacote_id)')
       .order('valor', { ascending: true });
     if (error) throw error;
-    return { planos: data ?? [] };
+    return { planos: (data ?? []).map(this.comPacoteBoostIds) };
   }
+
+  // `plano_pacotes_boost(pacote_id)` vem como array de linhas do join —
+  // achata pra `pacote_boost_ids: number[]`, formato que o front consome.
+  private comPacoteBoostIds = (plano: any) => {
+    const { plano_pacotes_boost, ...resto } = plano;
+    return { ...resto, pacote_boost_ids: (plano_pacotes_boost ?? []).map((r: any) => r.pacote_id) };
+  };
 
   // Planos que o dono pode escolher na tela de upgrade — só os ativos do tipo certo
   async listarPlanosAtivos(tipo: 'saas' | 'local' = 'saas') {
@@ -81,12 +88,26 @@ export class PlanosService {
   async buscarPlano(id: number) {
     const { data, error } = await this.supabase.client
       .from('planos')
-      .select('*')
+      .select('*, plano_pacotes_boost(pacote_id)')
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new NotFoundException('Plano não encontrado');
-    return data;
+    return this.comPacoteBoostIds(data);
+  }
+
+  // Substitui a lista inteira de pacotes inclusos do plano — mesmo padrão
+  // "apaga tudo e reinsere" já usado em outros vínculos N:N simples do app.
+  private async sincronizarPacotesBoost(planoId: number, pacoteIds?: number[]) {
+    if (pacoteIds === undefined) return;
+    const { error: delErro } = await this.supabase.client
+      .from('plano_pacotes_boost').delete().eq('plano_id', planoId);
+    if (delErro) throw delErro;
+    if (pacoteIds.length === 0) return;
+    const { error: insErro } = await this.supabase.client
+      .from('plano_pacotes_boost')
+      .insert(pacoteIds.map((pacote_id) => ({ plano_id: planoId, pacote_id })));
+    if (insErro) throw insErro;
   }
 
   private async garantirNomePlanoUnico(nome: string, ignorarId?: number) {
@@ -117,13 +138,15 @@ export class PlanosService {
         inclui_delivery: body.inclui_delivery ?? true,
         inclui_salao: body.inclui_salao ?? false,
         inclui_gdoor: body.inclui_gdoor ?? false,
+        inclui_servicos: body.inclui_servicos ?? false,
         cobra_comissao: body.cobra_comissao ?? false,
         inclui_favicon_personalizado: body.inclui_favicon_personalizado ?? false,
       })
       .select()
       .single();
     if (error) throw error;
-    return data;
+    await this.sincronizarPacotesBoost(data.id, body.pacote_boost_ids);
+    return this.comPacoteBoostIds({ ...data, plano_pacotes_boost: (body.pacote_boost_ids ?? []).map((pacote_id) => ({ pacote_id })) });
   }
 
   async atualizarPlano(id: number, body: AtualizarPlanoDto) {
@@ -142,6 +165,7 @@ export class PlanosService {
     if (body.inclui_delivery !== undefined) campos.inclui_delivery = body.inclui_delivery;
     if (body.inclui_salao !== undefined) campos.inclui_salao = body.inclui_salao;
     if (body.inclui_gdoor !== undefined) campos.inclui_gdoor = body.inclui_gdoor;
+    if (body.inclui_servicos !== undefined) campos.inclui_servicos = body.inclui_servicos;
     if (body.cobra_comissao !== undefined) campos.cobra_comissao = body.cobra_comissao;
     if (body.inclui_favicon_personalizado !== undefined) campos.inclui_favicon_personalizado = body.inclui_favicon_personalizado;
 
@@ -153,7 +177,8 @@ export class PlanosService {
       .single();
     if (error) throw error;
     if (!data) throw new NotFoundException('Plano não encontrado');
-    return data;
+    await this.sincronizarPacotesBoost(id, body.pacote_boost_ids);
+    return this.buscarPlano(id);
   }
 
   async removerPlano(id: number) {

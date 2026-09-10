@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
 
 export class CriarPlanoDto {
   @IsString()
@@ -66,4 +66,11 @@ export class CriarPlanoDto {
   @IsOptional()
   @IsBoolean()
   inclui_favicon_personalizado?: boolean;
+
+  // Pacotes de destaque (marketplace-boost) que vêm de graça pra quem assina
+  // este plano — ver PlanosService.sincronizarPacotesBoost.
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  pacote_boost_ids?: number[];
 }

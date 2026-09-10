@@ -102,4 +102,9 @@ export class MarketplaceBoostAdminController {
   encerrarBoost(@Param('id', ParseIntPipe) id: number) {
     return this.service.encerrarBoost(id);
   }
+
+  @Delete('boosts/:id')
+  removerBoostNaoPago(@Param('id', ParseIntPipe) id: number) {
+    return this.service.removerBoostNaoPago(id);
+  }
 }
