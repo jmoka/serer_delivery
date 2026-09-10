@@ -8,6 +8,7 @@ import { AtualizarPacoteDto } from './dto/atualizar-pacote.dto';
 
 const STATUS_PAGOS = ['PAID', 'COMPLETED', 'AVAILABLE'];
 const VAGAS_PADRAO = 3;
+const LIMITE_ORGANICO_PADRAO = 1;
 
 const somarDias = (data: Date, dias: number) => {
   const d = new Date(data);
@@ -69,6 +70,33 @@ export class MarketplaceBoostService {
       .eq('id', 1);
     if (error) throw error;
     return this.vagasConfiguradas();
+  }
+
+  // ── Limite orgânico (grátis) — um único número vale pra qualquer tag e
+  // pra combos, quantos produtos/combos uma empresa pode colocar num
+  // carrossel sem pagar destaque (platform_settings.config.marketplace_organic_limit).
+  // Reaproveitado tanto pela leitura no admin quanto pela validação de
+  // criarProduto/editarProduto/criarCombo em restaurante.service.ts. ──
+
+  async limiteOrganicoConfigurado(): Promise<number> {
+    const { data } = await this.supabase.client
+      .from('platform_settings').select('config').eq('id', 1).maybeSingle();
+    const cfg = (data?.config ?? {}) as Record<string, any>;
+    return Number(cfg.marketplace_organic_limit ?? LIMITE_ORGANICO_PADRAO);
+  }
+
+  async salvarLimiteOrganico(limite: number) {
+    const { data: atual } = await this.supabase.client
+      .from('platform_settings').select('config').eq('id', 1).maybeSingle();
+    const cfg = (atual?.config ?? {}) as Record<string, any>;
+    const novo = { ...cfg, marketplace_organic_limit: limite };
+
+    const { error } = await this.supabase.client
+      .from('platform_settings')
+      .update({ config: novo, updated_at: new Date().toISOString() })
+      .eq('id', 1);
+    if (error) throw error;
+    return { limite: await this.limiteOrganicoConfigurado() };
   }
 
   // Perfis nomeados de vagas (ex: "Padrão", "Black Friday") — só um registro

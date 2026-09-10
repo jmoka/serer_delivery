@@ -291,10 +291,57 @@ export class RestauranteService {
 
   private async verificarProdutoDoRestaurante(produtoId: number, restaurantId: number) {
     const { data: prod } = await this.supabase.client
-      .from('products').select('id, category_id, restaurant_id').eq('id', produtoId).maybeSingle();
+      .from('products').select('id, category_id, restaurant_id, tags').eq('id', produtoId).maybeSingle();
     if (!prod) throw new NotFoundException('Produto não encontrado');
     if (prod.restaurant_id !== restaurantId) throw new NotFoundException('Produto não pertence a este restaurante');
     return prod;
+  }
+
+  // ── Limite orgânico (grátis) por carrossel — ver MarketplaceBoostService.
+  // Consultado direto aqui (sem injetar o módulo) pra não criar dependência
+  // cruzada só por causa de 1 número em platform_settings. ──
+
+  private async limiteOrganicoAtual(): Promise<number> {
+    const { data } = await this.supabase.client
+      .from('platform_settings').select('config').eq('id', 1).maybeSingle();
+    return Number((data?.config as any)?.marketplace_organic_limit ?? 1);
+  }
+
+  // Só valida as tags que estão SENDO ADICIONADAS agora — uma tag que o
+  // produto já tinha antes continua contando normal, não retroage se o admin
+  // baixar o limite depois (mesmo espírito de verificarLimiteProdutos).
+  private async validarLimiteOrganicoTags(restaurantId: number, tagsNovas: string[], produtoIdExcluir?: number) {
+    if (tagsNovas.length === 0) return;
+    const limite = await this.limiteOrganicoAtual();
+
+    for (const tag of tagsNovas) {
+      let query = this.supabase.client
+        .from('products')
+        .select('id', { count: 'exact', head: true })
+        .eq('restaurant_id', restaurantId)
+        .contains('tags', [tag]);
+      if (produtoIdExcluir) query = query.neq('id', produtoIdExcluir);
+      const { count, error } = await query;
+      if (error) throw error;
+      if ((count ?? 0) >= limite) {
+        throw new ForbiddenException(
+          `Limite de ${limite} produto(s) grátis na tag "${tag}" atingido — compre um pacote de destaque no marketplace pra aparecer além do orgânico, ou remova a tag de outro produto.`,
+        );
+      }
+    }
+  }
+
+  private async validarLimiteOrganicoCombo(restaurantId: number) {
+    const limite = await this.limiteOrganicoAtual();
+    const { count, error } = await this.supabase.client
+      .from('combos').select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId).eq('is_active', true);
+    if (error) throw error;
+    if ((count ?? 0) >= limite) {
+      throw new ForbiddenException(
+        `Limite de ${limite} combo(s) ativo(s) atingido — compre um pacote de destaque no marketplace pra ter mais em evidência, ou desative outro combo primeiro.`,
+      );
+    }
   }
 
   async meusProdutos(restaurantId: number) {
@@ -328,6 +375,7 @@ export class RestauranteService {
     },
   ) {
     await this.planos.verificarLimiteProdutos(restaurantId);
+    await this.validarLimiteOrganicoTags(restaurantId, body.tags ?? []);
 
     // Valida se a categoria é do restaurante ou global (restaurant_id IS NULL)
     const { data: cat } = await this.supabase.client
@@ -470,7 +518,13 @@ export class RestauranteService {
   }
 
   async editarProduto(produtoId: number, restaurantId: number, body: any) {
-    await this.verificarProdutoDoRestaurante(produtoId, restaurantId);
+    const prodAtual = await this.verificarProdutoDoRestaurante(produtoId, restaurantId);
+
+    if (body.tags !== undefined) {
+      const tagsAntigas = new Set(prodAtual.tags ?? []);
+      const tagsNovas = (body.tags ?? []).filter((t: string) => !tagsAntigas.has(t));
+      await this.validarLimiteOrganicoTags(restaurantId, tagsNovas, produtoId);
+    }
 
     const update: any = {};
     if (body.name !== undefined) update.name = body.name;
@@ -578,6 +632,7 @@ export class RestauranteService {
     name: string; description?: string;
     image_url?: string; destaque?: boolean; items: { product_id: number; quantity: number; preco_no_combo: number }[];
   }) {
+    await this.validarLimiteOrganicoCombo(restaurantId);
     const { price, preco_promo } = await this.calcularPrecosCombo(restaurantId, body.items);
 
     const { data: combo, error } = await this.supabase.client

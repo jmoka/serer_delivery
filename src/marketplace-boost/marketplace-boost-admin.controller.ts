@@ -25,6 +25,19 @@ export class MarketplaceBoostAdminController {
     return this.service.salvarVagas(body);
   }
 
+  // Limite orgânico (grátis): um único número, vale igual pra qualquer tag e
+  // pra combos — quantos itens uma empresa pode colocar num carrossel sem
+  // pagar destaque.
+  @Get('limite-organico')
+  async limiteOrganico() {
+    return { limite: await this.service.limiteOrganicoConfigurado() };
+  }
+
+  @Put('limite-organico')
+  salvarLimiteOrganico(@Body() body: { limite: number }) {
+    return this.service.salvarLimiteOrganico(body.limite);
+  }
+
   @Get('vagas/presets')
   listarPresetsVagas() {
     return this.service.listarPresetsVagas();
