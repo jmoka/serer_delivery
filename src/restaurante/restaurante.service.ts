@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { normalizarDominio, validarFormatoDominio, isDominioReservado } from '../common/dominio.util';
+import { sanitizarBuscaOr } from '../common/postgrest.util';
 import { CategoriasService } from '../categorias/categorias.service';
 import { ProdutosService } from '../produtos/produtos.service';
 import { PedidosService } from '../pedidos/pedidos.service';
@@ -775,7 +776,8 @@ export class RestauranteService {
       .order('name');
 
     if (filtros.busca) {
-      q = q.or(`name.ilike.%${filtros.busca}%,email.ilike.%${filtros.busca}%,phone_e164.ilike.%${filtros.busca}%`);
+      const busca = sanitizarBuscaOr(filtros.busca);
+      q = q.or(`name.ilike.%${busca}%,email.ilike.%${busca}%,phone_e164.ilike.%${busca}%`);
     }
     if (filtros.limite) q = q.limit(filtros.limite);
 

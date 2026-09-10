@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { sanitizarBuscaOr } from '../common/postgrest.util';
 
 @Injectable()
 export class UsuariosService {
@@ -74,7 +75,10 @@ export class UsuariosService {
       .order('created_at', { ascending: false });
 
     if (params.role) query = query.eq('role', params.role);
-    if (params.busca) query = query.or(`name.ilike.%${params.busca}%,email.ilike.%${params.busca}%`);
+    if (params.busca) {
+      const busca = sanitizarBuscaOr(params.busca);
+      query = query.or(`name.ilike.%${busca}%,email.ilike.%${busca}%`);
+    }
 
     const from = (params.page - 1) * params.limit;
     query = query.range(from, from + params.limit - 1);
