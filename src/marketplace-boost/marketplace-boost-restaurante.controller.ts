@@ -26,7 +26,7 @@ export class MarketplaceBoostRestauranteController {
 
   @Post()
   criar(@Req() req: any, @Body() body: CriarBoostDto) {
-    return this.service.criarBoost(req.restaurantId, body.pacote_id, body.item_ids);
+    return this.service.criarBoost(req.restaurantId, body.pacote_id, body.itens);
   }
 
   @Post(':id/pagar')

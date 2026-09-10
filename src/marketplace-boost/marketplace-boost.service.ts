@@ -106,34 +106,56 @@ export class MarketplaceBoostService {
     return this.salvarVagas(preset.config as Record<string, number>);
   }
 
-  private async vagasOcupadas(carrossel: string): Promise<number> {
+  // Vagas ocupadas de TODOS os carrosséis numa query só — uma campanha
+  // (marketplace_boosts.itens) pode cobrir vários carrosséis ao mesmo tempo,
+  // então não dá mais pra filtrar por 1 carrossel direto na query.
+  private async vagasOcupadasTodas(): Promise<Record<string, number>> {
     const { data, error } = await this.supabase.client
       .from('marketplace_boosts')
-      .select('item_ids')
-      .eq('carrossel', carrossel)
+      .select('itens')
       .not('pago_em', 'is', null)
       .gt('fim_em', new Date().toISOString());
     if (error) throw error;
-    return (data ?? []).reduce((soma, b: any) => soma + (b.item_ids?.length ?? 0), 0);
+
+    const ocupadas: Record<string, number> = {};
+    for (const b of (data ?? []) as any[]) {
+      for (const [carrossel, ids] of Object.entries(b.itens ?? {})) {
+        ocupadas[carrossel] = (ocupadas[carrossel] ?? 0) + (Array.isArray(ids) ? ids.length : 0);
+      }
+    }
+    return ocupadas;
   }
 
   // ── Pacotes (CRUD admin) ──
 
   async listarPacotesAdmin() {
     const { data, error } = await this.supabase.client
-      .from('marketplace_boost_pacotes').select('*').order('carrossel').order('preco');
+      .from('marketplace_boost_pacotes').select('*').order('preco');
     if (error) throw error;
     return { pacotes: data ?? [] };
   }
 
+  // Composição do pacote (carrossel -> quantidade) vem sempre de um perfil de
+  // vagas salvo, congelada no momento da criação — igual ao mesmo padrão já
+  // usado em aplicarPresetVagas (snapshot, não referência viva ao preset).
+  private async buscarPresetVagas(id: number): Promise<Record<string, number>> {
+    const { data } = await this.supabase.client
+      .from('marketplace_boost_vagas_presets').select('config').eq('id', id).maybeSingle();
+    if (!data) throw new NotFoundException('Perfil de vagas não encontrado');
+    const config = (data.config ?? {}) as Record<string, number>;
+    if (Object.keys(config).length === 0) throw new BadRequestException('Perfil de vagas está vazio');
+    return config;
+  }
+
   async criarPacote(body: CriarPacoteDto) {
-    await this.validarCarrossel(body.carrossel);
+    const config = await this.buscarPresetVagas(body.preset_id);
+    for (const carrossel of Object.keys(config)) await this.validarCarrossel(carrossel);
+
     const { data, error } = await this.supabase.client
       .from('marketplace_boost_pacotes')
       .insert({
         nome: body.nome,
-        carrossel: body.carrossel,
-        qtd_produtos: body.qtd_produtos,
+        config,
         dias: body.dias,
         preco: body.preco,
         ativo: body.ativo ?? true,
@@ -147,7 +169,6 @@ export class MarketplaceBoostService {
   async atualizarPacote(id: number, body: AtualizarPacoteDto) {
     const campos: Record<string, any> = {};
     if (body.nome !== undefined) campos.nome = body.nome;
-    if (body.qtd_produtos !== undefined) campos.qtd_produtos = body.qtd_produtos;
     if (body.dias !== undefined) campos.dias = body.dias;
     if (body.preco !== undefined) campos.preco = body.preco;
     if (body.ativo !== undefined) campos.ativo = body.ativo;
@@ -172,26 +193,37 @@ export class MarketplaceBoostService {
 
   // ── Lado dono ──
 
-  // Lista pacotes ativos com vagas restantes calculadas — dono só vê o que ainda cabe comprar.
+  // Lista pacotes ativos com vagas restantes calculadas — dono só vê o que
+  // ainda cabe comprar. Um pacote agora pode cobrir vários carrosséis (sua
+  // "composição", vinda do preset congelado em config); só é comprável
+  // (disponivel=true) se TODOS os carrosséis da composição ainda tiverem
+  // vaga suficiente pra quantidade exigida naquele carrossel.
   async listarPacotesDisponiveis() {
-    const [{ data: pacotes, error }, vagasConfig, carrosseis] = await Promise.all([
-      this.supabase.client.from('marketplace_boost_pacotes').select('*').eq('ativo', true).order('carrossel').order('preco'),
+    const [{ data: pacotes, error }, vagasConfig, carrosseis, ocupadas] = await Promise.all([
+      this.supabase.client.from('marketplace_boost_pacotes').select('*').eq('ativo', true).order('preco'),
       this.vagasConfiguradas(),
       this.listarCarrosseisDisponiveis(),
+      this.vagasOcupadasTodas(),
     ]);
     if (error) throw error;
 
     const labelPorCarrossel = Object.fromEntries(carrosseis.map((c) => [c.carrossel, c.label]));
-    const carrosseisComPacote = [...new Set((pacotes ?? []).map((p: any) => p.carrossel))];
-    const ocupadasPorCarrossel: Record<string, number> = {};
-    for (const c of carrosseisComPacote) ocupadasPorCarrossel[c as string] = await this.vagasOcupadas(c as string);
 
     return {
-      pacotes: (pacotes ?? []).map((p: any) => ({
-        ...p,
-        carrossel_label: labelPorCarrossel[p.carrossel] ?? p.carrossel,
-        vagas_disponiveis: Math.max(0, (vagasConfig[p.carrossel] ?? VAGAS_PADRAO) - ocupadasPorCarrossel[p.carrossel]),
-      })),
+      pacotes: (pacotes ?? []).map((p: any) => {
+        const config = (p.config ?? {}) as Record<string, number>;
+        const composicao = Object.entries(config).map(([carrossel, qtd]) => ({
+          carrossel,
+          label: labelPorCarrossel[carrossel] ?? carrossel,
+          qtd,
+          vagas_disponiveis: Math.max(0, (vagasConfig[carrossel] ?? VAGAS_PADRAO) - (ocupadas[carrossel] ?? 0)),
+        }));
+        return {
+          ...p,
+          composicao,
+          disponivel: composicao.every((c) => c.vagas_disponiveis >= c.qtd),
+        };
+      }),
     };
   }
 
@@ -199,7 +231,7 @@ export class MarketplaceBoostService {
     const [{ data, error }, carrosseis] = await Promise.all([
       this.supabase.client
         .from('marketplace_boosts')
-        .select('*, marketplace_boost_pacotes(nome, carrossel, qtd_produtos, dias)')
+        .select('*, marketplace_boost_pacotes(nome, dias)')
         .eq('restaurant_id', restaurantId)
         .order('created_at', { ascending: false }),
       this.listarCarrosseisDisponiveis(),
@@ -208,7 +240,14 @@ export class MarketplaceBoostService {
 
     const labelPorCarrossel = Object.fromEntries(carrosseis.map((c) => [c.carrossel, c.label]));
     return {
-      boosts: (data ?? []).map((b: any) => ({ ...b, carrossel_label: labelPorCarrossel[b.carrossel] ?? b.carrossel })),
+      boosts: (data ?? []).map((b: any) => ({
+        ...b,
+        composicao: Object.entries(b.itens ?? {}).map(([carrossel, ids]: [string, any]) => ({
+          carrossel,
+          label: labelPorCarrossel[carrossel] ?? carrossel,
+          qtd: Array.isArray(ids) ? ids.length : 0,
+        })),
+      })),
     };
   }
 
@@ -229,31 +268,84 @@ export class MarketplaceBoostService {
     }
   }
 
-  async criarBoost(restaurantId: number, pacoteId: number, itemIds: number[]) {
+  // Itens vendáveis de uma empresa num carrossel — usado pelo admin pra
+  // montar uma campanha em nome da empresa (mesma tabela que o dono vê nas
+  // suas próprias telas de produtos/combos).
+  async listarItensVendaveis(restaurantId: number, carrossel: string) {
+    const tabela = carrossel === 'combos' ? 'combos' : 'products';
+    const { data, error } = await this.supabase.client
+      .from(tabela).select('id, name, price, preco_promo').eq('restaurant_id', restaurantId);
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async criarBoost(
+    restaurantId: number,
+    pacoteId: number,
+    itens: Record<string, number[]>,
+    opts: { cortesiaAdmin?: boolean } = {},
+  ) {
     const pacote = await this.buscarPacote(pacoteId);
-    if (itemIds.length !== pacote.qtd_produtos) {
-      throw new BadRequestException(`Este pacote exige exatamente ${pacote.qtd_produtos} item(ns) selecionado(s)`);
+    const config = (pacote.config ?? {}) as Record<string, number>;
+    const carrosseisConfig = Object.keys(config);
+    const carrosseisRecebidos = Object.keys(itens ?? {});
+
+    if (
+      carrosseisRecebidos.length !== carrosseisConfig.length ||
+      !carrosseisConfig.every((c) => carrosseisRecebidos.includes(c))
+    ) {
+      throw new BadRequestException('Selecione itens para todos os carrosséis deste pacote');
     }
-    await this.validarItensDoRestaurante(restaurantId, pacote.carrossel, itemIds);
+
+    for (const carrossel of carrosseisConfig) {
+      const ids = itens[carrossel] ?? [];
+      if (ids.length !== config[carrossel]) {
+        throw new BadRequestException(`Este pacote exige exatamente ${config[carrossel]} item(ns) em "${carrossel}"`);
+      }
+      await this.validarItensDoRestaurante(restaurantId, carrossel, ids);
+    }
 
     const vagasConfig = await this.vagasConfiguradas();
-    const ocupadas = await this.vagasOcupadas(pacote.carrossel);
-    if (ocupadas + itemIds.length > (vagasConfig[pacote.carrossel] ?? VAGAS_PADRAO)) {
-      throw new ConflictException('Sem vagas suficientes nesse carrossel no momento');
+    const ocupadas = await this.vagasOcupadasTodas();
+    for (const carrossel of carrosseisConfig) {
+      if ((ocupadas[carrossel] ?? 0) + config[carrossel] > (vagasConfig[carrossel] ?? VAGAS_PADRAO)) {
+        throw new ConflictException(`Sem vagas suficientes em "${carrossel}" no momento`);
+      }
     }
+
+    // Campanha concedida pelo admin (cortesia/venda manual fora do fluxo de
+    // pagamento) já nasce paga — não passa pelo PagBank.
+    const agora = new Date();
+    const camposCortesia = opts.cortesiaAdmin
+      ? { pago_em: agora.toISOString(), fim_em: somarDias(agora, pacote.dias).toISOString() }
+      : {};
 
     const { data, error } = await this.supabase.client
       .from('marketplace_boosts')
       .insert({
         restaurant_id: restaurantId,
         pacote_id: pacote.id,
-        carrossel: pacote.carrossel,
-        item_ids: itemIds,
+        itens,
         valor_centavos: Math.round(Number(pacote.preco) * 100),
+        ...camposCortesia,
       })
       .select()
       .single();
     if (error) throw error;
+    return data;
+  }
+
+  // Encerra uma campanha antes do prazo (admin) — mantém o histórico, só
+  // libera a vaga imediatamente em vez de esperar o fim_em original.
+  async encerrarBoost(boostId: number) {
+    const { data, error } = await this.supabase.client
+      .from('marketplace_boosts')
+      .update({ fim_em: new Date().toISOString() })
+      .eq('id', boostId)
+      .select()
+      .single();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Campanha não encontrada');
     return data;
   }
 

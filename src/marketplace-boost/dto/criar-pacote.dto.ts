@@ -5,15 +5,11 @@ export class CriarPacoteDto {
   @MaxLength(100)
   nome: string;
 
-  // Validado dinamicamente contra tags_catalogo (+ 'combos') no service —
-  // não é uma lista fixa, admin pode criar tag nova a qualquer momento.
-  @IsString()
-  carrossel: string;
-
+  // Composição do pacote (quais carrosséis + quantos itens em cada) vem
+  // sempre de um perfil de vagas salvo (marketplace_boost_vagas_presets) —
+  // congelado no momento da criação, não é uma referência viva ao preset.
   @IsInt()
-  @Min(1)
-  @Max(20)
-  qtd_produtos: number;
+  preset_id: number;
 
   @IsInt()
   @Min(1)

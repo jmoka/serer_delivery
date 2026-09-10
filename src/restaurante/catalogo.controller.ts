@@ -336,14 +336,16 @@ export class CatalogoController {
 
     const { data, error } = await this.supabase.client
       .from('marketplace_boosts')
-      .select('carrossel, item_ids')
+      .select('itens')
       .not('pago_em', 'is', null)
       .gt('fim_em', new Date().toISOString());
     if (error) throw error;
 
     const resultado: Record<string, number[]> = { combos: [], mais_vendidos: [], promocao: [], lancamentos: [] };
-    for (const b of data ?? []) {
-      resultado[b.carrossel] = [...(resultado[b.carrossel] ?? []), ...(b.item_ids ?? [])];
+    for (const b of (data ?? []) as any[]) {
+      for (const [carrossel, ids] of Object.entries(b.itens ?? {})) {
+        resultado[carrossel] = [...(resultado[carrossel] ?? []), ...(Array.isArray(ids) ? (ids as number[]) : [])];
+      }
     }
     await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
     return resultado;

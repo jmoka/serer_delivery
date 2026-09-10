@@ -3,6 +3,7 @@ import { AdminGuard } from '../auth/admin.guard';
 import { MarketplaceBoostService } from './marketplace-boost.service';
 import { CriarPacoteDto } from './dto/criar-pacote.dto';
 import { AtualizarPacoteDto } from './dto/atualizar-pacote.dto';
+import { CriarBoostDto } from './dto/criar-boost.dto';
 
 @Controller('marketplace-boost')
 @UseGuards(AdminGuard)
@@ -62,5 +63,43 @@ export class MarketplaceBoostAdminController {
   @Delete('pacotes/:id')
   remover(@Param('id', ParseIntPipe) id: number) {
     return this.service.removerPacote(id);
+  }
+
+  // Mesma visão enriquecida (composição + vagas restantes) que o dono vê em
+  // /restaurante/boosts/pacotes — o admin precisa saber o que ainda cabe
+  // comprar antes de conceder uma campanha em nome de uma empresa.
+  @Get('pacotes-disponiveis')
+  pacotesDisponiveis() {
+    return this.service.listarPacotesDisponiveis();
+  }
+
+  // ── Conceder/gerir campanhas em nome de uma empresa específica ──
+
+  @Get('empresas/:restaurantId/boosts')
+  listarBoostsEmpresa(@Param('restaurantId', ParseIntPipe) restaurantId: number) {
+    return this.service.meusBoosts(restaurantId);
+  }
+
+  @Get('empresas/:restaurantId/itens/:carrossel')
+  listarItensEmpresa(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('carrossel') carrossel: string,
+  ) {
+    return this.service.listarItensVendaveis(restaurantId, carrossel);
+  }
+
+  // Admin concede a campanha diretamente (cortesia/venda manual) — nasce já
+  // paga, sem passar pelo PagBank.
+  @Post('empresas/:restaurantId/boosts')
+  criarBoostEmpresa(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Body() body: CriarBoostDto,
+  ) {
+    return this.service.criarBoost(restaurantId, body.pacote_id, body.itens, { cortesiaAdmin: true });
+  }
+
+  @Patch('boosts/:id/encerrar')
+  encerrarBoost(@Param('id', ParseIntPipe) id: number) {
+    return this.service.encerrarBoost(id);
   }
 }
