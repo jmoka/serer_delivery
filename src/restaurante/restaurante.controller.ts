@@ -227,6 +227,16 @@ export class RestauranteController {
     return this.service.updateAparencia(req.restaurantId, body);
   }
 
+  @Get('cardapio-impresso/config')
+  getCardapioImpressoConfig(@Req() req: any) {
+    return this.service.getCardapioImpressoConfig(req.restaurantId);
+  }
+
+  @Patch('cardapio-impresso/config')
+  updateCardapioImpressoConfig(@Req() req: any, @Body() body: any) {
+    return this.service.updateCardapioImpressoConfig(req.restaurantId, body);
+  }
+
   @Get('config')
   getConfig(@Req() req: any) {
     return this.service.getConfig(req.restaurantId);

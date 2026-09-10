@@ -1193,6 +1193,45 @@ export class RestauranteService {
     return nova;
   }
 
+  async getCardapioImpressoConfig(restaurantId: number) {
+    const { data } = await this.supabase.client
+      .from('restaurants')
+      .select('cardapio_impresso_config')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    return (data?.cardapio_impresso_config ?? {}) as Record<string, any>;
+  }
+
+  // Campos aceitos no blob JSONB `cardapio_impresso_config` — mesma regra de
+  // whitelist manual da `aparencia`, nunca merge cru do body.
+  private static readonly CAMPOS_CARDAPIO_IMPRESSO = [
+    'usar_logo', 'rodape', 'observacao_geral', 'imagem_fundo', 'ocultar_titulo_categoria',
+    'ordem_categorias', 'ordem_grupos', 'fonte_item_px', 'fonte_titulo_px', 'fonte_nome_restaurante_px',
+    'produtos_excluidos',
+  ] as const;
+
+  async updateCardapioImpressoConfig(restaurantId: number, body: Record<string, any>) {
+    const { data: atual } = await this.supabase.client
+      .from('restaurants')
+      .select('cardapio_impresso_config')
+      .eq('id', restaurantId)
+      .maybeSingle();
+
+    const campos: Record<string, any> = {};
+    for (const campo of RestauranteService.CAMPOS_CARDAPIO_IMPRESSO) {
+      if (body[campo] !== undefined) campos[campo] = body[campo];
+    }
+    const nova = { ...(atual?.cardapio_impresso_config ?? {}), ...campos };
+
+    const { error } = await this.supabase.client
+      .from('restaurants')
+      .update({ cardapio_impresso_config: nova, updated_at: new Date().toISOString() })
+      .eq('id', restaurantId);
+
+    if (error) throw error;
+    return nova;
+  }
+
   async getConfig(restaurantId: number) {
     const { data } = await this.supabase.client
       .from('restaurants')
