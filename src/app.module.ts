@@ -32,6 +32,7 @@ import { LicencaModule } from './licenca/licenca.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
 import { AuthLoginModule } from './auth-login/auth-login.module';
 import { TwoFactorModule } from './two-factor/two-factor.module';
+import { FavoritosMenuModule } from './favoritos-menu/favoritos-menu.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { TwoFactorModule } from './two-factor/two-factor.module';
     UsuariosModule,
     AuthLoginModule,
     TwoFactorModule,
+    FavoritosMenuModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

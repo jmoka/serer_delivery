@@ -1195,13 +1195,24 @@ export class RestauranteService {
     return nova;
   }
 
+  private cacheKeyCardapioImpresso(restaurantId: number) {
+    return `restaurante:cardapio-impresso-config:${restaurantId}`;
+  }
+
   async getCardapioImpressoConfig(restaurantId: number) {
+    const cacheKey = this.cacheKeyCardapioImpresso(restaurantId);
+    const cached = await this.redis.getJSON<Record<string, any>>(cacheKey);
+    if (cached) return cached;
+
     const { data } = await this.supabase.client
       .from('restaurants')
       .select('cardapio_impresso_config')
       .eq('id', restaurantId)
       .maybeSingle();
-    return (data?.cardapio_impresso_config ?? {}) as Record<string, any>;
+    const resultado = (data?.cardapio_impresso_config ?? {}) as Record<string, any>;
+
+    await this.redis.setJSON(cacheKey, resultado, TTL_MINHA_EMPRESA);
+    return resultado;
   }
 
   // Campos aceitos no blob JSONB `cardapio_impresso_config` — mesma regra de
@@ -1209,7 +1220,7 @@ export class RestauranteService {
   private static readonly CAMPOS_CARDAPIO_IMPRESSO = [
     'usar_logo', 'rodape', 'observacao_geral', 'imagem_fundo', 'ocultar_titulo_categoria',
     'ordem_categorias', 'ordem_grupos', 'fonte_item_px', 'fonte_titulo_px', 'fonte_nome_restaurante_px',
-    'produtos_excluidos', 'layout_colunas',
+    'fonte_descricao_px', 'produtos_excluidos', 'layout_colunas',
   ] as const;
 
   async updateCardapioImpressoConfig(restaurantId: number, body: Record<string, any>) {
@@ -1231,6 +1242,7 @@ export class RestauranteService {
       .eq('id', restaurantId);
 
     if (error) throw error;
+    await this.redis.setJSON(this.cacheKeyCardapioImpresso(restaurantId), nova, TTL_MINHA_EMPRESA);
     return nova;
   }
 
