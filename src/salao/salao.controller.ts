@@ -22,6 +22,7 @@ export class SalaoController {
       restauranteAberto: req.restauranteAberto,
       permissoes: req.garcomPermissoes,
       salaoModo: req.salaoModo,
+      restauranteSlug: req.garcomRestaurantSlug,
     };
   }
 
