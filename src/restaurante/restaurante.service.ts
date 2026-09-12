@@ -131,6 +131,16 @@ export class RestauranteService {
 
     if (errUpd) throw errUpd;
 
+    // Cancelar o pedido só muda orders.status — sem isso, os itens continuam
+    // 'enviado'/'preparando'/'pronto' e o pedido nunca some das telas de produção
+    // (Cozinha/Bar/Produção/Ponto de Preparo), que filtram por status do ITEM, não do
+    // pedido. Não mexe em item já 'entregue' (já saiu fisicamente, cancelar não desfaz).
+    await this.supabase.client
+      .from('order_items')
+      .update({ status: 'cancelado', cancelado_em: new Date().toISOString() })
+      .eq('order_id', pedidoId)
+      .in('status', ['enviado', 'preparando', 'pronto']);
+
     await this.estoque.restaurarItensDoPedido(pedidoId);
 
     return data;
@@ -1437,7 +1447,11 @@ export class RestauranteService {
       .order('enviado_em', { ascending: true });
     if (error) throw error;
 
-    const itensValidos = (itens as any[]).filter((i) => i.orders?.restaurant_id === restaurantId);
+    // Item continua 'enviado'/'preparando' mesmo depois do pedido inteiro ser cancelado
+    // (cancelarPedidoAdmin cascateia daqui em diante, mas pedido já cancelado antes desse
+    // fix fica travado sem essa checagem extra por status do PEDIDO) — some da tela sem
+    // precisar corrigir o item no banco manualmente.
+    const itensValidos = (itens as any[]).filter((i) => i.orders?.restaurant_id === restaurantId && i.orders?.status !== 'canceled');
 
     // Um item roteado pra uma impressora/setor pode vir tanto de comanda do salão
     // (mesa_id/garcom_id preenchidos) quanto de pedido de delivery (produto com a
