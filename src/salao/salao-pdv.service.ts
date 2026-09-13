@@ -4,6 +4,7 @@ import { SalaoService } from './salao.service';
 import type { ItemComandaBody } from './salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
+import { aplicarEspacoCorte } from './espaco-corte.util';
 
 // PDV do caixa (lado estabelecimento): ações de cancelar/desconto/acréscimo/pagar
 // são exclusivas do dono (RestaurantOwnerGuard) — o garçom nunca tem acesso a
@@ -984,7 +985,7 @@ export class SalaoPdvService {
 
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome_sistema')
+      .select('id, nome_sistema, espaco_corte_linhas')
       .eq('id', impressoraId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -1011,7 +1012,7 @@ export class SalaoPdvService {
     const { error } = await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,
-      conteudo,
+      conteudo: aplicarEspacoCorte(conteudo, (impressora as any).espaco_corte_linhas),
     });
     if (error) throw error;
     return { ok: true, via: 'agente' };

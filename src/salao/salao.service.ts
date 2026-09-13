@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
 import { GarcomTurnoService } from './garcom-turno.service';
+import { aplicarEspacoCorte } from './espaco-corte.util';
 
 export interface AbrirComandaBody {
   mesa_id?: number;
@@ -1268,7 +1269,7 @@ export class SalaoService {
 
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome_sistema')
+      .select('id, nome_sistema, espaco_corte_linhas')
       .eq('id', impressoraId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -1278,7 +1279,7 @@ export class SalaoService {
     await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,
-      conteudo,
+      conteudo: aplicarEspacoCorte(conteudo, (impressora as any).espaco_corte_linhas),
     });
     return { via: 'agente' };
   }
@@ -1398,7 +1399,7 @@ export class SalaoService {
   private async processarEnvioPendentes(comandaId: number, comanda: any, itemIds?: number[]) {
     let query = this.supabase.client
       .from('order_items')
-      .select('id, product_id, quantity, observacao, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema))')
+      .select('id, product_id, quantity, observacao, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema, espaco_corte_linhas))')
       .eq('order_id', comandaId)
       .eq('status', 'pendente');
     if (itemIds?.length) query = query.in('id', itemIds);
@@ -1422,7 +1423,7 @@ export class SalaoService {
       }
     }
 
-    const grupos = new Map<string, { setor: string; impressora_id: number | null; impressora_nome: string | null; nome_sistema: string | null; itens: any[] }>();
+    const grupos = new Map<string, { setor: string; impressora_id: number | null; impressora_nome: string | null; nome_sistema: string | null; espaco_corte_linhas: number | null; itens: any[] }>();
     for (const item of pendentes as any[]) {
       const impressora = item.products?.impressoras;
       const chave = impressora?.id ? String(impressora.id) : 'sem-impressora';
@@ -1432,6 +1433,7 @@ export class SalaoService {
           impressora_id: impressora?.id ?? null,
           impressora_nome: impressora?.nome ?? null,
           nome_sistema: impressora?.nome_sistema ?? null,
+          espaco_corte_linhas: impressora?.espaco_corte_linhas ?? null,
           itens: [],
         });
       }
@@ -1453,7 +1455,7 @@ export class SalaoService {
         const { error: errJob } = await this.supabase.client.from('impressao_jobs').insert({
           restaurant_id: comanda.restaurant_id,
           impressora_id: grupo.impressora_id,
-          conteudo,
+          conteudo: aplicarEspacoCorte(conteudo, grupo.espaco_corte_linhas),
         });
         if (errJob) throw errJob;
       } else {
@@ -1482,7 +1484,7 @@ export class SalaoService {
 
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome, setor, nome_sistema')
+      .select('id, nome, setor, nome_sistema, espaco_corte_linhas')
       .eq('id', item.impressora_id)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -1500,7 +1502,7 @@ export class SalaoService {
       const { error } = await this.supabase.client.from('impressao_jobs').insert({
         restaurant_id: restaurantId,
         impressora_id: item.impressora_id,
-        conteudo,
+        conteudo: aplicarEspacoCorte(conteudo, (impressora as any).espaco_corte_linhas),
       });
       if (error) throw error;
       return { ok: true, via: 'agente' };
@@ -1530,7 +1532,7 @@ export class SalaoService {
 
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome, setor, nome_sistema')
+      .select('id, nome, setor, nome_sistema, espaco_corte_linhas')
       .eq('id', novaImpressoraId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -1550,7 +1552,7 @@ export class SalaoService {
       const { error } = await this.supabase.client.from('impressao_jobs').insert({
         restaurant_id: restaurantId,
         impressora_id: novaImpressoraId,
-        conteudo,
+        conteudo: aplicarEspacoCorte(conteudo, (impressora as any).espaco_corte_linhas),
       });
       if (error) throw error;
       return { ok: true, via: 'agente' };

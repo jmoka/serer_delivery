@@ -10,6 +10,7 @@ import { MotoboyService } from '../motoboy/motoboy.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService } from '../combos/combos.service';
 import { PlanosService } from '../planos/planos.service';
+import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { RedisService } from '../redis/redis.service';
 
 const TTL_MINHA_EMPRESA = 15;
@@ -2247,7 +2248,7 @@ export class RestauranteService {
 
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome_sistema')
+      .select('id, nome_sistema, espaco_corte_linhas')
       .eq('id', impressoraId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -2270,7 +2271,7 @@ export class RestauranteService {
     await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,
-      conteudo,
+      conteudo: aplicarEspacoCorte(conteudo, (impressora as any).espaco_corte_linhas),
     });
     return { via: 'agente' };
   }
