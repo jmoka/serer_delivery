@@ -1559,6 +1559,28 @@ export class SalaoService {
     return { ok: true, via: 'navegador', setor: (impressora as any).setor, impressora_nome: (impressora as any).nome, itens: itensFormatados };
   }
 
+  // Alternativa ao reenvio: item preso sem setor (sem impressora configurada) que o
+  // estabelecimento decide não mandar pra produção nenhuma — marca 'sem_preparo' (mesmo
+  // status usado em item marcado como "não enviar" na criação, ver order_items_status_check)
+  // e ele some da lista de pendências sem exigir escolher impressora.
+  async dispensarItemSemSetor(itemId: number, restaurantId: number) {
+    const { data: item } = await this.supabase.client
+      .from('order_items')
+      .select('id, status, order_id, orders(restaurant_id)')
+      .eq('id', itemId)
+      .maybeSingle();
+    if (!item || (item as any).orders?.restaurant_id !== restaurantId) {
+      throw new NotFoundException('Item não encontrado');
+    }
+    if (!['enviado', 'preparando'].includes(item.status)) {
+      throw new BadRequestException('Item não está mais aguardando ou em preparo');
+    }
+
+    await this.supabase.client.from('order_items').update({ status: 'sem_preparo' }).eq('id', itemId);
+
+    return { ok: true };
+  }
+
   // Garçom não escolhe mais a forma de pagamento aqui — quem define isso é o caixa,
   // no fechamento real da comanda (só ele emite recibo e finaliza o pagamento).
   async fecharComanda(comandaId: number, garcomId: number) {

@@ -371,6 +371,11 @@ export class RestauranteController {
     return this.salaoService.reenviarItemParaSetor(id, req.restaurantId, impressoraId);
   }
 
+  @Patch('kds/itens/:id/dispensar')
+  kdsDispensar(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.salaoService.dispensarItemSemSetor(id, req.restaurantId);
+  }
+
   @Post('storage/setup')
   setupStorage() {
     return this.service.setupStorage();
