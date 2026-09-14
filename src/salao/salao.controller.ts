@@ -19,7 +19,7 @@ export class SalaoController {
     return {
       id: req.garcomId,
       nome: req.garcomNome,
-      restauranteAberto: req.restauranteAberto,
+      caixaAberto: req.caixaAberto,
       permissoes: req.garcomPermissoes,
       salaoModo: req.salaoModo,
       restauranteSlug: req.garcomRestaurantSlug,
@@ -91,7 +91,7 @@ export class SalaoController {
 
   @Post('comandas/abrir')
   abrir(@Body() body: AbrirComandaBody, @Req() req: any) {
-    return this.service.abrirComanda(req.garcomId, req.garcomRestaurantId, body, req.restauranteAberto, req.salaoModo);
+    return this.service.abrirComanda(req.garcomId, req.garcomRestaurantId, body, req.caixaAberto, req.salaoModo);
   }
 
   // Autocomplete ao digitar o telefone no "abrir comanda" — acha cliente já

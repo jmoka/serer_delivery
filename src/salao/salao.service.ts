@@ -559,9 +559,9 @@ export class SalaoService {
       .eq('id', comandaId);
   }
 
-  async abrirComanda(garcomId: number, restaurantId: number, body: AbrirComandaBody, restauranteAberto?: boolean, salaoModo: 'mesas' | 'comandas' | 'ambos' = 'ambos') {
-    if (!restauranteAberto) {
-      throw new ForbiddenException('Restaurante fechado — não é possível abrir mesa/comanda');
+  async abrirComanda(garcomId: number, restaurantId: number, body: AbrirComandaBody, caixaAberto?: boolean, salaoModo: 'mesas' | 'comandas' | 'ambos' = 'ambos') {
+    if (!caixaAberto) {
+      throw new ForbiddenException('Caixa fechado — não é possível abrir mesa/comanda');
     }
     if (salaoModo === 'mesas' && !body.mesa_id) {
       throw new BadRequestException('Este restaurante só trabalha com mesas — selecione uma mesa');
@@ -590,7 +590,7 @@ export class SalaoService {
       mesa = data;
     }
 
-    const { data: caixaAberto } = await this.supabase.client
+    const { data: caixaAtual } = await this.supabase.client
       .from('caixas')
       .select('id')
       .eq('restaurant_id', restaurantId)
@@ -623,7 +623,7 @@ export class SalaoService {
         cliente_mesa_nome: body.cliente_nome,
         cliente_mesa_telefone: body.cliente_telefone,
         total: 0,
-        caixa_id: caixaAberto?.id ?? null,
+        caixa_id: caixaAtual?.id ?? null,
         numero_comanda: numeroComanda,
       })
       .select()

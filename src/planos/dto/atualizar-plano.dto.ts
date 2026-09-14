@@ -70,6 +70,12 @@ export class AtualizarPlanoDto {
   @IsBoolean()
   inclui_favicon_personalizado?: boolean;
 
+  // Plano exclusivo pra quem ainda não é cliente — some da tela de troca de
+  // plano de quem já é cadastrado (ver PlanosService.listarPlanosAtivos).
+  @IsOptional()
+  @IsBoolean()
+  somente_novos_cadastros?: boolean;
+
   @IsOptional()
   @IsArray()
   @IsInt({ each: true })

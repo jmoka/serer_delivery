@@ -73,14 +73,18 @@ export class PlanosService {
     return { ...resto, pacote_boost_ids: (plano_pacotes_boost ?? []).map((r: any) => r.pacote_id) };
   };
 
-  // Planos que o dono pode escolher na tela de upgrade — só os ativos do tipo certo
-  async listarPlanosAtivos(tipo: 'saas' | 'local' = 'saas') {
-    const { data, error } = await this.supabase.client
+  // Planos que o dono pode escolher na tela de upgrade — só os ativos do tipo
+  // certo. contexto='cliente' (padrão) esconde planos "somente_novos_cadastros"
+  // — quem já é cliente não pode ter nenhum contato com eles (ver onboarding,
+  // que passa contexto='onboarding' pra incluí-los).
+  async listarPlanosAtivos(tipo: 'saas' | 'local' = 'saas', contexto: 'cliente' | 'onboarding' = 'cliente') {
+    let q = this.supabase.client
       .from('planos')
       .select('*')
       .eq('ativo', true)
-      .eq('tipo', tipo)
-      .order('valor', { ascending: true });
+      .eq('tipo', tipo);
+    if (contexto === 'cliente') q = q.eq('somente_novos_cadastros', false);
+    const { data, error } = await q.order('valor', { ascending: true });
     if (error) throw error;
     return { planos: data ?? [] };
   }
@@ -141,6 +145,7 @@ export class PlanosService {
         inclui_servicos: body.inclui_servicos ?? false,
         cobra_comissao: body.cobra_comissao ?? false,
         inclui_favicon_personalizado: body.inclui_favicon_personalizado ?? false,
+        somente_novos_cadastros: body.somente_novos_cadastros ?? false,
       })
       .select()
       .single();
@@ -168,6 +173,7 @@ export class PlanosService {
     if (body.inclui_servicos !== undefined) campos.inclui_servicos = body.inclui_servicos;
     if (body.cobra_comissao !== undefined) campos.cobra_comissao = body.cobra_comissao;
     if (body.inclui_favicon_personalizado !== undefined) campos.inclui_favicon_personalizado = body.inclui_favicon_personalizado;
+    if (body.somente_novos_cadastros !== undefined) campos.somente_novos_cadastros = body.somente_novos_cadastros;
 
     const { data, error } = await this.supabase.client
       .from('planos')
@@ -278,7 +284,7 @@ export class PlanosService {
     return { assinatura, faturas: faturas ?? [] };
   }
 
-  async atribuirAssinatura(titular: Titular, planoId: number) {
+  async atribuirAssinatura(titular: Titular, planoId: number, cortesiaAte?: string | null) {
     const plano = await this.buscarPlano(planoId);
 
     if ('restaurantId' in titular) {
@@ -315,16 +321,22 @@ export class PlanosService {
     if (existente) {
       // Troca de plano reinicia o ciclo de cobrança: recalcula trial/status a
       // partir do plano novo (senão um plano com trial_dias=0 continuaria preso
-      // no status "trial" herdado do plano anterior).
+      // no status "trial" herdado do plano anterior). cortesiaAte===undefined
+      // (troca de plano feita pelo dono, ou aplicarTrocaSeNecessario) preserva
+      // a cortesia já concedida em vez de apagar — só o admin passa esse campo
+      // explicitamente (inclusive null pra remover).
+      const camposUpdate: Record<string, any> = {
+        plano_id: planoId,
+        status: temTrial ? 'trial' : 'ativa',
+        trial_fim: trialFim?.toISOString() ?? null,
+        ultimo_periodo_faturado_fim: (trialFim ?? agora).toISOString(),
+        updated_at: agora.toISOString(),
+      };
+      if (cortesiaAte !== undefined) camposUpdate.cortesia_ate = cortesiaAte;
+
       const { data, error } = await this.supabase.client
         .from('assinaturas')
-        .update({
-          plano_id: planoId,
-          status: temTrial ? 'trial' : 'ativa',
-          trial_fim: trialFim?.toISOString() ?? null,
-          ultimo_periodo_faturado_fim: (trialFim ?? agora).toISOString(),
-          updated_at: agora.toISOString(),
-        })
+        .update(camposUpdate)
         .eq('id', existente.id)
         .select()
         .single();
@@ -339,12 +351,30 @@ export class PlanosService {
       trial_fim: trialFim?.toISOString() ?? null,
       ultimo_periodo_faturado_fim: (trialFim ?? agora).toISOString(),
     };
+    if (cortesiaAte !== undefined) novaAssinatura.cortesia_ate = cortesiaAte;
     if ('restaurantId' in titular) novaAssinatura.restaurant_id = titular.restaurantId;
     else novaAssinatura.instalacao_id = titular.instalacaoId;
 
     const { data, error } = await this.supabase.client
       .from('assinaturas')
       .insert(novaAssinatura)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  // Edita só a data de cortesia (ex: estender/reduzir um "grátis até", ou
+  // remover com null) sem reiniciar o ciclo de trial/cobrança que
+  // atribuirAssinatura dispara ao trocar de plano.
+  async atualizarCortesia(restaurantId: number, cortesiaAte: string | null) {
+    const existente = await this.buscarAssinaturaRaw({ restaurantId });
+    if (!existente) throw new NotFoundException('Loja não tem assinatura');
+
+    const { data, error } = await this.supabase.client
+      .from('assinaturas')
+      .update({ cortesia_ate: cortesiaAte, updated_at: new Date().toISOString() })
+      .eq('id', existente.id)
       .select()
       .single();
     if (error) throw error;
@@ -489,11 +519,14 @@ export class PlanosService {
         if (jaExiste) break;
       }
 
-      // Isenção por piso de faturamento só existe pro SaaS — instalação local
-      // não tem pedidos na tabela `orders` central (banco próprio, separado),
-      // então sempre cobra o valor cheio do plano.
-      let isento = false;
-      let valorFatura = plano.valor;
+      // Cortesia admin (assinaturas.cortesia_ate) isenta a mensalidade de
+      // qualquer período que comece antes dessa data — "grátis eterno" é só
+      // uma data bem no futuro, não existe flag separado (ver atribuirAssinatura/
+      // atualizarCortesia). Vale pra SaaS e instalação local, diferente da
+      // isenção por piso de faturamento logo abaixo (essa sim só pro SaaS, já
+      // que instalação local não tem pedidos na tabela `orders` central).
+      let isento = !!assinatura.cortesia_ate && new Date(assinatura.cortesia_ate) > inicioPeriodo;
+      let valorFatura = isento ? 0 : plano.valor;
       let comissaoValor = 0;
       if ('restaurantId' in titular) {
         const { data: faturamentoRows, error: fatErro } = await this.supabase.client
@@ -506,7 +539,7 @@ export class PlanosService {
         if (fatErro) throw fatErro;
 
         const faturamento = (faturamentoRows ?? []).reduce((acc, o: any) => acc + (o.total ?? 0), 0);
-        isento = plano.piso_faturamento != null && faturamento < plano.piso_faturamento;
+        isento = isento || (plano.piso_faturamento != null && faturamento < plano.piso_faturamento);
         valorFatura = isento ? 0 : plano.valor;
 
         // Comissão é cobrada por fora da isenção do piso — reflete venda que

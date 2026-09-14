@@ -59,7 +59,7 @@ export class GarcomAuthService {
 
     const { data: garcom } = await this.supabase.client
       .from('garcons')
-      .select('id, password_hash, ativo, tentativas_login_falhas, bloqueado_ate, restaurants(aparencia)')
+      .select('id, restaurant_id, password_hash, ativo, tentativas_login_falhas, bloqueado_ate')
       .eq('login_key', loginKey)
       .maybeSingle();
 
@@ -87,12 +87,20 @@ export class GarcomAuthService {
       await this.supabase.client.from('garcons').update({ tentativas_login_falhas: 0, bloqueado_ate: null }).eq('id', garcom.id);
     }
 
-    const restauranteAberto = (garcom as any).restaurants?.aparencia?.aberto === true;
-    if (!restauranteAberto) throw new ForbiddenException('Restaurante fechado. Aguarde o caixa ser aberto para entrar.');
+    // Login do garçom depende só do caixa aberto — salão funciona independente da
+    // loja virtual (delivery/site) estar aberta ou fechada.
+    const { data: caixa } = await this.supabase.client
+      .from('caixas')
+      .select('id')
+      .eq('restaurant_id', garcom.restaurant_id)
+      .eq('status', 'aberto')
+      .maybeSingle();
+    const caixaAberto = !!caixa;
+    if (!caixaAberto) throw new ForbiddenException('Caixa fechado. Aguarde o caixa ser aberto para entrar.');
 
     const sessionId = await this.abrirSessao(garcom.id);
 
-    return { token: this.gerarToken(garcom.id, sessionId), restauranteAberto };
+    return { token: this.gerarToken(garcom.id, sessionId), caixaAberto };
   }
 
   async logout(garcomId: number) {

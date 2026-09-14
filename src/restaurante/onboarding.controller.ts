@@ -19,7 +19,7 @@ export class OnboardingController {
   // usuário logar/criar conta, pra ele escolher já na primeira etapa.
   @Get('planos-disponiveis')
   planosDisponiveis() {
-    return this.planos.listarPlanosAtivos('saas');
+    return this.planos.listarPlanosAtivos('saas', 'onboarding');
   }
 
   private normalizarDigitos(v?: string | null): string | null {

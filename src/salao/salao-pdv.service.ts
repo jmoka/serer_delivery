@@ -63,6 +63,17 @@ export class SalaoPdvService {
     return { ok: true };
   }
 
+  // Comanda/mesa só existe com caixa aberto: sem isso não há sessão pra registrar o
+  // dinheiro entrando (venda) nem pra vincular a comanda (caixa_id). Usado em abrir,
+  // receber itens novos e pagar/fechar — mesmo caixa que abriu tem que estar aberto
+  // em cada uma dessas ações, não só na abertura.
+  private async exigirCaixaAberto(restaurantId: number) {
+    const { data: caixa } = await this.supabase.client
+      .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    if (!caixa) throw new BadRequestException('Caixa fechado — abra o caixa antes de continuar');
+    return caixa;
+  }
+
   // Estabelecimento abre mesa/comanda direto (sem garçom envolvido) — mesma regra de
   // salao_modo e obrigatoriedade de nome/telefone do cliente do lado do garçom.
   // Guarda o primeiro nome de quem tava logado (aberto_por_nome) pro card da mesa
@@ -91,8 +102,7 @@ export class SalaoPdvService {
       mesa = data;
     }
 
-    const { data: caixaAberto } = await this.supabase.client
-      .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    const caixaAberto = await this.exigirCaixaAberto(restaurantId);
 
     const { data: userData } = await this.supabase.client.auth.admin.getUserById(userId);
     const nomeCompleto = userData?.user?.user_metadata?.name as string | undefined;
@@ -578,6 +588,7 @@ export class SalaoPdvService {
   // vai pendente e já sai imprimindo/pra fila igual quando o garçom manda.
   async adicionarItens(id: number, restaurantId: number, itens: ItemComandaBody[]) {
     if (!itens?.length) throw new BadRequestException('Informe ao menos 1 item');
+    await this.exigirCaixaAberto(restaurantId);
 
     const comanda = await this.buscarComanda(id, restaurantId);
     if (comanda.status !== 'aberta') throw new BadRequestException('Comanda não está aberta');
@@ -1084,6 +1095,7 @@ export class SalaoPdvService {
     trocoViaPix = false, trocoDoGarcom = false, taxaCartaoNaoPaga = false,
   ) {
     if (!formaPagamento) throw new BadRequestException('Informe a forma de pagamento');
+    await this.exigirCaixaAberto(restaurantId);
 
     const comanda = await this.buscarComanda(id, restaurantId);
     if (comanda.status !== 'fechada_garcom' && comanda.status !== 'aberta') {

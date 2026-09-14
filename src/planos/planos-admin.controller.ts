@@ -4,6 +4,7 @@ import { AdminGuard } from '../auth/admin.guard';
 import { CriarPlanoDto } from './dto/criar-plano.dto';
 import { AtualizarPlanoDto } from './dto/atualizar-plano.dto';
 import { AtribuirAssinaturaDto } from './dto/atribuir-assinatura.dto';
+import { AtualizarCortesiaDto } from './dto/atualizar-cortesia.dto';
 
 @Controller('planos')
 @UseGuards(AdminGuard)
@@ -26,7 +27,17 @@ export class PlanosAdminController {
     @Param('restaurantId', ParseIntPipe) restaurantId: number,
     @Body() body: AtribuirAssinaturaDto,
   ) {
-    return this.service.atribuirAssinatura({ restaurantId }, body.plano_id);
+    return this.service.atribuirAssinatura({ restaurantId }, body.plano_id, body.cortesia_ate);
+  }
+
+  // Edita só a data de cortesia ("grátis até") sem trocar de plano/reiniciar o
+  // ciclo de trial — "grátis eterno" é o front mandando uma data ~50 anos à frente.
+  @Patch('assinaturas/:restaurantId/cortesia')
+  atualizarCortesia(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Body() body: AtualizarCortesiaDto,
+  ) {
+    return this.service.atualizarCortesia(restaurantId, body.cortesia_ate ?? null);
   }
 
   @Patch('assinaturas/:restaurantId/cancelar')
