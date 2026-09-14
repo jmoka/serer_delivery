@@ -31,6 +31,12 @@ export class AtualizarPlanoDto {
   @Min(1)
   limite_impressoras?: number | null;
 
+  // null explicito remove o limite (vira ilimitado)
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  limite_servicos?: number | null;
+
   // null explicito remove o piso (passa a cobrar sempre)
   @IsOptional()
   @IsNumber()

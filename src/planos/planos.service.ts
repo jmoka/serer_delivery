@@ -136,6 +136,7 @@ export class PlanosService {
         tipo: body.tipo ?? 'saas',
         limite_produtos: body.limite_produtos ?? null,
         limite_impressoras: body.limite_impressoras ?? null,
+        limite_servicos: body.limite_servicos ?? null,
         piso_faturamento: body.piso_faturamento ?? null,
         trial_dias: body.trial_dias ?? 0,
         ativo: body.ativo ?? true,
@@ -164,6 +165,7 @@ export class PlanosService {
     if (body.tipo !== undefined) campos.tipo = body.tipo;
     if (body.limite_produtos !== undefined) campos.limite_produtos = body.limite_produtos;
     if (body.limite_impressoras !== undefined) campos.limite_impressoras = body.limite_impressoras;
+    if (body.limite_servicos !== undefined) campos.limite_servicos = body.limite_servicos;
     if (body.piso_faturamento !== undefined) campos.piso_faturamento = body.piso_faturamento;
     if (body.trial_dias !== undefined) campos.trial_dias = body.trial_dias;
     if (body.ativo !== undefined) campos.ativo = body.ativo;
@@ -435,6 +437,44 @@ export class PlanosService {
     if ((count ?? 0) >= limite) {
       throw new ForbiddenException(
         `Limite de ${limite} impressoras do plano "${assinatura.planos.nome}" atingido. Faça upgrade de plano para cadastrar mais impressoras.`,
+      );
+    }
+  }
+
+  // ── Limite de serviços ───────────────────────────────────────────
+
+  // Prioridade: override direto na loja (restaurants.limite_servicos, setado
+  // pelo admin em /admin/empresas — mesmo espírito dos módulos boolean, que
+  // também podem ser ligados/desligados independente do plano) > limite do
+  // plano da assinatura > ilimitado.
+  async verificarLimiteServicos(restaurantId: number) {
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('limite_servicos')
+      .eq('id', restaurantId)
+      .maybeSingle();
+
+    let limite = restaurante?.limite_servicos;
+    let origem = 'da loja';
+
+    if (limite == null) {
+      const assinatura = await this.buscarAssinaturaRaw({ restaurantId });
+      if (!assinatura || assinatura.status === 'cancelada') return; // sem plano/override = sem limite
+      limite = assinatura.planos?.limite_servicos;
+      origem = `do plano "${assinatura.planos?.nome}"`;
+    }
+    if (limite == null) return; // ilimitado
+
+    const { count, error } = await this.supabase.client
+      .from('services')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId)
+      .eq('is_active', true);
+    if (error) throw error;
+
+    if ((count ?? 0) >= limite) {
+      throw new ForbiddenException(
+        `Limite de ${limite} serviços ${origem} atingido. Fale com o suporte para aumentar o limite.`,
       );
     }
   }

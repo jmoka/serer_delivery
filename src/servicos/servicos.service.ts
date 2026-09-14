@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { PlanosService } from '../planos/planos.service';
 
 export interface ServicoBody {
   name?: string;
@@ -21,7 +22,10 @@ const SERVICO_FIELDS = 'id, name, description, image_url, categoria, preco_min, 
 
 @Injectable()
 export class ServicosService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private planos: PlanosService,
+  ) {}
 
   private validarFaixaPreco(body: ServicoBody) {
     if (body.preco_min != null && body.preco_max != null && body.preco_min > body.preco_max) {
@@ -61,6 +65,7 @@ export class ServicosService {
   async criarServico(restaurantId: number, body: ServicoBody) {
     if (!body.name?.trim()) throw new BadRequestException('Informe o nome do serviço');
     this.validarFaixaPreco(body);
+    await this.planos.verificarLimiteServicos(restaurantId);
 
     const { data, error } = await this.supabase.client
       .from('services')

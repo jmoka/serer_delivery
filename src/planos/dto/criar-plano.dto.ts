@@ -28,6 +28,11 @@ export class CriarPlanoDto {
   limite_impressoras?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  limite_servicos?: number;
+
+  @IsOptional()
   @IsNumber()
   @Min(0)
   piso_faturamento?: number;

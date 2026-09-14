@@ -4,9 +4,10 @@ import { RestauranteServicosController } from './restaurante-servicos.controller
 import { ServicosPublicoController } from './servicos-publico.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { PlanosModule } from '../planos/planos.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule],
+  imports: [AuthModule, SupabaseModule, PlanosModule],
   controllers: [RestauranteServicosController, ServicosPublicoController],
   providers: [ServicosService],
   exports: [ServicosService],
