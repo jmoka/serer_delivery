@@ -42,6 +42,16 @@ export class UpdateConfigDto {
   @Min(0)
   motoboy_limite_revisoes?: number;
 
+  // Kill-switch de cadastro público — desliga o botão de quem ainda não tem
+  // conta desse tipo. Loja/motoboy já cadastrado nunca é afetado.
+  @IsOptional()
+  @IsBoolean()
+  permitir_cadastro_motoboy?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  permitir_cadastro_estabelecimento?: boolean;
+
   // Branding do marketplace público (/menu-catalog-product-browse) — validação
   // solta aqui, o whitelisting real de chaves é feito no service.
   @IsOptional()

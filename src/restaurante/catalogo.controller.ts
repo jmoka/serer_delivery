@@ -37,7 +37,13 @@ export class CatalogoController {
       .maybeSingle();
 
     const cfg = (data?.config ?? {}) as Record<string, any>;
-    return { ...DEFAULT_APARENCIA_MARKETPLACE, ...(cfg.aparencia_marketplace ?? {}) };
+    return {
+      ...DEFAULT_APARENCIA_MARKETPLACE,
+      ...(cfg.aparencia_marketplace ?? {}),
+      // Kill-switch de cadastro público, configurado em /admin/configuracoes.
+      permitir_cadastro_motoboy: cfg.permitir_cadastro_motoboy ?? true,
+      permitir_cadastro_estabelecimento: cfg.permitir_cadastro_estabelecimento ?? true,
+    };
   }
 
   @Get('acesso')

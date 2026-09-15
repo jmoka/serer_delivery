@@ -122,6 +122,9 @@ export class PlataformaService {
       plano_dias_tolerancia: cfg.plano_dias_tolerancia ?? 3,
       // Quantas vezes um motoboy recusado pode pedir revisão do cadastro
       motoboy_limite_revisoes: cfg.motoboy_limite_revisoes ?? 2,
+      // Kill-switch de cadastro público (ver GET /r/branding, versão sem auth)
+      permitir_cadastro_motoboy: cfg.permitir_cadastro_motoboy ?? true,
+      permitir_cadastro_estabelecimento: cfg.permitir_cadastro_estabelecimento ?? true,
       // Branding do marketplace público (/menu-catalog-product-browse)
       aparencia_marketplace: { ...DEFAULT_APARENCIA_MARKETPLACE, ...(cfg.aparencia_marketplace ?? {}) },
     };
@@ -163,6 +166,8 @@ export class PlataformaService {
     comissao_padrao_pct?: number;
     plano_dias_tolerancia?: number;
     motoboy_limite_revisoes?: number;
+    permitir_cadastro_motoboy?: boolean;
+    permitir_cadastro_estabelecimento?: boolean;
     aparencia_marketplace?: Record<string, any>;
     stripe_secret_key?: string;
     stripe_webhook_secret?: string;
@@ -200,6 +205,12 @@ export class PlataformaService {
     }
     if (body.motoboy_limite_revisoes !== undefined) {
       novo.motoboy_limite_revisoes = body.motoboy_limite_revisoes;
+    }
+    if (body.permitir_cadastro_motoboy !== undefined) {
+      novo.permitir_cadastro_motoboy = body.permitir_cadastro_motoboy;
+    }
+    if (body.permitir_cadastro_estabelecimento !== undefined) {
+      novo.permitir_cadastro_estabelecimento = body.permitir_cadastro_estabelecimento;
     }
     if (body.aparencia_marketplace !== undefined) {
       novo.aparencia_marketplace = {
