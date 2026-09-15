@@ -14,7 +14,15 @@ export interface MotoboyPeloRestauranteBody {
   email?: string;
   password?: string;
   veiculo_tipo?: string;
+  // 'prestador_servico' (MEI, default) exige CNPJ + documento do CNPJ + contrato
+  // social. 'proprio' é funcionário do estabelecimento, sem CNPJ — motoboy_clt
+  // (só faz sentido junto de 'proprio') marca salário fixo, sem comissão por
+  // corrida (ver ComissaoService.registrarComissaoEntrega).
+  tipo_vinculo?: 'prestador_servico' | 'proprio';
+  motoboy_clt?: boolean;
   cnpj?: string;
+  documento_cnpj?: string;
+  contrato_social?: string;
   veiculo_foto?: string;
   veiculo_documento?: string;
   veiculo_documento_carretinha?: string;
@@ -87,7 +95,7 @@ export class MotoboyService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')
-      .select('bloqueado, motoboy:motoboys(id, name, phone, foto_perfil_url, criado_por_restaurant_id)')
+      .select('bloqueado, motoboy:motoboys(id, name, phone, foto_perfil_url, criado_por_restaurant_id, tipo_vinculo, motoboy_clt)')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'aceito');
     if (error) throw error;
@@ -113,7 +121,9 @@ export class MotoboyService {
   // e-mail é obrigatório porque é a identidade de login.
   async criarPeloRestaurante(restaurantId: number, body: MotoboyPeloRestauranteBody) {
     this.validarDadosMotoboy(body, { exigirNome: true, exigirEmail: true, exigirSenha: true, exigirVeiculo: true });
-    const cnpjNorm = (body.cnpj ?? '').replace(/\D/g, '');
+    const tipoVinculo = body.tipo_vinculo ?? 'prestador_servico';
+    const ehPrestadorServico = tipoVinculo === 'prestador_servico';
+    const cnpjNorm = ehPrestadorServico ? (body.cnpj ?? '').replace(/\D/g, '') : '';
 
     const { data: existente } = await this.supabase.client
       .from('motoboys')
@@ -149,6 +159,8 @@ export class MotoboyService {
         aprovado_em: agora,
         criado_por_restaurant_id: restaurantId,
         veiculo_tipo: body.veiculo_tipo,
+        tipo_vinculo: tipoVinculo,
+        motoboy_clt: !ehPrestadorServico && !!body.motoboy_clt,
         cnpj: cnpjNorm,
       })
       .select('id, name, phone, email')
@@ -162,6 +174,8 @@ export class MotoboyService {
       documento_frente_url,
       documento_verso_url,
       comprovante_endereco_url,
+      documento_cnpj_url,
+      contrato_social_url,
     ] = await Promise.all([
       uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-foto', body.veiculo_foto!),
       uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento', body.veiculo_documento!),
@@ -171,8 +185,11 @@ export class MotoboyService {
       uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-frente', body.documento_frente!),
       body.documento_verso ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-verso', body.documento_verso) : Promise.resolve(null),
       uploadDocumentoMotoboy(this.supabase, motoboy.id, 'comprovante-endereco', body.comprovante_endereco!),
+      ehPrestadorServico ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-cnpj', body.documento_cnpj!) : Promise.resolve(null),
+      ehPrestadorServico ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'contrato-social', body.contrato_social!) : Promise.resolve(null),
     ]);
-    const situacaoMei = await resolverSituacaoMei(this.cnpj, cnpjNorm, body.veiculo_tipo!);
+    // MEI só se aplica a prestador de serviço — motoboy próprio não tem CNPJ pra validar.
+    const situacaoMei = ehPrestadorServico ? await resolverSituacaoMei(this.cnpj, cnpjNorm, body.veiculo_tipo!) : {};
 
     await this.supabase.client
       .from('motoboys')
@@ -183,8 +200,10 @@ export class MotoboyService {
         documento_frente_url,
         documento_verso_url,
         comprovante_endereco_url,
+        documento_cnpj_url,
+        contrato_social_url,
         ...situacaoMei,
-        mei_verificado_em: agora,
+        ...(ehPrestadorServico ? { mei_verificado_em: agora } : {}),
       })
       .eq('id', motoboy.id);
 
@@ -211,8 +230,17 @@ export class MotoboyService {
       throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
     }
     if (opts.exigirVeiculo) {
+      if (body.tipo_vinculo && !['prestador_servico', 'proprio'].includes(body.tipo_vinculo)) {
+        throw new BadRequestException('Tipo de vínculo inválido');
+      }
       if (!VEICULO_TIPOS.includes(body.veiculo_tipo as any)) throw new BadRequestException('Tipo de veículo inválido');
-      if ((body.cnpj ?? '').replace(/\D/g, '').length !== 14) throw new BadRequestException('CNPJ inválido');
+      // CNPJ/documento do CNPJ/contrato social só fazem sentido pra prestador de
+      // serviço (MEI) — motoboy próprio é vínculo direto com o estabelecimento.
+      if ((body.tipo_vinculo ?? 'prestador_servico') === 'prestador_servico') {
+        if ((body.cnpj ?? '').replace(/\D/g, '').length !== 14) throw new BadRequestException('CNPJ inválido');
+        if (!body.documento_cnpj) throw new BadRequestException('Envie o documento do CNPJ');
+        if (!body.contrato_social) throw new BadRequestException('Envie o contrato social');
+      }
       if (!body.veiculo_foto) throw new BadRequestException('Envie a foto do veículo');
       if (!body.veiculo_documento) throw new BadRequestException('Envie o documento do veículo (CRLV)');
       if (body.veiculo_tipo === 'carretinha' && !body.veiculo_documento_carretinha) {

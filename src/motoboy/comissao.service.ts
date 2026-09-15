@@ -32,6 +32,15 @@ export class ComissaoService {
       .maybeSingle();
     if (existente) return existente;
 
+    // Motoboy CLT recebe salário fixo, não comissão por corrida — o frete
+    // continua sendo cobrado do cliente normalmente, só não gera repasse.
+    const { data: motoboy } = await this.supabase.client
+      .from('motoboys')
+      .select('motoboy_clt')
+      .eq('id', motoboyId)
+      .maybeSingle();
+    if (motoboy?.motoboy_clt) return null;
+
     const { data: restaurant } = await this.supabase.client
       .from('restaurants')
       .select(
