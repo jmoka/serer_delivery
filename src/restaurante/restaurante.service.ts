@@ -2174,6 +2174,19 @@ export class RestauranteService {
     await this.supabase.client.from('restaurants')
       .update({ saldo_caixa: Math.max(0, dinheiro_contado) }).eq('id', restaurantId);
 
+    // Fechar o caixa é fim de expediente: desativa TODO garçom do estabelecimento,
+    // não só os que tinham turno aberto (um garçom pode estar logado sem nunca ter
+    // aberto uma comanda, e mesmo assim precisa reativação manual pro próximo turno).
+    // Encerra o turno de quem ainda estava aberto primeiro (gera o resumo/histórico
+    // do dia); o UPDATE em massa que segue cobre geral, inclusive quem não tinha turno.
+    for (const turno of situacao.garcons_turno_aberto) {
+      await this.garcomTurnoService.encerrarTurno(turno.garcom_id, restaurantId, {
+        conferido: false,
+        observacao: 'Turno encerrado automaticamente no fechamento do caixa',
+      }).catch(() => {}); // falha isolada num garçom não pode travar o fechamento do caixa
+    }
+    await this.supabase.client.from('garcons').update({ ativo: false }).eq('restaurant_id', restaurantId);
+
     return {
       fechamento: {
         id: caixa.id, aberto_em: caixa.aberto_em, fechado_em, nome_operador: caixa.nome_operador,
