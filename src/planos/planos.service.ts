@@ -394,6 +394,17 @@ export class PlanosService {
       .select()
       .single();
     if (error) throw error;
+
+    // Cancelar a assinatura sem cancelar as faturas em aberto deixava a loja
+    // "sem plano" no painel mas ainda com cobrança/bloqueio pendente de um
+    // plano que não existe mais — some com o rastro, não com o histórico.
+    const { error: faturasErro } = await this.supabase.client
+      .from('plano_faturas')
+      .update({ status: 'cancelada', atualizado_em: new Date().toISOString() })
+      .eq('assinatura_id', existente.id)
+      .in('status', ['pendente', 'vencida']);
+    if (faturasErro) throw faturasErro;
+
     return data;
   }
 
@@ -495,7 +506,7 @@ export class PlanosService {
   async sincronizarPeriodo(titular: Titular, forcar = false) {
     const assinatura = await this.buscarAssinaturaRaw(titular);
     if (!assinatura || assinatura.status === 'cancelada') {
-      return { bloqueado: false, dias_atraso: 0, fatura_pendente_id: null, plano_nome: null, proxima_cobranca: null };
+      return { bloqueado: false, dias_atraso: 0, fatura_pendente_id: null, fatura_pendente_vencimento: null, plano_nome: null, proxima_cobranca: null };
     }
 
     const agora = new Date();
@@ -642,8 +653,10 @@ export class PlanosService {
     let bloqueado = false;
     let diasAtraso = 0;
     let faturaPendenteId: number | null = null;
+    let faturaPendenteVencimento: string | null = null;
     if ((pendentes ?? []).length > 0) {
       faturaPendenteId = pendentes[0].id;
+      faturaPendenteVencimento = pendentes[0].vencimento;
       const vencimento = new Date(pendentes[0].vencimento);
       diasAtraso = Math.max(0, Math.floor((agora.getTime() - vencimento.getTime()) / 86400000));
       bloqueado = diasAtraso > tolerancia;
@@ -655,6 +668,7 @@ export class PlanosService {
       bloqueado,
       dias_atraso: diasAtraso,
       fatura_pendente_id: faturaPendenteId,
+      fatura_pendente_vencimento: faturaPendenteVencimento,
       plano_nome: plano.nome,
       proxima_cobranca: proximaCobranca.toISOString(),
     };
@@ -793,6 +807,96 @@ export class PlanosService {
     await this.aplicarTrocaSeNecessario(data);
     await this.elevarDonoSeNecessario(data.restaurant_id);
 
+    return data;
+  }
+
+  // Cancela sem apagar — mantém o registro histórico, mas some da checagem
+  // de bloqueio/cobrança (sincronizarPeriodo só olha 'pendente'/'vencida').
+  async cancelarFatura(id: number) {
+    const fatura = await this.buscarFatura(id);
+    if (fatura.status === 'paga') throw new BadRequestException('Fatura já paga não pode ser cancelada');
+    if (fatura.status === 'cancelada') return fatura;
+
+    const { data, error } = await this.supabase.client
+      .from('plano_faturas')
+      .update({ status: 'cancelada', atualizado_em: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  // Hard delete — só pra apagar fatura criada por engano (teste, valor errado
+  // digitado). Fatura paga nunca pode ser removida: é registro financeiro.
+  async removerFatura(id: number) {
+    const fatura = await this.buscarFatura(id);
+    if (fatura.status === 'paga') throw new BadRequestException('Fatura já paga não pode ser excluída');
+
+    const { error } = await this.supabase.client.from('plano_faturas').delete().eq('id', id);
+    if (error) throw error;
+  }
+
+  // Corrige valor/vencimento de uma fatura ainda em aberto sem precisar
+  // cancelar e recriar — fatura paga/cancelada é registro fechado.
+  async atualizarFatura(id: number, dados: { valor?: number; vencimento?: string }) {
+    const fatura = await this.buscarFatura(id);
+    if (fatura.status === 'paga' || fatura.status === 'cancelada') {
+      throw new BadRequestException('Só é possível editar fatura pendente ou vencida');
+    }
+
+    const patch: Record<string, any> = { atualizado_em: new Date().toISOString() };
+    if (dados.valor != null) patch.valor = dados.valor;
+    if (dados.vencimento != null) patch.vencimento = dados.vencimento;
+
+    const { data, error } = await this.supabase.client
+      .from('plano_faturas')
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  // Fatura avulsa fora do ciclo automático — cobrança extra, acordo com o
+  // cliente, correção de algo que o ciclo padrão não cobriria.
+  async criarFaturaManual(dto: {
+    restaurant_id?: number;
+    instalacao_id?: number;
+    valor: number;
+    vencimento: string;
+    periodo_inicio: string;
+    periodo_fim: string;
+  }) {
+    const titular: Titular = dto.restaurant_id
+      ? { restaurantId: dto.restaurant_id }
+      : { instalacaoId: dto.instalacao_id! };
+    const assinatura = await this.buscarAssinaturaRaw(titular);
+    if (!assinatura) throw new NotFoundException('Assinatura não encontrada pra esse titular');
+
+    const novaFatura: Record<string, any> = {
+      assinatura_id: assinatura.id,
+      periodo_inicio: dto.periodo_inicio,
+      periodo_fim: dto.periodo_fim,
+      valor: dto.valor,
+      status: 'pendente',
+      vencimento: dto.vencimento,
+    };
+    if (dto.restaurant_id) novaFatura.restaurant_id = dto.restaurant_id;
+    else novaFatura.instalacao_id = dto.instalacao_id;
+
+    const { data, error } = await this.supabase.client
+      .from('plano_faturas')
+      .insert(novaFatura)
+      .select()
+      .single();
+    if (error) {
+      if (String(error.message).includes('duplicate')) {
+        throw new ConflictException('Já existe fatura com esse mesmo período pra essa assinatura');
+      }
+      throw error;
+    }
     return data;
   }
 

@@ -5,6 +5,8 @@ import { CriarPlanoDto } from './dto/criar-plano.dto';
 import { AtualizarPlanoDto } from './dto/atualizar-plano.dto';
 import { AtribuirAssinaturaDto } from './dto/atribuir-assinatura.dto';
 import { AtualizarCortesiaDto } from './dto/atualizar-cortesia.dto';
+import { CriarFaturaManualDto } from './dto/criar-fatura-manual.dto';
+import { AtualizarFaturaDto } from './dto/atualizar-fatura.dto';
 
 @Controller('planos')
 @UseGuards(AdminGuard)
@@ -66,6 +68,26 @@ export class PlanosAdminController {
   @Patch('faturas/:id/marcar-paga')
   marcarFaturaPaga(@Param('id', ParseIntPipe) id: number) {
     return this.service.marcarFaturaPaga(id);
+  }
+
+  @Post('faturas')
+  criarFaturaManual(@Body() body: CriarFaturaManualDto) {
+    return this.service.criarFaturaManual(body);
+  }
+
+  @Patch('faturas/:id')
+  atualizarFatura(@Param('id', ParseIntPipe) id: number, @Body() body: AtualizarFaturaDto) {
+    return this.service.atualizarFatura(id, body);
+  }
+
+  @Patch('faturas/:id/cancelar')
+  cancelarFatura(@Param('id', ParseIntPipe) id: number) {
+    return this.service.cancelarFatura(id);
+  }
+
+  @Delete('faturas/:id')
+  removerFatura(@Param('id', ParseIntPipe) id: number) {
+    return this.service.removerFatura(id);
   }
 
   @Get()
