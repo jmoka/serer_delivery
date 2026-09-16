@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { SupabaseService } from '../supabase/supabase.service';
+import { GarcomTurnoService } from './garcom-turno.service';
 
 export interface CriarGarcomBody {
   nome: string;
@@ -28,7 +29,7 @@ export interface ComissaoConfigBody {
 
 @Injectable()
 export class GarconsService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(private supabase: SupabaseService, private turnoService: GarcomTurnoService) {}
 
   private gerarLoginKey(): string {
     return crypto.randomBytes(4).toString('hex');
@@ -172,6 +173,17 @@ export class GarconsService {
       .eq('id', id);
     if (error) throw error;
     return { ok: true };
+  }
+
+  // Força o encerramento do turno de trabalho — usado pelo dono no fechamento do
+  // caixa quando o garçom esqueceu de dar "Sair" no portal dele (turno some da
+  // lista de "ativos" mesmo sem o garçom ter confirmado, por isso conferido:false).
+  async encerrarTurnoComoAdmin(id: number, restaurantId: number) {
+    await this.garantirPertence(id, restaurantId);
+    return this.turnoService.encerrarTurno(id, restaurantId, {
+      conferido: false,
+      observacao: 'Turno encerrado pelo estabelecimento ao fechar o caixa',
+    });
   }
 
   async garconsOnline(restaurantId: number) {

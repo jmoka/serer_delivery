@@ -11,6 +11,19 @@ import { SupabaseService } from '../supabase/supabase.service';
 export class GarcomTurnoService {
   constructor(private supabase: SupabaseService) {}
 
+  // Todo turno ainda aberto do restaurante — usado no fechamento do caixa pra avisar
+  // o dono que tem garçom "trabalhando" sem ter dado Sair no portal dele.
+  async listarTurnosAbertos(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('garcom_turnos')
+      .select('id, garcom_id, aberto_em, garcons(nome)')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aberto')
+      .order('aberto_em', { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  }
+
   async turnoAtivo(garcomId: number) {
     const { data } = await this.supabase.client
       .from('garcom_turnos')
@@ -198,6 +211,17 @@ export class GarcomTurnoService {
       .select()
       .single();
     if (error) throw error;
+
+    // Encerrar o turno desativa o acesso do garçom (garcom.guard já barra na hora,
+    // não só no próximo login) — o dono precisa reativar explicitamente (tela de
+    // garçons) antes do próximo turno. Cobre tanto o garçom encerrando sozinho
+    // (conferência no portal) quanto o dono forçando ao fechar o caixa, já que
+    // os dois caminhos passam por aqui.
+    await this.supabase.client
+      .from('garcons')
+      .update({ ativo: false })
+      .eq('id', garcomId);
+
     return data;
   }
 

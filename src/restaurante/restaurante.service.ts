@@ -12,6 +12,7 @@ import { CombosService } from '../combos/combos.service';
 import { PlanosService } from '../planos/planos.service';
 import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { RedisService } from '../redis/redis.service';
+import { GarcomTurnoService } from '../salao/garcom-turno.service';
 
 const TTL_MINHA_EMPRESA = 15;
 
@@ -28,6 +29,7 @@ export class RestauranteService {
     private combosService: CombosService,
     private planos: PlanosService,
     private redis: RedisService,
+    private garcomTurnoService: GarcomTurnoService,
   ) {}
 
   // Cacheada porque o header do painel (menu lateral) monta 3 hooks que bateriam
@@ -2027,21 +2029,31 @@ export class RestauranteService {
     return this.getCaixa(restaurantId);
   }
 
-  async fecharCaixa(restaurantId: number, body?: { dinheiro_contado?: number; permitir_pendencias?: boolean }) {
-    const { data: caixa } = await this.supabase.client
-      .from('caixas').select('*').eq('restaurant_id', restaurantId)
-      .in('status', ['aberto', 'expirado']).maybeSingle();
-
-    if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
-
-    // Escopado por restaurant_id (não caixa_id) — igual mesasAbertas abaixo. Uma comanda/pedido
-    // deixado pendente num fechamento anterior ("fiado, cobrado no próximo caixa aberto") continua
-    // com caixa_id apontando pro caixa antigo já fechado; filtrar por caixa_id do caixa atual fazia
-    // essas pendências carregadas ficarem invisíveis pra sempre nos fechamentos seguintes.
-    const { data: pedidosAbertos } = await this.supabase.client
-      .from('orders').select('id, status, total')
+  // Levantamento completo do que trava (ou só chama atenção) no fechamento do caixa —
+  // pedidos delivery/retirada em aberto, comandas/mesas do salão, itens ainda em
+  // produção e garçons que esqueceram de encerrar o turno. Reaproveitado tanto pelo
+  // preview (GET, mostrado assim que o dono clica em "Fechar Caixa", antes de tentar
+  // de fato) quanto pelo 409 do fecharCaixa (proteção contra corrida — algo abriu
+  // entre o preview e a confirmação).
+  async situacaoFechamento(restaurantId: number) {
+    // Escopado por restaurant_id (não caixa_id) — uma comanda/pedido deixado pendente
+    // num fechamento anterior ("fiado, cobrado no próximo caixa aberto") continua com
+    // caixa_id apontando pro caixa antigo já fechado; filtrar por caixa_id do caixa
+    // atual fazia essas pendências carregadas ficarem invisíveis pra sempre nos
+    // fechamentos seguintes.
+    const { data: pedidosAbertosRaw } = await this.supabase.client
+      .from('orders').select('id, status, total, retirada_balcao, created_at')
       .eq('restaurant_id', restaurantId)
       .in('status', this.STATUS_ABERTOS);
+
+    // Retirada no balcão é tecnicamente um pedido "delivery" (canal != presencial),
+    // mas pro dono decidir o fechamento é uma pendência bem diferente de "ainda a
+    // caminho com motoboy" — separa em lista própria. Mantém TODOS os status abertos
+    // (não só 'ready') pra não sumir com pendência real da contagem/listagem — o
+    // front destaca visualmente os que já estão prontos (aguardando o cliente ser
+    // chamado) dos que ainda estão em preparo.
+    const pedidosDelivery = (pedidosAbertosRaw ?? []).filter((p: any) => !p.retirada_balcao);
+    const pedidosBalcao = (pedidosAbertosRaw ?? []).filter((p: any) => p.retirada_balcao);
 
     const { data: comandasAbertas } = await this.supabase.client
       .from('orders')
@@ -2068,36 +2080,62 @@ export class RestauranteService {
       .eq('orders.canal', 'presencial')
       .in('status', ['enviado', 'preparando']);
 
-    const temPendencias = (pedidosAbertos ?? []).length > 0 || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0 || (itensEmPreparo ?? []).length > 0;
+    // Recorte de "ainda em produção" dentro dos pedidos delivery/retirada — parados
+    // em 'confirmed' (Aguardando Preparo) ou 'preparing' (Em Preparo). É só informativo
+    // pro operador decidir o que avançar antes de fechar; itens_em_preparo (acima) já é,
+    // por si só, motivo de bloqueio (ver temPendencias).
+    const pedidosEmPreparo = (pedidosAbertosRaw ?? []).filter((p: any) => p.status === 'confirmed' || p.status === 'preparing');
+
+    // Turno de garçom aberto não bloqueia o fechamento (não é pendência financeira),
+    // mas o dono precisa saber quem "ainda está trabalhando" pra encerrar o turno na
+    // hora, em vez de descobrir isso só no relatório do dia seguinte.
+    const garconsTurnoAberto = await this.garcomTurnoService.listarTurnosAbertos(restaurantId);
+
+    const temPendencias = pedidosDelivery.length > 0 || pedidosBalcao.length > 0
+      || (comandasAbertas ?? []).length > 0 || (mesasAbertas ?? []).length > 0 || (itensEmPreparo ?? []).length > 0;
+
+    // Shape em snake_case — igual ao payload do 409 de fecharCaixa (ver abaixo) — pro
+    // front consumir os dois de um jeito só, seja no preview (GET) ou na corrida do POST.
+    return {
+      tem_pendencias: temPendencias,
+      pedidos: pedidosDelivery,
+      pedidos_balcao: pedidosBalcao,
+      comandas: comandasAbertas ?? [],
+      mesas: mesasAbertas ?? [],
+      itens_em_preparo: itensEmPreparo ?? [],
+      pedidos_em_preparo: pedidosEmPreparo,
+      garcons_turno_aberto: garconsTurnoAberto,
+    };
+  }
+
+  async fecharCaixa(restaurantId: number, body?: { dinheiro_contado?: number; permitir_pendencias?: boolean }) {
+    const { data: caixa } = await this.supabase.client
+      .from('caixas').select('*').eq('restaurant_id', restaurantId)
+      .in('status', ['aberto', 'expirado']).maybeSingle();
+
+    if (!caixa) throw new NotFoundException('Nenhum caixa aberto');
+
+    const situacao = await this.situacaoFechamento(restaurantId);
+    const { tem_pendencias: temPendencias, comandas: comandasAbertas, mesas: mesasAbertas, itens_em_preparo: itensEmPreparo } = situacao;
 
     if (temPendencias && !body?.permitir_pendencias) {
-      // Recorte de "ainda em produção" dentro das pendências acima — pedidos delivery/balcão
-      // parados em 'confirmed' (Aguardando Preparo) ou 'preparing' (Em Preparo). É só informativo
-      // pro operador decidir o que avançar antes de fechar; itens_em_preparo (acima) já é, por si
-      // só, motivo de bloqueio (ver temPendencias).
-      const pedidosEmPreparo = (pedidosAbertos ?? []).filter((p: any) => p.status === 'confirmed' || p.status === 'preparing');
-
       throw new ConflictException({
         message: 'Existem pendências em aberto: feche os pedidos, comandas e mesas antes de fechar o caixa',
-        pedidos_abertos: pedidosAbertos?.length ?? 0,
-        pedidos: pedidosAbertos ?? [],
-        comandas_abertas: comandasAbertas?.length ?? 0,
-        comandas: comandasAbertas ?? [],
-        mesas_abertas: mesasAbertas?.length ?? 0,
-        mesas: mesasAbertas ?? [],
-        pedidos_em_preparo: pedidosEmPreparo,
-        itens_em_preparo: itensEmPreparo ?? [],
+        pedidos_abertos: situacao.pedidos.length,
+        comandas_abertas: comandasAbertas.length,
+        mesas_abertas: mesasAbertas.length,
+        ...situacao,
       });
     }
 
     // Mesa não pode ficar travada esperando o caixa reabrir — libera pro próximo
     // cliente e a pendência (se houver comanda em aberto) segue como fiado,
     // cobrada no caixa aberto quando o pagamento acontecer.
-    if ((mesasAbertas ?? []).length > 0) {
+    if (mesasAbertas.length > 0) {
       await this.supabase.client
         .from('mesas')
         .update({ status: 'livre' })
-        .in('id', (mesasAbertas ?? []).map((m) => m.id));
+        .in('id', mesasAbertas.map((m) => m.id));
     }
 
     const { data: todosPedidos } = await this.supabase.client
@@ -2125,9 +2163,7 @@ export class RestauranteService {
       .update({
         status: 'fechado', fechado_em, resumo, destinacao_fechamento,
         fechado_com_pendencias: temPendencias,
-        pendencias_fechamento: temPendencias
-          ? { pedidos: pedidosAbertos ?? [], comandas: comandasAbertas ?? [], mesas: mesasAbertas ?? [], itens_em_preparo: itensEmPreparo ?? [] }
-          : null,
+        pendencias_fechamento: temPendencias ? situacao : null,
       })
       .eq('id', caixa.id);
 

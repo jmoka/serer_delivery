@@ -282,6 +282,13 @@ export class RestauranteController {
     return this.service.getCaixaHistorico(req.restaurantId);
   }
 
+  // Preview do que vai aparecer/travar o fechamento — chamado assim que o dono clica
+  // em "Fechar Caixa", antes de qualquer tentativa, pra já mostrar tudo de uma vez.
+  @Get('caixa/situacao-fechamento')
+  situacaoFechamentoCaixa(@Req() req: any) {
+    return this.service.situacaoFechamento(req.restaurantId);
+  }
+
   @Get('caixa/:id')
   getCaixaDetalhe(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.getCaixaDetalhe(req.restaurantId, id);
