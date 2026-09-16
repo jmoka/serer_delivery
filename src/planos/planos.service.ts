@@ -504,9 +504,29 @@ export class PlanosService {
   // forcar=true também gera fatura do período atual mesmo que ainda não tenha
   // fechado (usado pelo botão "Renovar agora"/"Gerar fatura" sob demanda).
   async sincronizarPeriodo(titular: Titular, forcar = false) {
+    // Bloqueio manual do admin (/admin/empresas > Bloquear) é independente do ciclo
+    // de cobrança — vale mesmo sem assinatura/fatura pendente, e nunca pode ser
+    // "esquecido" por essa função só olhar pra atraso de pagamento (bug real visto
+    // em produção: empresa bloqueada pelo admin continuava com acesso total ao
+    // painel porque só o atraso de fatura chegava a virar `bloqueado`).
+    let bloqueadoAdmin = false;
+    if ('restaurantId' in titular) {
+      const { data: restaurante } = await this.supabase.client
+        .from('restaurants').select('bloqueado').eq('id', titular.restaurantId).maybeSingle();
+      bloqueadoAdmin = !!restaurante?.bloqueado;
+    }
+
     const assinatura = await this.buscarAssinaturaRaw(titular);
     if (!assinatura || assinatura.status === 'cancelada') {
-      return { bloqueado: false, dias_atraso: 0, fatura_pendente_id: null, fatura_pendente_vencimento: null, plano_nome: null, proxima_cobranca: null };
+      return {
+        bloqueado: bloqueadoAdmin,
+        admin_bloqueado: bloqueadoAdmin,
+        dias_atraso: 0,
+        fatura_pendente_id: null,
+        fatura_pendente_vencimento: null,
+        plano_nome: null,
+        proxima_cobranca: null,
+      };
     }
 
     const agora = new Date();
@@ -665,7 +685,8 @@ export class PlanosService {
     const proximaCobranca = somarMeses(ultimoFimFaturado ?? inicioPeriodo, meses);
 
     return {
-      bloqueado,
+      bloqueado: bloqueado || bloqueadoAdmin,
+      admin_bloqueado: bloqueadoAdmin,
       dias_atraso: diasAtraso,
       fatura_pendente_id: faturaPendenteId,
       fatura_pendente_vencimento: faturaPendenteVencimento,
