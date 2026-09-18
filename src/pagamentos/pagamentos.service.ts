@@ -145,18 +145,25 @@ export class PagamentosService {
 
     const splits = splitConfig ? this.buildSplits(valorCentavos, splitConfig) : undefined;
 
-    const resposta = await pagbank.criarOrdemPix({
-      reference_id: refId,
-      valor_centavos: valorCentavos,
-      customer: {
-        name: body.customer.name,
-        email: body.customer.email,
-        tax_id: this.limparCpf(body.customer.tax_id),
-      },
-      itens: [{ name: `Pedido #${pedido.id}`, quantity: 1, unit_amount: valorCentavos }],
-      webhook_url: webhookUrl,
-      splits,
-    });
+    let resposta: any;
+    try {
+      resposta = await pagbank.criarOrdemPix({
+        reference_id: refId,
+        valor_centavos: valorCentavos,
+        customer: {
+          name: body.customer.name,
+          email: body.customer.email,
+          tax_id: this.limparCpf(body.customer.tax_id),
+        },
+        itens: [{ name: `Pedido #${pedido.id}`, quantity: 1, unit_amount: valorCentavos }],
+        webhook_url: webhookUrl,
+        splits,
+      });
+    } catch (e: any) {
+      // Erro cru da PagBank (Error simples, não HttpException) viraria 500 genérico
+      // sem detalhe nenhum pro cliente — converte pra 400 com a mensagem real.
+      throw new BadRequestException(e?.message ?? 'Falha ao gerar o PIX na PagBank');
+    }
 
     const qrCode = resposta?.qr_codes?.[0];
     const pixCode = qrCode?.text ?? null;
@@ -212,21 +219,26 @@ export class PagamentosService {
 
     const splits = splitConfig ? this.buildSplits(valorCentavos, splitConfig) : undefined;
 
-    const resposta = await pagbank.criarOrdemCartao({
-      reference_id: refId,
-      valor_centavos: valorCentavos,
-      customer: {
-        name: body.customer.name,
-        email: body.customer.email,
-        tax_id: this.limparCpf(body.customer.tax_id),
-      },
-      itens: [{ name: `Pedido #${pedido.id}`, quantity: 1, unit_amount: valorCentavos }],
-      card_encrypted: body.card_encrypted,
-      parcelas: body.parcelas ?? 1,
-      tipo,
-      webhook_url: webhookUrl,
-      splits,
-    });
+    let resposta: any;
+    try {
+      resposta = await pagbank.criarOrdemCartao({
+        reference_id: refId,
+        valor_centavos: valorCentavos,
+        customer: {
+          name: body.customer.name,
+          email: body.customer.email,
+          tax_id: this.limparCpf(body.customer.tax_id),
+        },
+        itens: [{ name: `Pedido #${pedido.id}`, quantity: 1, unit_amount: valorCentavos }],
+        card_encrypted: body.card_encrypted,
+        parcelas: body.parcelas ?? 1,
+        tipo,
+        webhook_url: webhookUrl,
+        splits,
+      });
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Falha ao processar o cartão na PagBank');
+    }
 
     const charge = resposta?.charges?.[0];
     const statusPagamento = STATUS_PAGOS.includes(charge?.status) ? 'paid' : 'pending';
