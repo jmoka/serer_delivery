@@ -17,9 +17,14 @@ export interface MotoboyPeloRestauranteBody {
   // 'prestador_servico' (MEI, default) exige CNPJ + documento do CNPJ + contrato
   // social. 'proprio' é funcionário do estabelecimento, sem CNPJ — motoboy_clt
   // (só faz sentido junto de 'proprio') marca salário fixo, sem comissão por
-  // corrida (ver ComissaoService.registrarComissaoEntrega).
-  tipo_vinculo?: 'prestador_servico' | 'proprio';
+  // corrida (ver ComissaoService.registrarComissaoEntrega). 'estabelecimento' é
+  // o próprio dono fazendo a entrega — dispensa todos os documentos de
+  // veículo/CNH/comprovante. Motoboy próprio + CLT ainda escolhe o transporte:
+  // 'proprio' (veículo dele, documentos obrigatórios) ou 'empresa' (veículo do
+  // estabelecimento, documentos dispensados).
+  tipo_vinculo?: 'prestador_servico' | 'proprio' | 'estabelecimento';
   motoboy_clt?: boolean;
+  transporte_clt?: 'proprio' | 'empresa';
   cnpj?: string;
   documento_cnpj?: string;
   contrato_social?: string;
@@ -90,12 +95,20 @@ export class MotoboyService {
     return data?.signedUrl ?? null;
   }
 
+  // Estabelecimento (dono entrega) e próprio+CLT com transporte da empresa
+  // dispensam os documentos de veículo/CNH/comprovante.
+  private exigeDocumentos(tipoVinculo: string, motoboyClt?: boolean, transporteClt?: string): boolean {
+    if (tipoVinculo === 'estabelecimento') return false;
+    if (tipoVinculo === 'proprio' && motoboyClt && transporteClt === 'empresa') return false;
+    return true;
+  }
+
   // ── Lado restaurante: gestão de afiliados ──────────────────────────
 
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('motoboy_estabelecimentos')
-      .select('bloqueado, motoboy:motoboys(id, name, phone, foto_perfil_url, criado_por_restaurant_id, tipo_vinculo, motoboy_clt)')
+      .select('bloqueado, motoboy:motoboys(id, name, phone, foto_perfil_url, criado_por_restaurant_id, tipo_vinculo, motoboy_clt, transporte_clt)')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'aceito');
     if (error) throw error;
@@ -123,6 +136,10 @@ export class MotoboyService {
     this.validarDadosMotoboy(body, { exigirNome: true, exigirEmail: true, exigirSenha: true, exigirVeiculo: true });
     const tipoVinculo = body.tipo_vinculo ?? 'prestador_servico';
     const ehPrestadorServico = tipoVinculo === 'prestador_servico';
+    const ehProprio = tipoVinculo === 'proprio';
+    const motoboyClt = ehProprio && !!body.motoboy_clt;
+    const transporteClt = motoboyClt ? (body.transporte_clt ?? 'proprio') : null;
+    const exigeDocumentos = this.exigeDocumentos(tipoVinculo, motoboyClt, transporteClt ?? undefined);
     const cnpjNorm = ehPrestadorServico ? (body.cnpj ?? '').replace(/\D/g, '') : '';
 
     const { data: existente } = await this.supabase.client
@@ -160,7 +177,8 @@ export class MotoboyService {
         criado_por_restaurant_id: restaurantId,
         veiculo_tipo: body.veiculo_tipo,
         tipo_vinculo: tipoVinculo,
-        motoboy_clt: !ehPrestadorServico && !!body.motoboy_clt,
+        motoboy_clt: motoboyClt,
+        transporte_clt: transporteClt,
         cnpj: cnpjNorm,
       })
       .select('id, name, phone, email')
@@ -177,14 +195,16 @@ export class MotoboyService {
       documento_cnpj_url,
       contrato_social_url,
     ] = await Promise.all([
-      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-foto', body.veiculo_foto!),
-      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento', body.veiculo_documento!),
-      body.veiculo_documento_carretinha
+      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-foto', body.veiculo_foto!) : Promise.resolve(null),
+      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento', body.veiculo_documento!) : Promise.resolve(null),
+      exigeDocumentos && body.veiculo_documento_carretinha
         ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento-carretinha', body.veiculo_documento_carretinha)
         : Promise.resolve(null),
-      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-frente', body.documento_frente!),
-      body.documento_verso ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-verso', body.documento_verso) : Promise.resolve(null),
-      uploadDocumentoMotoboy(this.supabase, motoboy.id, 'comprovante-endereco', body.comprovante_endereco!),
+      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-frente', body.documento_frente!) : Promise.resolve(null),
+      exigeDocumentos && body.documento_verso
+        ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-verso', body.documento_verso)
+        : Promise.resolve(null),
+      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'comprovante-endereco', body.comprovante_endereco!) : Promise.resolve(null),
       ehPrestadorServico ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-cnpj', body.documento_cnpj!) : Promise.resolve(null),
       ehPrestadorServico ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'contrato-social', body.contrato_social!) : Promise.resolve(null),
     ]);
@@ -230,24 +250,32 @@ export class MotoboyService {
       throw new BadRequestException('Senha deve ter no mínimo 8 caracteres');
     }
     if (opts.exigirVeiculo) {
-      if (body.tipo_vinculo && !['prestador_servico', 'proprio'].includes(body.tipo_vinculo)) {
+      if (body.tipo_vinculo && !['prestador_servico', 'proprio', 'estabelecimento'].includes(body.tipo_vinculo)) {
         throw new BadRequestException('Tipo de vínculo inválido');
       }
+      if (body.transporte_clt && !['proprio', 'empresa'].includes(body.transporte_clt)) {
+        throw new BadRequestException('Tipo de transporte inválido');
+      }
       if (!VEICULO_TIPOS.includes(body.veiculo_tipo as any)) throw new BadRequestException('Tipo de veículo inválido');
+      const tipoVinculo = body.tipo_vinculo ?? 'prestador_servico';
       // CNPJ/documento do CNPJ/contrato social só fazem sentido pra prestador de
-      // serviço (MEI) — motoboy próprio é vínculo direto com o estabelecimento.
-      if ((body.tipo_vinculo ?? 'prestador_servico') === 'prestador_servico') {
+      // serviço (MEI) — motoboy próprio/estabelecimento é vínculo direto com o estabelecimento.
+      if (tipoVinculo === 'prestador_servico') {
         if ((body.cnpj ?? '').replace(/\D/g, '').length !== 14) throw new BadRequestException('CNPJ inválido');
         if (!body.documento_cnpj) throw new BadRequestException('Envie o documento do CNPJ');
         if (!body.contrato_social) throw new BadRequestException('Envie o contrato social');
       }
-      if (!body.veiculo_foto) throw new BadRequestException('Envie a foto do veículo');
-      if (!body.veiculo_documento) throw new BadRequestException('Envie o documento do veículo (CRLV)');
-      if (body.veiculo_tipo === 'carretinha' && !body.veiculo_documento_carretinha) {
-        throw new BadRequestException('Envie o documento da carretinha (CRLV), além do documento do carro');
+      // Estabelecimento (dono entrega) e próprio+CLT com transporte da empresa
+      // dispensam os documentos de veículo/CNH/comprovante.
+      if (this.exigeDocumentos(tipoVinculo, tipoVinculo === 'proprio' && !!body.motoboy_clt, body.transporte_clt)) {
+        if (!body.veiculo_foto) throw new BadRequestException('Envie a foto do veículo');
+        if (!body.veiculo_documento) throw new BadRequestException('Envie o documento do veículo (CRLV)');
+        if (body.veiculo_tipo === 'carretinha' && !body.veiculo_documento_carretinha) {
+          throw new BadRequestException('Envie o documento da carretinha (CRLV), além do documento do carro');
+        }
+        if (!body.documento_frente) throw new BadRequestException('Envie a CNH do entregador');
+        if (!body.comprovante_endereco) throw new BadRequestException('Envie o comprovante de endereço');
       }
-      if (!body.documento_frente) throw new BadRequestException('Envie a CNH do entregador');
-      if (!body.comprovante_endereco) throw new BadRequestException('Envie o comprovante de endereço');
     }
   }
 
