@@ -40,6 +40,30 @@ export class PagamentosService {
     return data;
   }
 
+  // customer.phones passou a ser exigido pela PagBank na Orders API (Pix v2,
+  // reference/criar-pedido-com-qr-code-pix-v2) — busca o telefone salvo do
+  // cliente e converte do formato E.164 (+5511999998888) pro formato
+  // country/area/number que a PagBank espera. Sem telefone salvo, retorna
+  // undefined (omite o campo em vez de inventar um número).
+  private async buscarTelefonePagBank(userId: string) {
+    const { data } = await this.supabase.client
+      .from('customers')
+      .select('phone_e164')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const digitos = (data?.phone_e164 ?? '').replace(/\D/g, '');
+    // +55 (2) + DDD (2) + número (8 ou 9) = 12 ou 13 dígitos total
+    if (digitos.length < 12) return undefined;
+
+    return [{
+      country: digitos.slice(0, 2),
+      area: digitos.slice(2, 4),
+      number: digitos.slice(4),
+      type: 'MOBILE' as const,
+    }];
+  }
+
   private async getPagBankClient(restaurantId: number): Promise<ClienteInfo> {
     // Busca config do restaurante e config global da plataforma em paralelo
     const [{ data: restData }, { data: platData }] = await Promise.all([
@@ -149,6 +173,7 @@ export class PagamentosService {
     const { client: pagbank, webhookUrl, splitConfig } = await this.getPagBankClient(pedido.restaurant_id);
 
     const splits = splitConfig ? this.buildSplits(valorCentavos, splitConfig) : undefined;
+    const phones = await this.buscarTelefonePagBank(callerUserId);
 
     let resposta: any;
     try {
@@ -159,6 +184,7 @@ export class PagamentosService {
           name: body.customer.name,
           email: body.customer.email,
           tax_id: this.limparCpf(body.customer.tax_id),
+          phones,
         },
         itens: [{ name: `Pedido #${pedido.id}`, quantity: 1, unit_amount: valorCentavos }],
         webhook_url: webhookUrl,
@@ -170,9 +196,11 @@ export class PagamentosService {
       throw new BadRequestException(e?.message ?? 'Falha ao gerar o PIX na PagBank');
     }
 
-    const qrCode = resposta?.qr_codes?.[0];
-    const pixCode = qrCode?.text ?? null;
-    const pixQrUrl = qrCode?.links?.find((l: any) => l.media === 'image/png')?.href ?? null;
+    // Pix v2: QR code agora vem em charges[0].qr_code (antes era qr_codes[] solto
+    // na ordem) — ver reference/criar-pedido-com-qr-code-pix-v2.
+    const charge = resposta?.charges?.[0];
+    const pixCode = charge?.qr_code?.text ?? null;
+    const pixQrUrl = charge?.links?.find((l: any) => l.rel === 'QRCODE.PNG')?.href ?? null;
 
     const { data: pagamento, error } = await this.supabase.client
       .from('pagamentos')
@@ -223,6 +251,7 @@ export class PagamentosService {
     const { client: pagbank, webhookUrl, splitConfig } = await this.getPagBankClient(pedido.restaurant_id);
 
     const splits = splitConfig ? this.buildSplits(valorCentavos, splitConfig) : undefined;
+    const phones = await this.buscarTelefonePagBank(callerUserId);
 
     let resposta: any;
     try {
@@ -233,6 +262,7 @@ export class PagamentosService {
           name: body.customer.name,
           email: body.customer.email,
           tax_id: this.limparCpf(body.customer.tax_id),
+          phones,
         },
         itens: [{ name: `Pedido #${pedido.id}`, quantity: 1, unit_amount: valorCentavos }],
         card_encrypted: body.card_encrypted,

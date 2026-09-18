@@ -1,3 +1,10 @@
+type PagBankCustomer = {
+  name: string;
+  email: string;
+  tax_id: string;
+  phones?: Array<{ country: string; area: string; number: string; type: 'MOBILE' | 'HOME' }>;
+};
+
 // Cliente HTTP para PagBank API v4 — sandbox e produção
 export class PagBankClient {
   private readonly baseUrl: string;
@@ -36,12 +43,15 @@ export class PagBankClient {
     return json as T;
   }
 
-  // Cria ordem PIX — retorna qr_code e link
+  // Cria ordem PIX via charges[].payment_method.pix — estrutura atual da API
+  // (a antiga usava "qr_codes" solto na ordem; PagBank pediu migração em
+  // 2026-09-18, ver reference/criar-pedido-com-qr-code-pix-v2). QR code e
+  // link ficam em resposta.charges[0].qr_code / .links.
   // splits (opcional): distribui o valor entre vendedor e plataforma automaticamente
   async criarOrdemPix(params: {
     reference_id: string;
     valor_centavos: number;
-    customer: { name: string; email: string; tax_id: string };
+    customer: PagBankCustomer;
     itens: { name: string; quantity: number; unit_amount: number }[];
     webhook_url: string;
     splits?: Array<{
@@ -54,9 +64,17 @@ export class PagBankClient {
     const payload: Record<string, any> = {
       reference_id: params.reference_id,
       customer: params.customer,
-      items: params.itens,
-      qr_codes: [{ amount: { value: params.valor_centavos }, expiration_date: expiracao }],
+      items: params.itens.map((item, i) => ({ reference_id: `ITEM_${i + 1}`, ...item })),
       notification_urls: [params.webhook_url],
+      charges: [{
+        reference_id: `CHG_${params.reference_id}`,
+        description: 'Pedido delivery',
+        amount: { value: params.valor_centavos, currency: 'BRL' },
+        payment_method: {
+          type: 'PIX',
+          pix: { expiration_date: expiracao },
+        },
+      }],
     };
 
     if (params.splits?.length) {
@@ -71,7 +89,7 @@ export class PagBankClient {
   async criarOrdemCartao(params: {
     reference_id: string;
     valor_centavos: number;
-    customer: { name: string; email: string; tax_id: string };
+    customer: PagBankCustomer;
     itens: { name: string; quantity: number; unit_amount: number }[];
     card_encrypted: string;
     parcelas: number;
@@ -85,7 +103,7 @@ export class PagBankClient {
     const payload: Record<string, any> = {
       reference_id: params.reference_id,
       customer: params.customer,
-      items: params.itens,
+      items: params.itens.map((item, i) => ({ reference_id: `ITEM_${i + 1}`, ...item })),
       notification_urls: [params.webhook_url],
       charges: [{
         reference_id: `CHG_${params.reference_id}`,
