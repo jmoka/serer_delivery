@@ -952,6 +952,21 @@ export class PlanosService {
     }
   }
 
+  // Como a plataforma recebe fatura de plano/pacote — dono vê isso antes de
+  // escolher a forma de pagamento no PagamentoFaturaModal. 'manual' esconde
+  // Cartão e não abre ordem nenhuma no PagBank; admin confirma à mão depois
+  // (POST /admin/planos/faturas/:id/marcar-paga).
+  async buscarConfigPagamentoFatura() {
+    const { data } = await this.supabase.client
+      .from('platform_settings').select('config').eq('id', 1).maybeSingle();
+    const cfg = (data?.config ?? {}) as Record<string, any>;
+    return {
+      modo: cfg.faturamento_modo ?? 'pagbank',
+      chave_pix: cfg.faturamento_chave_pix ?? '',
+      nome_recebedor: cfg.aparencia_marketplace?.nome_marca || 'Plataforma',
+    };
+  }
+
   async pagarFatura(
     restaurantId: number,
     faturaId: number,
@@ -964,6 +979,18 @@ export class PlanosService {
     }
 
     const metodo = body.metodo ?? 'pix';
+
+    const { modo: faturamentoModo } = await this.buscarConfigPagamentoFatura();
+    if (faturamentoModo === 'manual') {
+      if (metodo !== 'pix') {
+        throw new BadRequestException('Recebimento manual configurado — só Pix está disponível');
+      }
+      // Modo manual não abre ordem no PagBank — o Pix é montado no
+      // navegador do dono (mesma chave PIX exibida), admin confirma
+      // manualmente. Nada a fazer aqui.
+      return { manual: true, fatura_id: fatura.id };
+    }
+
     if (metodo === 'credit_card' || metodo === 'debit_card') {
       return this.pagarFaturaCartao(fatura, body, metodo);
     }
@@ -995,9 +1022,11 @@ export class PlanosService {
       throw new BadRequestException(e?.message ?? 'Falha ao gerar cobrança no PagBank');
     }
 
-    const qrCode = resposta?.qr_codes?.[0];
-    const pixCode = qrCode?.text ?? null;
-    const pixQrUrl = qrCode?.links?.find((l: any) => l.media === 'image/png')?.href ?? null;
+    // Pix v2: QR code vem em charges[0].qr_code (a PagBank descontinuou o
+    // "qr_codes" solto na ordem — mesma correção feita em pagamentos.service.ts).
+    const charge = resposta?.charges?.[0];
+    const pixCode = charge?.qr_code?.text ?? null;
+    const pixQrUrl = charge?.links?.find((l: any) => l.rel === 'QRCODE.PNG')?.href ?? null;
 
     const { error } = await this.supabase.client
       .from('plano_faturas')

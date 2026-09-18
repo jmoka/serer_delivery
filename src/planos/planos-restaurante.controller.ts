@@ -51,6 +51,13 @@ export class PlanosRestauranteController {
     return this.service.buscarChavePublicaCartao();
   }
 
+  // Como a plataforma recebe fatura (manual/pagbank) — dono consulta antes
+  // de abrir o PagamentoFaturaModal, pra saber se mostra Cartão ou não.
+  @Get('config-pagamento')
+  configPagamento() {
+    return this.service.buscarConfigPagamentoFatura();
+  }
+
   @Post('renovar')
   renovar(@Req() req: any) {
     return this.service.renovarAgora(req.restaurantId);
