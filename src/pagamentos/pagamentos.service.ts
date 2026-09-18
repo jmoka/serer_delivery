@@ -81,8 +81,13 @@ export class PagamentosService {
       this.config.get('PAGBANK_WEBHOOK_URL') ||
       'http://localhost:3002/pagamentos/webhook';
 
+    // Kill-switch do admin (não apaga token/account_id/contas de ninguém) — liga/desliga
+    // em /admin/configuracoes. Usado quando a PagBank bloqueia split ("whitelist access
+    // required") sem afetar homologação de token/conta ainda válida pro fluxo sem split.
+    const splitHabilitado = platCfg.pagbank_split_habilitado ?? true;
+
     // Split habilitado: plataforma tem token + ambas as contas configuradas
-    if (platformToken && platformAccountId && sellerAccountId) {
+    if (splitHabilitado && platformToken && platformAccountId && sellerAccountId) {
       return {
         client: new PagBankClient(platformToken, sandbox),
         webhookUrl,

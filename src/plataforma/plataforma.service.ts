@@ -99,6 +99,7 @@ export class PlataformaService {
     return {
       pagbank_platform_account_id: cfg.pagbank_platform_account_id ?? '',
       pagbank_sandbox: cfg.pagbank_sandbox ?? true,
+      pagbank_split_habilitado: cfg.pagbank_split_habilitado ?? true,
       pagbank_platform_token_masked: cfg.pagbank_platform_token
         ? `${'•'.repeat(8)}${String(cfg.pagbank_platform_token).slice(-4)}`
         : null,
@@ -161,6 +162,7 @@ export class PlataformaService {
     pagbank_platform_token?: string;
     pagbank_platform_account_id?: string;
     pagbank_sandbox?: boolean;
+    pagbank_split_habilitado?: boolean;
     modo_individual?: boolean;
     modo_individual_restaurant_id?: number | null;
     comissao_padrao_pct?: number;
@@ -190,6 +192,9 @@ export class PlataformaService {
     }
     if (body.pagbank_sandbox !== undefined) {
       novo.pagbank_sandbox = body.pagbank_sandbox;
+    }
+    if (body.pagbank_split_habilitado !== undefined) {
+      novo.pagbank_split_habilitado = body.pagbank_split_habilitado;
     }
     if (body.modo_individual !== undefined) {
       novo.modo_individual = body.modo_individual;

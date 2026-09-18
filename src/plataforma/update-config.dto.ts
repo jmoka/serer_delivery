@@ -15,6 +15,13 @@ export class UpdateConfigDto {
   @IsBoolean()
   pagbank_sandbox?: boolean;
 
+  // Kill-switch de split — desliga sem apagar token/account_id/contas dos
+  // restaurantes. Enquanto desligado, todo pagamento cai no fluxo sem split
+  // (token próprio de cada restaurante), mesmo com split configurado.
+  @IsOptional()
+  @IsBoolean()
+  pagbank_split_habilitado?: boolean;
+
   // Instalação individual: restringe o admin a 1 restaurante só (mono-estabelecimento)
   @IsOptional()
   @IsBoolean()
