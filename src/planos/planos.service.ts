@@ -967,6 +967,49 @@ export class PlanosService {
     };
   }
 
+  // Dono anexa o comprovante do Pix manual da fatura — mesmo padrão de
+  // orders.comprovante_pagamento_url no checkout do cliente final, mesmo
+  // bucket (comprovantes-pix), só o prefixo do path muda (fatura- vs pedido-).
+  async uploadComprovanteFatura(restaurantId: number, faturaId: number, base64: string) {
+    await this.buscarFaturaDoRestaurante(restaurantId, faturaId);
+
+    const matches = base64.match(/^data:(image\/\w+);base64,(.+)$/);
+    const mimeType = matches ? matches[1] : 'image/jpeg';
+    const raw = matches ? matches[2] : base64;
+    const buffer = Buffer.from(raw, 'base64');
+    const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+    const path = `fatura-${faturaId}-${Date.now()}.${ext}`;
+
+    const { error: uploadError } = await this.supabase.client.storage
+      .from('comprovantes-pix')
+      .upload(path, buffer, { contentType: mimeType, upsert: true });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = this.supabase.client.storage
+      .from('comprovantes-pix')
+      .getPublicUrl(path);
+
+    await this.supabase.client
+      .from('plano_faturas')
+      .update({ comprovante_pagamento_url: publicUrl, atualizado_em: new Date().toISOString() })
+      .eq('id', faturaId);
+
+    return { url: publicUrl };
+  }
+
+  // Dono optou por mostrar/pagar em pessoa em vez de anexar agora — admin vê
+  // essa intenção explícita em vez de "ainda não anexou nada" (pode ser esquecimento).
+  async pularComprovanteFatura(restaurantId: number, faturaId: number) {
+    await this.buscarFaturaDoRestaurante(restaurantId, faturaId);
+
+    await this.supabase.client
+      .from('plano_faturas')
+      .update({ comprovante_pulado: true, atualizado_em: new Date().toISOString() })
+      .eq('id', faturaId);
+
+    return { ok: true };
+  }
+
   async pagarFatura(
     restaurantId: number,
     faturaId: number,

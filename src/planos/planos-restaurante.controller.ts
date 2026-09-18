@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { PlanosService } from './planos.service';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { PagarFaturaDto } from './dto/pagar-fatura.dto';
@@ -44,6 +44,17 @@ export class PlanosRestauranteController {
   @Post('faturas/:id/pagar')
   pagar(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() body: PagarFaturaDto) {
     return this.service.pagarFatura(req.restaurantId, id, body);
+  }
+
+  // Comprovante do Pix manual — mesmo padrão do checkout do cliente final
+  @Post('faturas/:id/comprovante')
+  uploadComprovante(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() body: { base64: string }) {
+    return this.service.uploadComprovanteFatura(req.restaurantId, id, body.base64);
+  }
+
+  @Patch('faturas/:id/pular-comprovante')
+  pularComprovante(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.service.pularComprovanteFatura(req.restaurantId, id);
   }
 
   @Get('pagbank-chave-publica')
