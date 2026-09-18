@@ -20,4 +20,12 @@ export class StripeController {
   status(@Req() req: any) {
     return this.service.status(req.restaurantId);
   }
+
+  // Desconecta o Stripe (não mexe na conta do lado da Stripe, só solta a
+  // referência local) — checkout do cliente para de oferecer Stripe e passa a
+  // usar o PagBank (se configurado) ou mostrar cartão indisponível.
+  @Post('desconectar')
+  desconectar(@Req() req: any) {
+    return this.service.desconectar(req.restaurantId);
+  }
 }

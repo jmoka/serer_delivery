@@ -37,6 +37,14 @@ export class PagamentosController {
     return this.service.criarCartao(body, req.userId);
   }
 
+  // Cliente busca a chave pública do PagBank do restaurante, pra criptografar
+  // o cartão no navegador antes de chamar POST /cartao (PagBank.js)
+  @Get('pagbank/chave-publica')
+  @UseGuards(JwtGuard)
+  buscarChavePublicaPagBank(@Query('restaurant_id', ParseIntPipe) restaurantId: number) {
+    return this.service.buscarChavePublicaCartao(restaurantId);
+  }
+
   // Cliente paga com cartão via Stripe Connect (Payment Element no frontend)
   @Post('stripe')
   @UseGuards(JwtGuard)

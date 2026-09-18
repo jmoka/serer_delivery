@@ -145,6 +145,32 @@ export class StripeService {
     };
   }
 
+  // Desconectar: só solta a referência local (stripe_account_id + flags) — não
+  // apaga/desativa nada do lado da Stripe. Reconectar depois cria uma conta
+  // Express nova (gerarLinkOnboarding só reaproveita se já tiver stripe_account_id).
+  async desconectar(restaurantId: number) {
+    const { data: atual } = await this.supabase.client
+      .from('restaurants')
+      .select('payment_config')
+      .eq('id', restaurantId)
+      .maybeSingle();
+
+    const cfg = (atual?.payment_config ?? {}) as Record<string, any>;
+    const novo = {
+      ...cfg,
+      stripe_charges_enabled: false,
+      stripe_payouts_enabled: false,
+      stripe_details_submitted: false,
+    };
+
+    await this.supabase.client
+      .from('restaurants')
+      .update({ stripe_account_id: null, payment_config: novo, updated_at: new Date().toISOString() })
+      .eq('id', restaurantId);
+
+    return { conectado: false, status: 'nao_conectado' as const };
+  }
+
   // account.updated do webhook — a Stripe já manda a conta autoritativa no
   // próprio evento assinado, não precisa reconsultar a API (diferente do
   // PagBank, que não assina e por isso exige reconsulta).

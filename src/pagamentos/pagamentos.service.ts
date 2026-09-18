@@ -113,6 +113,19 @@ export class PagamentosService {
     return cpf.replace(/\D/g, '');
   }
 
+  // Chave pública pro PagBank.js criptografar o cartão no navegador do cliente
+  // (checkout) — diferente da de faturas (planos.service.ts), que usa o token
+  // da plataforma; aqui usa o token do restaurante que está vendendo.
+  async buscarChavePublicaCartao(restaurantId: number) {
+    const { client } = await this.getPagBankClient(restaurantId);
+    try {
+      const resposta = await client.buscarChavePublica();
+      return { public_key: resposta.public_key };
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Falha ao obter chave pública do PagBank');
+    }
+  }
+
   async criarPix(body: {
     order_id: number;
     customer: { name: string; email: string; tax_id: string };
