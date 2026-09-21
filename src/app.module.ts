@@ -33,6 +33,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
 import { AuthLoginModule } from './auth-login/auth-login.module';
 import { TwoFactorModule } from './two-factor/two-factor.module';
 import { FavoritosMenuModule } from './favoritos-menu/favoritos-menu.module';
+import { TelegramModule } from './telegram/telegram.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { FavoritosMenuModule } from './favoritos-menu/favoritos-menu.module';
     AuthLoginModule,
     TwoFactorModule,
     FavoritosMenuModule,
+    TelegramModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

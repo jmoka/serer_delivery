@@ -13,6 +13,7 @@ import { PlanosService } from '../planos/planos.service';
 import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { RedisService } from '../redis/redis.service';
 import { GarcomTurnoService } from '../salao/garcom-turno.service';
+import { TelegramService } from '../telegram/telegram.service';
 
 const TTL_MINHA_EMPRESA = 15;
 
@@ -30,6 +31,7 @@ export class RestauranteService {
     private planos: PlanosService,
     private redis: RedisService,
     private garcomTurnoService: GarcomTurnoService,
+    private telegram: TelegramService,
   ) {}
 
   // Cacheada porque o header do painel (menu lateral) monta 3 hooks que bateriam
@@ -1635,6 +1637,7 @@ export class RestauranteService {
       const todosProntos = (itensRestantes ?? []).length > 0 && (itensRestantes ?? []).every((i: any) => i.status === 'pronto');
       if (todosProntos) {
         await this.supabase.client.from('orders').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', item.order_id);
+        await this.telegram.avisarPedidoPronto(item.order_id);
       }
     }
 

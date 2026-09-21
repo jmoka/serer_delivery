@@ -22,6 +22,16 @@ export class MotoboyPortalController {
     return this.service.solicitarRevisaoPlataforma(req.motoboyId);
   }
 
+  @Post('telegram/link')
+  gerarLinkTelegram(@Req() req: any) {
+    return this.service.gerarLinkTelegram(req.motoboyId);
+  }
+
+  @Get('telegram/status')
+  statusTelegram(@Req() req: any) {
+    return this.service.statusTelegram(req.motoboyId);
+  }
+
   @Get('ganhos')
   ganhos(@Req() req: any) {
     return this.service.ganhosResumo(req.motoboyId);
