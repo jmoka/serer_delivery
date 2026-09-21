@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
+import { TelegramService } from '../telegram/telegram.service';
 
 const SELECT_PERFIL = 'id, name, email, phone_e164, address_json, foto_perfil_url, cpf_cnpj';
 
@@ -9,7 +10,20 @@ export class PerfilService {
   constructor(
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
+    private telegram: TelegramService,
   ) {}
+
+  async gerarLinkTelegramCliente(userId: string) {
+    const perfil = await this.getMeuPerfil(userId);
+    if (!perfil) throw new NotFoundException('Perfil não encontrado');
+    return this.telegram.gerarLinkCliente(perfil.id);
+  }
+
+  async statusTelegramCliente(userId: string) {
+    const perfil = await this.getMeuPerfil(userId);
+    if (!perfil) throw new NotFoundException('Perfil não encontrado');
+    return this.telegram.statusCliente(perfil.id);
+  }
 
   // Cobre o caso de alguém ter uma conta de motoboy (tabela própria, sem vínculo
   // via user_id) com o MESMO email de uma conta comum no Supabase Auth — duas

@@ -7,6 +7,7 @@ import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
 import { haversineKm } from '../common/geo.util';
 import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
+import { TelegramService } from '../telegram/telegram.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
@@ -20,6 +21,7 @@ export class PedidosService {
     private salaoService: SalaoService,
     private estoque: EstoqueService,
     private combos: CombosService,
+    private telegram: TelegramService,
   ) {}
 
   // Roteia os itens do pedido delivery pro mesmo mecanismo de KDS por setor que o
@@ -517,6 +519,10 @@ export class PedidosService {
       await this.rotearItensParaSetor(id, data.restaurant_id);
     }
 
+    if (status === 'confirmed' && statusAnterior !== 'confirmed') {
+      await this.telegram.avisarPedidoConfirmado(id, data.customer_id);
+    }
+
     if (status === 'canceled' && statusAnterior !== 'canceled') {
       await this.estoque.restaurarItensDoPedido(id);
     }
@@ -535,6 +541,10 @@ export class PedidosService {
     // conferência. Idempotente via UNIQUE(pedido_id) em registrarComissaoEntrega.
     if (status === 'delivered' && statusAnterior !== 'delivered' && data.motoboy_id) {
       await this.comissao.registrarComissaoEntrega(data as any, data.motoboy_id);
+    }
+
+    if (status === 'delivered' && statusAnterior !== 'delivered') {
+      await this.telegram.avisarPedidoEntregue(id, data.customer_id);
     }
 
     // GDOOR não é mais disparado automaticamente aqui — o dono pediu envio manual

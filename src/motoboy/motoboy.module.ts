@@ -12,9 +12,10 @@ import { MotoboyAdminController } from './motoboy-admin.controller';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { SalaoModule } from '../salao/salao.module';
+import { TelegramModule } from '../telegram/telegram.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, SalaoModule],
+  imports: [AuthModule, SupabaseModule, SalaoModule, TelegramModule],
   controllers: [
     RestauranteMotoboysController,
     MotoboyPortalController,

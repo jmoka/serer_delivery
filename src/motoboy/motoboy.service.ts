@@ -7,6 +7,7 @@ import { SalaoService } from '../salao/salao.service';
 import { EMAIL_RE, PHONE_RE, VEICULO_TIPOS, resolverSituacaoMei } from './motoboy-auth.service';
 import { CnpjService } from './cnpj.service';
 import { uploadDocumentoMotoboy } from './upload-documento-motoboy.util';
+import { TelegramService } from '../telegram/telegram.service';
 
 export interface MotoboyPeloRestauranteBody {
   name?: string;
@@ -48,7 +49,16 @@ export class MotoboyService {
     private estoque: EstoqueService,
     private salaoService: SalaoService,
     private cnpj: CnpjService,
+    private telegram: TelegramService,
   ) {}
+
+  gerarLinkTelegram(motoboyId: number) {
+    return this.telegram.gerarLinkMotoboy(motoboyId);
+  }
+
+  statusTelegram(motoboyId: number) {
+    return this.telegram.statusMotoboy(motoboyId);
+  }
 
   // Antes de ver/solicitar vaga em qualquer estabelecimento, a plataforma
   // (admin) precisa ter revisado e aprovado o cadastro do motoboy.
@@ -617,12 +627,17 @@ export class MotoboyService {
   async atribuir(pedidoId: number, restaurantId: number, motoboyId: number) {
     await this.exigirAfiliacaoAceita(motoboyId, restaurantId);
 
-    const { error } = await this.supabase.client
+    const { data, error } = await this.supabase.client
       .from('orders')
       .update({ motoboy_id: motoboyId, status: 'out_for_delivery', updated_at: new Date().toISOString() })
       .eq('id', pedidoId)
-      .eq('restaurant_id', restaurantId);
+      .eq('restaurant_id', restaurantId)
+      .select('customer_id')
+      .maybeSingle();
     if (error) throw error;
+
+    await this.telegram.avisarPedidoSaiuEntrega(pedidoId, data?.customer_id);
+
     return { ok: true, status: 'out_for_delivery' };
   }
 
@@ -820,6 +835,8 @@ export class MotoboyService {
       .eq('id', pedidoId);
     if (error) throw error;
 
+    await this.telegram.avisarPedidoEntregue(pedidoId, pedido.customer_id);
+
     // Registrar entrada(s) no caixa aberto
     if (entregaPagamento && pedido.restaurant_id) {
       const { data: caixa } = await this.supabase.client
@@ -891,7 +908,7 @@ export class MotoboyService {
   ) {
     const { data: pedido } = await this.supabase.client
       .from('orders')
-      .select('id, status, restaurant_id, motoboy_id, total, payment_method')
+      .select('id, status, restaurant_id, motoboy_id, total, payment_method, customer_id')
       .eq('id', pedidoId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -907,6 +924,8 @@ export class MotoboyService {
 
     const { error } = await this.supabase.client.from('orders').update(updatePayload).eq('id', pedidoId);
     if (error) throw error;
+
+    await this.telegram.avisarPedidoEntregue(pedidoId, pedido.customer_id);
 
     if (entregaPagamento) {
       const { data: caixa } = await this.supabase.client
@@ -1359,7 +1378,7 @@ export class MotoboyService {
 
     const { data: pedido } = await this.supabase.client
       .from('orders')
-      .select('id, total, troco_para, payment_method, restaurant_id')
+      .select('id, total, troco_para, payment_method, restaurant_id, customer_id')
       .eq('id', pedidoId)
       .eq('motoboy_id', motoboyId)
       .eq('status', 'motoboy_collecting')
@@ -1371,6 +1390,8 @@ export class MotoboyService {
       .update({ status: 'out_for_delivery', updated_at: new Date().toISOString() })
       .eq('id', pedidoId);
     if (error) throw error;
+
+    await this.telegram.avisarPedidoSaiuEntrega(pedidoId, pedido.customer_id);
 
     const trocoValor = pedido.payment_method === 'cash' && pedido.troco_para > pedido.total
       ? Number(pedido.troco_para) - Number(pedido.total)

@@ -36,4 +36,14 @@ export class PerfilController {
   uploadFoto(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
     return this.service.uploadFoto(req.userId, file);
   }
+
+  @Post('telegram/link')
+  gerarLinkTelegram(@Req() req: any) {
+    return this.service.gerarLinkTelegramCliente(req.userId);
+  }
+
+  @Get('telegram/status')
+  statusTelegram(@Req() req: any) {
+    return this.service.statusTelegramCliente(req.userId);
+  }
 }
