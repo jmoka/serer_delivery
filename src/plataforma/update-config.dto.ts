@@ -15,6 +15,25 @@ export class UpdateConfigDto {
   @IsBoolean()
   pagbank_sandbox?: boolean;
 
+  // Kill-switch de split — desliga sem apagar token/account_id/contas dos
+  // restaurantes. Enquanto desligado, todo pagamento cai no fluxo sem split
+  // (token próprio de cada restaurante), mesmo com split configurado.
+  @IsOptional()
+  @IsBoolean()
+  pagbank_split_habilitado?: boolean;
+
+  // Como a PLATAFORMA recebe fatura de plano/pacote (admin) — 'manual' (só
+  // Pix com a chave abaixo, admin confirma o recebimento à mão em
+  // /admin/planos) ou 'pagbank' (Pix + Cartão via PagBank, como já era).
+  @IsOptional()
+  @IsString()
+  faturamento_modo?: 'manual' | 'pagbank';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  faturamento_chave_pix?: string;
+
   // Instalação individual: restringe o admin a 1 restaurante só (mono-estabelecimento)
   @IsOptional()
   @IsBoolean()

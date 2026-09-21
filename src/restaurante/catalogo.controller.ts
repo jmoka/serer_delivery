@@ -401,8 +401,11 @@ export class CatalogoController {
   private exporPagamentoPublico(r: any) {
     const chave_pix = r.pagamento_manual ? (r.payment_config?.chave_pix ?? null) : null;
     const stripe_disponivel = !r.pagamento_manual && !!r.payment_config?.stripe_charges_enabled;
+    // Cartão via PagBank usa o mesmo token/conta que já atende o Pix automático
+    // (mesma condição !pagamento_manual) — alternativa quando a loja não conectou Stripe.
+    const pagbank_cartao_disponivel = !r.pagamento_manual;
     const { payment_config, ...resto } = r;
-    return { ...resto, chave_pix, stripe_disponivel };
+    return { ...resto, chave_pix, stripe_disponivel, pagbank_cartao_disponivel };
   }
 
   private async montarCardapio(restauranteRaw: any) {
