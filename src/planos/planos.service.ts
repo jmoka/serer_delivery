@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
 import { PagBankClient } from '../pagamentos/pagbank.client';
@@ -965,6 +966,57 @@ export class PlanosService {
       chave_pix: cfg.faturamento_chave_pix ?? '',
       nome_recebedor: cfg.aparencia_marketplace?.nome_marca || 'Plataforma',
     };
+  }
+
+  // Admin gera (ou reaproveita) um link público pra mandar pro cliente pagar
+  // sem precisar de login — token opaco, não reusa o id sequencial da fatura.
+  async gerarLinkPagamento(id: number) {
+    const fatura = await this.buscarFatura(id);
+    if (fatura.status === 'paga' || fatura.status === 'cancelada' || fatura.status === 'isenta') {
+      throw new BadRequestException('Só é possível gerar link pra fatura pendente ou vencida');
+    }
+    if (fatura.link_pagamento_token) return { token: fatura.link_pagamento_token };
+
+    const token = crypto.randomUUID();
+    const { error } = await this.supabase.client
+      .from('plano_faturas')
+      .update({ link_pagamento_token: token, atualizado_em: new Date().toISOString() })
+      .eq('id', id);
+    if (error) throw error;
+
+    return { token };
+  }
+
+  // Endpoint público (sem guard) que o link acima resolve — só os campos
+  // necessários pra montar a tela de pagamento, nunca o registro inteiro.
+  async buscarFaturaPublicaPorToken(token: string) {
+    const { data, error } = await this.supabase.client
+      .from('plano_faturas')
+      .select('id, valor, vencimento, status, restaurants(name), instalacoes_locais(nome_cliente)')
+      .eq('link_pagamento_token', token)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Link de pagamento inválido');
+
+    const nome = (data as any).restaurants?.name ?? (data as any).instalacoes_locais?.nome_cliente ?? 'Assinatura';
+    const resultado: Record<string, any> = {
+      id: data.id,
+      nome,
+      valor: data.valor,
+      vencimento: data.vencimento,
+      status: data.status,
+    };
+
+    if (data.status === 'pendente' || data.status === 'vencida') {
+      const config = await this.buscarConfigPagamentoFatura();
+      resultado.modo = config.modo;
+      if (config.modo === 'manual') {
+        resultado.chave_pix = config.chave_pix;
+        resultado.nome_recebedor = config.nome_recebedor;
+      }
+    }
+
+    return resultado;
   }
 
   // Dono anexa o comprovante do Pix manual da fatura — mesmo padrão de

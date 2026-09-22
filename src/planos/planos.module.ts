@@ -3,12 +3,13 @@ import { PlanosService } from './planos.service';
 import { PlanosAdminController } from './planos-admin.controller';
 import { PlanosRestauranteController } from './planos-restaurante.controller';
 import { PlanosWebhookController } from './planos-webhook.controller';
+import { PlanosPublicoController } from './planos-publico.controller';
 import { AuthModule } from '../auth/auth.module';
 import { UsuariosModule } from '../usuarios/usuarios.module';
 
 @Module({
   imports: [AuthModule, UsuariosModule],
-  controllers: [PlanosAdminController, PlanosRestauranteController, PlanosWebhookController],
+  controllers: [PlanosAdminController, PlanosRestauranteController, PlanosWebhookController, PlanosPublicoController],
   providers: [PlanosService],
   exports: [PlanosService],
 })

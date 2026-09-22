@@ -70,6 +70,13 @@ export class PlanosAdminController {
     return this.service.marcarFaturaPaga(id);
   }
 
+  // Link público (sem login) pra admin copiar e mandar pro cliente pagar —
+  // resolvido em PlanosPublicoController (GET /fatura-pagamento/:token).
+  @Post('faturas/:id/gerar-link')
+  gerarLinkPagamento(@Param('id', ParseIntPipe) id: number) {
+    return this.service.gerarLinkPagamento(id);
+  }
+
   @Post('faturas')
   criarFaturaManual(@Body() body: CriarFaturaManualDto) {
     return this.service.criarFaturaManual(body);
