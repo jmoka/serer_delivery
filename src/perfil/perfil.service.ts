@@ -209,12 +209,13 @@ export class PerfilService {
     if (error) throw error;
 
     const { data: pub } = this.supabase.client.storage.from(BUCKET).getPublicUrl(path);
+    const fotoPerfilUrl = this.supabase.toPublicUrl(pub.publicUrl);
 
     await this.supabase.client
       .from('customers')
-      .update({ foto_perfil_url: pub.publicUrl, updated_at: new Date().toISOString() })
+      .update({ foto_perfil_url: fotoPerfilUrl, updated_at: new Date().toISOString() })
       .eq('id', customer.id);
 
-    return { foto_perfil_url: pub.publicUrl };
+    return { foto_perfil_url: fotoPerfilUrl };
   }
 }

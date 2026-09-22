@@ -159,7 +159,7 @@ export class PlataformaService {
     if (error) throw error;
 
     const { data } = this.supabase.client.storage.from(BUCKET_PLATAFORMA).getPublicUrl(path);
-    return { url: data.publicUrl };
+    return { url: this.supabase.toPublicUrl(data.publicUrl) };
   }
 
   async updateConfig(body: {

@@ -2539,7 +2539,7 @@ export class RestauranteService {
     if (error) throw error;
 
     const { data } = this.supabase.client.storage.from(BUCKET).getPublicUrl(path);
-    return { url: data.publicUrl };
+    return { url: this.supabase.toPublicUrl(data.publicUrl) };
   }
 
   async setupStorage() {

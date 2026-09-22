@@ -639,13 +639,14 @@ export class PedidosService {
     const { data: { publicUrl } } = this.supabase.client.storage
       .from('comprovantes-pix')
       .getPublicUrl(path);
+    const comprovanteUrl = this.supabase.toPublicUrl(publicUrl);
 
     await this.supabase.client
       .from('orders')
-      .update({ comprovante_pagamento_url: publicUrl, updated_at: new Date().toISOString() })
+      .update({ comprovante_pagamento_url: comprovanteUrl, updated_at: new Date().toISOString() })
       .eq('id', id);
 
-    return { url: publicUrl };
+    return { url: comprovanteUrl };
   }
 
   // Cliente optou por pular o anexo agora e vai mostrar/pagar em pessoa (motoboy

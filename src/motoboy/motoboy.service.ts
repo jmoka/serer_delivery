@@ -466,7 +466,7 @@ export class MotoboyService {
     if (uploadError) throw uploadError;
 
     const { data: { publicUrl } } = this.supabase.client.storage.from('comprovantes-pix').getPublicUrl(path);
-    return publicUrl;
+    return this.supabase.toPublicUrl(publicUrl);
   }
 
   async listarSolicitacoesRepasse(restaurantId: number, status?: string) {
@@ -1445,13 +1445,14 @@ export class MotoboyService {
     const { data: { publicUrl } } = this.supabase.client.storage
       .from('comprovantes-pix')
       .getPublicUrl(path);
+    const comprovanteUrl = this.supabase.toPublicUrl(publicUrl);
 
     await this.supabase.client
       .from('orders')
-      .update({ comprovante_pagamento_url: publicUrl, updated_at: new Date().toISOString() })
+      .update({ comprovante_pagamento_url: comprovanteUrl, updated_at: new Date().toISOString() })
       .eq('id', pedidoId);
 
-    return { url: publicUrl };
+    return { url: comprovanteUrl };
   }
 
   private async limiteRevisoesPlataforma(): Promise<number> {

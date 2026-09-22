@@ -988,13 +988,14 @@ export class PlanosService {
     const { data: { publicUrl } } = this.supabase.client.storage
       .from('comprovantes-pix')
       .getPublicUrl(path);
+    const comprovanteUrl = this.supabase.toPublicUrl(publicUrl);
 
     await this.supabase.client
       .from('plano_faturas')
-      .update({ comprovante_pagamento_url: publicUrl, atualizado_em: new Date().toISOString() })
+      .update({ comprovante_pagamento_url: comprovanteUrl, atualizado_em: new Date().toISOString() })
       .eq('id', faturaId);
 
-    return { url: publicUrl };
+    return { url: comprovanteUrl };
   }
 
   // Dono optou por mostrar/pagar em pessoa em vez de anexar agora — admin vê
