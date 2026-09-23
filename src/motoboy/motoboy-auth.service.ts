@@ -19,7 +19,7 @@ export interface CompletarCadastroMotoboyBody {
   veiculo_tipo: string;
   cnpj: string;
   veiculo_foto: string;
-  veiculo_documento: string;
+  veiculo_documento?: string;
   veiculo_documento_carretinha?: string;
 }
 
@@ -84,6 +84,10 @@ export class MotoboyAuthService {
     if (!VEICULO_TIPOS.includes(body.veiculo_tipo as any)) throw new BadRequestException('Tipo de veículo inválido');
     const cnpjNorm = (body.cnpj ?? '').replace(/\D/g, '');
     if (cnpjNorm.length !== 14) throw new BadRequestException('CNPJ inválido');
+    // Bicicleta não tem CRLV/registro — só moto/carro/caminhão/carretinha exigem.
+    if (body.veiculo_tipo !== 'bicicleta' && !body.veiculo_documento) {
+      throw new BadRequestException('Envie o documento do veículo (CRLV)');
+    }
     // Carretinha é puxada por um carro — precisa do CRLV dos dois.
     if (body.veiculo_tipo === 'carretinha' && !body.veiculo_documento_carretinha) {
       throw new BadRequestException('Envie o documento da carretinha (CRLV), além do documento do carro');
@@ -105,6 +109,8 @@ export class MotoboyAuthService {
       .single();
     if (error) throw error;
 
+    const veiculoDocumento = body.veiculo_documento;
+    const veiculoDocumentoCarretinha = body.veiculo_documento_carretinha;
     const [
       foto_perfil_url,
       documento_frente_url,
@@ -119,9 +125,9 @@ export class MotoboyAuthService {
       body.documento_verso ? this.uploadDocumento(motoboy.id, 'documento-verso', body.documento_verso) : Promise.resolve(null),
       this.uploadDocumento(motoboy.id, 'comprovante-endereco', body.comprovante_endereco),
       this.uploadDocumento(motoboy.id, 'veiculo-foto', body.veiculo_foto),
-      this.uploadDocumento(motoboy.id, 'veiculo-documento', body.veiculo_documento),
-      body.veiculo_documento_carretinha
-        ? this.uploadDocumento(motoboy.id, 'veiculo-documento-carretinha', body.veiculo_documento_carretinha)
+      veiculoDocumento ? this.uploadDocumento(motoboy.id, 'veiculo-documento', veiculoDocumento) : Promise.resolve(null),
+      veiculoDocumentoCarretinha
+        ? this.uploadDocumento(motoboy.id, 'veiculo-documento-carretinha', veiculoDocumentoCarretinha)
         : Promise.resolve(null),
     ]);
 
