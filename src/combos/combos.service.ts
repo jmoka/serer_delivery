@@ -7,6 +7,23 @@ export interface ItemExpandido {
   unit_price: number;
   combo_nome?: string;
   combo_quantidade?: number;
+  frete_embutido_unitario?: number | null;
+}
+
+// Resolve o valor de frete embutido no preço, no momento da venda — nunca
+// recalculado depois (mesmo princípio de snapshot do unit_price). Puramente
+// bookkeeping interno da loja: nunca muda o preço cobrado do cliente nem a
+// comissão da plataforma, que continuam incidindo sobre precoBase cheio.
+export function resolverFreteEmbutidoUnitario(produto: {
+  frete_embutido?: boolean | null;
+  frete_embutido_tipo?: string | null;
+  frete_embutido_valor?: number | null;
+}, precoBase: number): number | null {
+  if (!produto.frete_embutido || produto.frete_embutido_valor == null) return null;
+  if (produto.frete_embutido_tipo === 'percentual') {
+    return Math.round(precoBase * (produto.frete_embutido_valor / 100) * 100) / 100;
+  }
+  return produto.frete_embutido_valor;
 }
 
 @Injectable()
@@ -51,7 +68,7 @@ export class CombosService {
     const { data: combo } = await this.supabase.client
       .from('combos')
       .select(
-        'id, name, restaurant_id, is_active, combo_items(product_id, quantity, preco_no_combo, products(price, is_active, quantidade_estoque))',
+        'id, name, restaurant_id, is_active, combo_items(product_id, quantity, preco_no_combo, products(price, is_active, quantidade_estoque, frete_embutido, frete_embutido_tipo, frete_embutido_valor))',
       )
       .eq('id', comboId)
       .maybeSingle();
@@ -63,7 +80,10 @@ export class CombosService {
       product_id: number;
       quantity: number;
       preco_no_combo: number | null;
-      products: { price: number; is_active: boolean; quantidade_estoque: number } | null;
+      products: {
+        price: number; is_active: boolean; quantidade_estoque: number;
+        frete_embutido?: boolean; frete_embutido_tipo?: string | null; frete_embutido_valor?: number | null;
+      } | null;
     }>;
     if (!itens.length) throw new BadRequestException(`Combo ${comboId} não tem itens configurados`);
 
@@ -77,12 +97,18 @@ export class CombosService {
       }
     }
 
-    return itens.map((it) => ({
-      product_id: it.product_id,
-      quantity: it.quantity * quantidadeComprada,
-      unit_price: it.preco_no_combo ?? it.products!.price,
-      combo_nome: combo.name,
-      combo_quantidade: quantidadeComprada,
-    }));
+    return itens.map((it) => {
+      const unitPrice = it.preco_no_combo ?? it.products!.price;
+      return {
+        product_id: it.product_id,
+        quantity: it.quantity * quantidadeComprada,
+        unit_price: unitPrice,
+        combo_nome: combo.name,
+        combo_quantidade: quantidadeComprada,
+        // Combo não tem override de frete próprio (só de preço, via preco_no_combo)
+        // — usa direto a config do produto, com base no preço efetivo desta venda.
+        frete_embutido_unitario: resolverFreteEmbutidoUnitario(it.products!, unitPrice),
+      };
+    });
   }
 }

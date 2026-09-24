@@ -4,7 +4,7 @@ import { GeocodingService } from '../motoboy/geocoding.service';
 import { ComissaoService } from '../motoboy/comissao.service';
 import { SalaoService } from '../salao/salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
-import { CombosService, ItemExpandido } from '../combos/combos.service';
+import { CombosService, ItemExpandido, resolverFreteEmbutidoUnitario } from '../combos/combos.service';
 import { haversineKm } from '../common/geo.util';
 import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { TelegramService } from '../telegram/telegram.service';
@@ -342,7 +342,7 @@ export class PedidosService {
     const prodIds = itensDiretos.map((i) => i.product_id as number);
     const { data: produtos, error: errProd } = await this.supabase.client
       .from('products')
-      .select('id, price, preco_promo, is_active')
+      .select('id, price, preco_promo, is_active, frete_embutido, frete_embutido_tipo, frete_embutido_valor')
       .in('id', prodIds.length ? prodIds : [0]);
 
     if (errProd) throw errProd;
@@ -361,11 +361,16 @@ export class PedidosService {
       await Promise.all(itensCombo.map((i) => this.combos.expandir(i.combo_id as number, i.quantity, body.restaurant_id)))
     ).flat();
 
-    const linhasDiretas: ItemExpandido[] = itensDiretos.map((item) => ({
-      product_id: item.product_id as number,
-      quantity: item.quantity,
-      unit_price: prodMap[item.product_id as number].preco_promo ?? prodMap[item.product_id as number].price,
-    }));
+    const linhasDiretas: ItemExpandido[] = itensDiretos.map((item) => {
+      const prod = prodMap[item.product_id as number];
+      const unitPrice = prod.preco_promo ?? prod.price;
+      return {
+        product_id: item.product_id as number,
+        quantity: item.quantity,
+        unit_price: unitPrice,
+        frete_embutido_unitario: resolverFreteEmbutidoUnitario(prod, unitPrice),
+      };
+    });
 
     const linhasFinais = [...linhasDiretas, ...linhasCombo];
 
@@ -486,6 +491,7 @@ export class PedidosService {
       unit_price: l.unit_price,
       combo_nome: l.combo_nome ?? null,
       combo_quantidade: l.combo_quantidade ?? null,
+      frete_embutido_unitario: l.frete_embutido_unitario ?? null,
     }));
 
     const { error: errItens } = await this.supabase.client
@@ -494,12 +500,16 @@ export class PedidosService {
 
     if (errItens) throw errItens;
 
+    // frete_embutido_unitario é bookkeeping interno da loja — nunca sai na resposta
+    // pro cliente que acabou de fazer o pedido.
+    const itensResposta = itensPrepared.map(({ frete_embutido_unitario, ...resto }) => resto);
+
     // Reserva o estoque assim que o pedido é criado — evita vender 2x o último item
     // enquanto ele ainda está pendente de confirmação. Já é por produto real, então
     // cobre item vendido direto e item vindo de combo igual.
     await this.estoque.decrementarItens(linhasFinais);
 
-    return { pedido, itens: itensPrepared };
+    return { pedido, itens: itensResposta };
   }
 
   async atualizarStatus(id: number, status: Status) {

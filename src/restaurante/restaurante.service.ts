@@ -63,7 +63,7 @@ export class RestauranteService {
     // (GET /restaurante/config, ver getConfig() nesta mesma classe).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, auto_atendimento_habilitado, whatsapp, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, auto_atendimento_habilitado, permite_frete_embutido, whatsapp, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -363,7 +363,7 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name)')
+      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, frete_embutido, frete_embutido_tipo, frete_embutido_valor, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
@@ -388,6 +388,7 @@ export class RestauranteService {
       name: string; description?: string; price: number; image_url?: string;
       category_id: number; grupo_id?: number | null; tags?: string[]; preco_promo?: number; destaque?: boolean;
       impressora_id?: number; quantidade_estoque?: number; preco_custo?: number; quantidade_minima?: number;
+      frete_embutido?: boolean; frete_embutido_tipo?: 'percentual' | 'fixo'; frete_embutido_valor?: number;
     },
   ) {
     await this.planos.verificarLimiteProdutos(restaurantId);
@@ -426,6 +427,9 @@ export class RestauranteService {
         quantidade_estoque: body.quantidade_estoque ?? 0,
         preco_custo: body.preco_custo ?? 0,
         quantidade_minima: body.quantidade_minima ?? 0,
+        frete_embutido: body.frete_embutido ?? false,
+        frete_embutido_tipo: body.frete_embutido_tipo ?? null,
+        frete_embutido_valor: body.frete_embutido_valor ?? null,
         is_active: true,
       })
       .select()
@@ -518,6 +522,9 @@ export class RestauranteService {
         quantidade_estoque: item?.quantidade_estoque != null ? Number(item.quantidade_estoque) : 0,
         preco_custo: item?.preco_custo != null ? Number(item.preco_custo) : 0,
         quantidade_minima: item?.quantidade_minima != null ? Number(item.quantidade_minima) : 0,
+        frete_embutido: !!item?.frete_embutido,
+        frete_embutido_tipo: item?.frete_embutido_tipo === 'percentual' || item?.frete_embutido_tipo === 'fixo' ? item.frete_embutido_tipo : null,
+        frete_embutido_valor: item?.frete_embutido_valor != null ? Number(item.frete_embutido_valor) : null,
         is_active: true,
       });
 
@@ -554,6 +561,9 @@ export class RestauranteService {
     if (body.quantidade_estoque !== undefined) update.quantidade_estoque = body.quantidade_estoque;
     if (body.preco_custo !== undefined) update.preco_custo = body.preco_custo;
     if (body.quantidade_minima !== undefined) update.quantidade_minima = body.quantidade_minima;
+    if (body.frete_embutido !== undefined) update.frete_embutido = body.frete_embutido;
+    if (body.frete_embutido_tipo !== undefined) update.frete_embutido_tipo = body.frete_embutido_tipo;
+    if (body.frete_embutido_valor !== undefined) update.frete_embutido_valor = body.frete_embutido_valor;
     if (body.category_id !== undefined) {
       const { data: cat } = await this.supabase.client
         .from('categories').select('id, restaurant_id').eq('id', body.category_id).maybeSingle();
@@ -1265,7 +1275,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, permite_retirada_balcao, somente_retirada, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
+        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, permite_retirada_balcao, somente_retirada, permite_frete_embutido, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -1287,6 +1297,7 @@ export class RestauranteService {
       frete_motoboy: parseFloat(data?.frete_motoboy ?? 0),
       usa_motoboy: data?.usa_motoboy ?? true,
       permite_retirada_balcao: !!data?.permite_retirada_balcao,
+      permite_frete_embutido: !!data?.permite_frete_embutido,
       somente_retirada: !!data?.somente_retirada,
       motoboy_comissao_tipo: data?.motoboy_comissao_tipo ?? 'fixo',
       motoboy_comissao_valor_fixo: parseFloat(data?.motoboy_comissao_valor_fixo ?? 0),
@@ -1320,6 +1331,7 @@ export class RestauranteService {
       usa_motoboy?: boolean;
       permite_retirada_balcao?: boolean;
       somente_retirada?: boolean;
+      permite_frete_embutido?: boolean;
       motoboy_comissao_tipo?: 'fixo' | 'percentual' | 'km';
       motoboy_comissao_valor_fixo?: number;
       motoboy_comissao_percentual?: number;
@@ -1363,6 +1375,7 @@ export class RestauranteService {
     // Sem entrega, só implica sentido com retirada no balcão habilitada — nunca confia
     // só no front pra manter os dois em sincronia.
     if (update.somente_retirada === true) update.permite_retirada_balcao = true;
+    if (body.permite_frete_embutido !== undefined) update.permite_frete_embutido = body.permite_frete_embutido;
     if (body.motoboy_comissao_tipo !== undefined) update.motoboy_comissao_tipo = body.motoboy_comissao_tipo;
     if (body.motoboy_comissao_valor_fixo !== undefined) update.motoboy_comissao_valor_fixo = body.motoboy_comissao_valor_fixo;
     if (body.motoboy_comissao_percentual !== undefined) update.motoboy_comissao_percentual = body.motoboy_comissao_percentual;
