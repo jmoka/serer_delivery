@@ -54,32 +54,33 @@ export class PagBankClient {
     customer: PagBankCustomer;
     itens: { name: string; quantity: number; unit_amount: number }[];
     webhook_url: string;
-    splits?: Array<{
+    splits?: {
       method: 'FIXED' | 'PERCENTAGE';
       receivers: Array<{ account: { id: string }; amount: { value: number } }>;
-    }>;
+    };
   }) {
     const expiracao = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    const charge: Record<string, any> = {
+      reference_id: `CHG_${params.reference_id}`,
+      description: 'Pedido delivery',
+      amount: { value: params.valor_centavos, currency: 'BRL' },
+      payment_method: {
+        type: 'PIX',
+        pix: { expiration_date: expiracao },
+      },
+    };
+    // Split fica dentro do charge, nunca na raiz do pedido — raiz aceita campo
+    // desconhecido sem erro, então splits mal posicionado é ignorado em silêncio.
+    if (params.splits) charge.splits = params.splits;
 
     const payload: Record<string, any> = {
       reference_id: params.reference_id,
       customer: params.customer,
       items: params.itens.map((item, i) => ({ reference_id: `ITEM_${i + 1}`, ...item })),
       notification_urls: [params.webhook_url],
-      charges: [{
-        reference_id: `CHG_${params.reference_id}`,
-        description: 'Pedido delivery',
-        amount: { value: params.valor_centavos, currency: 'BRL' },
-        payment_method: {
-          type: 'PIX',
-          pix: { expiration_date: expiracao },
-        },
-      }],
+      charges: [charge],
     };
-
-    if (params.splits?.length) {
-      payload.splits = params.splits;
-    }
 
     return this.request<any>('POST', '/orders', payload);
   }
@@ -95,33 +96,34 @@ export class PagBankClient {
     parcelas: number;
     tipo: 'CREDIT_CARD' | 'DEBIT_CARD';
     webhook_url: string;
-    splits?: Array<{
+    splits?: {
       method: 'FIXED' | 'PERCENTAGE';
       receivers: Array<{ account: { id: string }; amount: { value: number } }>;
-    }>;
+    };
   }) {
+    const charge: Record<string, any> = {
+      reference_id: `CHG_${params.reference_id}`,
+      description: 'Pedido delivery',
+      amount: { value: params.valor_centavos, currency: 'BRL' },
+      payment_method: {
+        type: params.tipo,
+        installments: params.parcelas,
+        capture: true,
+        card: { encrypted: params.card_encrypted },
+        holder: { name: params.customer.name, tax_id: params.customer.tax_id },
+      },
+    };
+    // Split fica dentro do charge, nunca na raiz do pedido — raiz aceita campo
+    // desconhecido sem erro, então splits mal posicionado é ignorado em silêncio.
+    if (params.splits) charge.splits = params.splits;
+
     const payload: Record<string, any> = {
       reference_id: params.reference_id,
       customer: params.customer,
       items: params.itens.map((item, i) => ({ reference_id: `ITEM_${i + 1}`, ...item })),
       notification_urls: [params.webhook_url],
-      charges: [{
-        reference_id: `CHG_${params.reference_id}`,
-        description: 'Pedido delivery',
-        amount: { value: params.valor_centavos, currency: 'BRL' },
-        payment_method: {
-          type: params.tipo,
-          installments: params.parcelas,
-          capture: true,
-          card: { encrypted: params.card_encrypted },
-          holder: { name: params.customer.name, tax_id: params.customer.tax_id },
-        },
-      }],
+      charges: [charge],
     };
-
-    if (params.splits?.length) {
-      payload.splits = params.splits;
-    }
 
     return this.request<any>('POST', '/orders', payload);
   }

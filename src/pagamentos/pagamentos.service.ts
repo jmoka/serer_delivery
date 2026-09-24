@@ -124,18 +124,21 @@ export class PagamentosService {
     return { client: new PagBankClient(token, sandbox), webhookUrl };
   }
 
-  // Calcula splits em centavos: vendedor recebe (100 - comissao)%, plataforma recebe comissao%
+  // Calcula splits em centavos: vendedor recebe (100 - comissao)%, plataforma recebe comissao%.
+  // Formato exato exigido pela PagBank: objeto único (não array), fica dentro de
+  // charges[0].splits — não na raiz do pedido (raiz aceita qualquer campo desconhecido
+  // sem erro, então um split mal posicionado nunca falha, só é ignorado em silêncio).
   private buildSplits(valorCentavos: number, split: SplitConfig) {
     const adminAmount = Math.round(valorCentavos * split.comissaoPct / 100);
     const sellerAmount = valorCentavos - adminAmount; // resto para evitar erro de arredondamento
 
-    return [{
+    return {
       method: 'FIXED' as const,
       receivers: [
         { account: { id: split.sellerAccountId }, amount: { value: sellerAmount } },
         { account: { id: split.platformAccountId }, amount: { value: adminAmount } },
       ],
-    }];
+    };
   }
 
   private limparCpf(cpf: string) {
