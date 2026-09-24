@@ -92,6 +92,30 @@ export class PedidosService {
     return Math.round(excedenteKm * valorPorKm * 100) / 100;
   }
 
+  // Decide o frete/excedente FINAL do pedido: se algum item do carrinho tem
+  // frete embutido, ele SUBSTITUI o frete_motoboy/excedente geral do
+  // restaurante (soma de frete_embutido_unitario × quantity de cada linha
+  // marcada) — itens sem frete embutido não somam nada a mais, pegam carona
+  // na mesma entrega. Sem nenhum item de peso, segue a regra normal. Retirada
+  // no balcão sempre zera os dois, independente de peso.
+  private resolverFreteDoCarrinho(
+    linhasFinais: ItemExpandido[],
+    retiradaBalcao: boolean,
+    freteMotoboyPadrao: number,
+    excedentePadrao: number,
+  ): { frete: number; excedente: number } {
+    if (retiradaBalcao) return { frete: 0, excedente: 0 };
+
+    const temItemPeso = linhasFinais.some((l) => l.frete_embutido);
+    if (!temItemPeso) return { frete: freteMotoboyPadrao, excedente: excedentePadrao };
+
+    const frete = linhasFinais.reduce(
+      (acc, l) => acc + (l.frete_embutido ? (l.frete_embutido_unitario ?? 0) * l.quantity : 0),
+      0,
+    );
+    return { frete: Math.round(frete * 100) / 100, excedente: 0 };
+  }
+
   // Checkout é síncrono — nunca deixa o cliente esperando o Nominatim (rate-limited
   // a ~1req/s pelo GeocodingService). Se não resolver rápido, cobra excedente zero
   // — decisão de produto: nunca estimar/arriscar cobrar a mais no excedente de km.
@@ -184,8 +208,59 @@ export class PedidosService {
     };
   }
 
-  // GET /pedidos/estimativa-frete — preview do excedente de km antes de confirmar o pedido.
-  async estimarFrete(userId: string, restaurantId: number) {
+  // Monta as linhas do carrinho (produto direto + combo expandido) só com os
+  // campos de frete embutido, pra preview — não valida estoque/ativo com o
+  // mesmo rigor de criar() (é só cálculo, item inválido é ignorado em vez de
+  // travar a tela de checkout).
+  private async montarLinhasParaEstimativa(
+    restaurantId: number,
+    itens: { product_id?: number; combo_id?: number; quantity: number }[],
+  ): Promise<ItemExpandido[]> {
+    const itensDiretos = (itens ?? []).filter((i) => i.product_id != null);
+    const itensCombo = (itens ?? []).filter((i) => i.combo_id != null);
+
+    const prodIds = itensDiretos.map((i) => i.product_id as number);
+    const { data: produtos } = await this.supabase.client
+      .from('products')
+      .select('id, price, preco_promo, frete_embutido, frete_embutido_tipo, frete_embutido_valor_fixo, frete_embutido_percentual, frete_embutido_valor_km')
+      .in('id', prodIds.length ? prodIds : [0]);
+    const prodMap = Object.fromEntries((produtos ?? []).map((p) => [p.id, p]));
+
+    const linhasDiretas: ItemExpandido[] = itensDiretos
+      .filter((item) => prodMap[item.product_id as number])
+      .map((item) => {
+        const prod = prodMap[item.product_id as number];
+        const unitPrice = prod.preco_promo ?? prod.price;
+        return {
+          product_id: item.product_id as number,
+          quantity: item.quantity,
+          unit_price: unitPrice,
+          frete_embutido: prod.frete_embutido,
+          frete_embutido_tipo: prod.frete_embutido_tipo,
+          frete_embutido_valor_fixo: prod.frete_embutido_valor_fixo,
+          frete_embutido_percentual: prod.frete_embutido_percentual,
+          frete_embutido_valor_km: prod.frete_embutido_valor_km,
+        };
+      });
+
+    const linhasCombo: ItemExpandido[] = (
+      await Promise.all(itensCombo.map((i) =>
+        this.combos.expandir(i.combo_id as number, i.quantity, restaurantId).catch(() => []),
+      ))
+    ).flat();
+
+    return [...linhasDiretas, ...linhasCombo];
+  }
+
+  // POST /pedidos/estimativa-frete — preview do frete/excedente antes de confirmar
+  // o pedido. Precisa saber o carrinho (itens) porque produto com frete embutido
+  // substitui o frete_motoboy/excedente geral — sem isso o preview mostraria um
+  // total diferente do que criar() vai cobrar de verdade.
+  async estimarFrete(
+    userId: string,
+    restaurantId: number,
+    itens: { product_id?: number; combo_id?: number; quantity: number }[] = [],
+  ) {
     const { data: customer } = await this.supabase.client
       .from('customers')
       .select('id')
@@ -194,19 +269,29 @@ export class PedidosService {
 
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km')
+      .select('frete_motoboy, lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km')
       .eq('id', restaurantId)
       .maybeSingle();
-    if (!rest) return { distanciaKm: null, valorExcedente: 0, foraDoRaio: false };
+    if (!rest) return { distanciaKm: null, valorExcedente: 0, foraDoRaio: false, frete: 0 };
 
-    return this.calcularExcedenteDistancia(
+    const kmIncluso = parseFloat(rest.km_incluso_frete ?? 1);
+    const { distanciaKm, valorExcedente, foraDoRaio } = await this.calcularExcedenteDistancia(
       customer?.id ?? null,
       rest.lat,
       rest.lng,
-      parseFloat(rest.km_incluso_frete ?? 1),
+      kmIncluso,
       parseFloat(rest.valor_km_excedente ?? 0),
       rest.raio_maximo_entrega_km != null ? parseFloat(rest.raio_maximo_entrega_km) : null,
     );
+
+    const linhasFinais = await this.montarLinhasParaEstimativa(restaurantId, itens);
+    for (const l of linhasFinais) {
+      l.frete_embutido_unitario = resolverFreteEmbutidoUnitario(l, l.unit_price, distanciaKm, kmIncluso);
+    }
+    const freteMotoboyPadrao = parseFloat(rest.frete_motoboy ?? 0);
+    const { frete, excedente } = this.resolverFreteDoCarrinho(linhasFinais, false, freteMotoboyPadrao, valorExcedente);
+
+    return { distanciaKm, valorExcedente: excedente, foraDoRaio, frete };
   }
 
   private async geocodificarEnderecoCliente(customerId: number) {
@@ -402,7 +487,7 @@ export class PedidosService {
       throw new BadRequestException('Este estabelecimento não faz entregas — só retirada no balcão');
     }
     const retiradaBalcao = !!body.retirada_balcao;
-    const frete = retiradaBalcao ? 0 : parseFloat(rest?.frete_motoboy ?? 0);
+    const freteMotoboyPadrao = retiradaBalcao ? 0 : parseFloat(rest?.frete_motoboy ?? 0);
 
     // Resolve customer_id — busca existente ou cria novo ao primeiro pedido. Precisa vir
     // antes do cálculo de excedente de km, que depende do customerId pra achar lat/lng.
@@ -467,7 +552,8 @@ export class PedidosService {
       l.frete_embutido_unitario = resolverFreteEmbutidoUnitario(l, l.unit_price, distanciaKm, kmInclusoFrete);
     }
 
-    const total = subtotal + frete + valorExcedente;
+    const { frete, excedente } = this.resolverFreteDoCarrinho(linhasFinais, retiradaBalcao, freteMotoboyPadrao, valorExcedente);
+    const total = subtotal + frete + excedente;
 
     // Busca caixa aberto para vincular o pedido
     const { data: caixaAberto } = await this.supabase.client
@@ -490,7 +576,7 @@ export class PedidosService {
         frete_cobrado: parseFloat(frete.toFixed(2)),
         retirada_balcao: retiradaBalcao,
         distancia_entrega_km: distanciaKm,
-        frete_excedente_cobrado: parseFloat(valorExcedente.toFixed(2)),
+        frete_excedente_cobrado: parseFloat(excedente.toFixed(2)),
         status: 'pending',
         caixa_id: caixaAberto?.id ?? null,
       })

@@ -39,12 +39,17 @@ export class PedidosController {
     });
   }
 
-  // Preview do excedente de km antes de confirmar o pedido (StepEndereco em diante do
-  // checkout) — precisa vir ANTES de @Get(':id') senão o Nest casaria como :id.
-  @Get('estimativa-frete')
+  // Preview do frete/excedente antes de confirmar o pedido (StepEndereco em diante
+  // do checkout). É POST (não GET) porque precisa mandar os itens do carrinho —
+  // produto com frete embutido substitui o frete_motoboy/excedente geral, então o
+  // preview só bate com o que criar() vai cobrar de verdade se souber o carrinho.
+  @Post('estimativa-frete')
   @UseGuards(JwtGuard)
-  estimativaFrete(@Query('restaurant_id', ParseIntPipe) restaurantId: number, @Req() req: any) {
-    return this.service.estimarFrete(req.userId, restaurantId);
+  estimativaFrete(
+    @Body() body: { restaurant_id: number; itens?: { product_id?: number; combo_id?: number; quantity: number }[] },
+    @Req() req: any,
+  ) {
+    return this.service.estimarFrete(req.userId, body.restaurant_id, body.itens ?? []);
   }
 
   // Preview em tempo real enquanto o cliente ainda está digitando o endereço
