@@ -4,7 +4,7 @@ import { GeocodingService } from '../motoboy/geocoding.service';
 import { ComissaoService } from '../motoboy/comissao.service';
 import { SalaoService } from '../salao/salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
-import { CombosService, ItemExpandido, resolverFreteEmbutidoUnitario } from '../combos/combos.service';
+import { CombosService, ItemExpandido, resolverFreteEmbutidoUnitario, resolverFreteEmbutidoDetalhado } from '../combos/combos.service';
 import { haversineKm } from '../common/geo.util';
 import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { TelegramService } from '../telegram/telegram.service';
@@ -94,10 +94,12 @@ export class PedidosService {
 
   // Decide o frete/excedente FINAL do pedido: se algum item do carrinho tem
   // frete embutido, ele SUBSTITUI o frete_motoboy/excedente geral do
-  // restaurante (soma de frete_embutido_unitario × quantity de cada linha
-  // marcada) — itens sem frete embutido não somam nada a mais, pegam carona
-  // na mesma entrega. Sem nenhum item de peso, segue a regra normal. Retirada
-  // no balcão sempre zera os dois, independente de peso.
+  // restaurante — "Frete motoboy" no checkout vira a soma da BASE (%/fixo)
+  // de cada linha marcada, e "Excedente distância" vira a soma só da parte
+  // de km excedente (mesmos dois campos que já existiam, só a origem do
+  // valor muda). Itens sem frete embutido não somam nada a mais, pegam
+  // carona na mesma entrega. Sem nenhum item de peso, segue a regra normal.
+  // Retirada no balcão sempre zera os dois, independente de peso.
   private resolverFreteDoCarrinho(
     linhasFinais: ItemExpandido[],
     retiradaBalcao: boolean,
@@ -110,10 +112,14 @@ export class PedidosService {
     if (!temItemPeso) return { frete: freteMotoboyPadrao, excedente: excedentePadrao };
 
     const frete = linhasFinais.reduce(
-      (acc, l) => acc + (l.frete_embutido ? (l.frete_embutido_unitario ?? 0) * l.quantity : 0),
+      (acc, l) => acc + (l.frete_embutido ? (l.frete_embutido_base ?? 0) * l.quantity : 0),
       0,
     );
-    return { frete: Math.round(frete * 100) / 100, excedente: 0 };
+    const excedente = linhasFinais.reduce(
+      (acc, l) => acc + (l.frete_embutido ? (l.frete_embutido_excedente ?? 0) * l.quantity : 0),
+      0,
+    );
+    return { frete: Math.round(frete * 100) / 100, excedente: Math.round(excedente * 100) / 100 };
   }
 
   // Checkout é síncrono — nunca deixa o cliente esperando o Nominatim (rate-limited
@@ -286,6 +292,9 @@ export class PedidosService {
 
     const linhasFinais = await this.montarLinhasParaEstimativa(restaurantId, itens);
     for (const l of linhasFinais) {
+      const { base, excedente: excedenteItem } = resolverFreteEmbutidoDetalhado(l, l.unit_price, distanciaKm, kmIncluso);
+      l.frete_embutido_base = base;
+      l.frete_embutido_excedente = excedenteItem;
       l.frete_embutido_unitario = resolverFreteEmbutidoUnitario(l, l.unit_price, distanciaKm, kmIncluso);
     }
     const freteMotoboyPadrao = parseFloat(rest.frete_motoboy ?? 0);
@@ -549,6 +558,9 @@ export class PedidosService {
     // km_incluso_frete já configurado em Entregadores como franquia.
     const kmInclusoFrete = parseFloat(rest?.km_incluso_frete ?? 1);
     for (const l of linhasFinais) {
+      const { base, excedente: excedenteItem } = resolverFreteEmbutidoDetalhado(l, l.unit_price, distanciaKm, kmInclusoFrete);
+      l.frete_embutido_base = base;
+      l.frete_embutido_excedente = excedenteItem;
       l.frete_embutido_unitario = resolverFreteEmbutidoUnitario(l, l.unit_price, distanciaKm, kmInclusoFrete);
     }
 

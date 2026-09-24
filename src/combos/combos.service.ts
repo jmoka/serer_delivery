@@ -21,22 +21,46 @@ export interface ItemExpandido extends FreteEmbutidoConfig {
   unit_price: number;
   combo_nome?: string;
   combo_quantidade?: number;
-  frete_embutido_unitario?: number | null;
+  frete_embutido_unitario?: number | null; // snapshot combinado (base+excedente), gravado em order_items
+  frete_embutido_base?: number; // transiente — só pra montar frete/excedente do pedido, não persiste separado
+  frete_embutido_excedente?: number; // transiente — idem
 }
 
-// Resolve o valor de frete embutido no preço, no momento da venda — nunca
-// recalculado depois (mesmo princípio de snapshot do unit_price). Puramente
-// bookkeeping interno da loja: nunca muda o preço cobrado do cliente nem a
-// comissão da plataforma, que continuam incidindo sobre precoBase cheio.
+// Resolve o frete embutido no preço, no momento da venda — nunca recalculado
+// depois (mesmo princípio de snapshot do unit_price). Puramente bookkeeping +
+// substituição do frete geral (ver PedidosService.resolverFreteDoCarrinho):
+// nunca muda o preço do produto em si nem a comissão da plataforma.
 // distanciaKm vem do pedido inteiro (mesma distância já calculada pro
 // excedente de km do frete do motoboy) — null quando é retirada no balcão ou
 // endereço não localizado (nesse caso o excedente simplesmente não se aplica,
 // só a base).
 //
-// Base (sempre): % do preço OU valor fixo, tipo escolhido no produto.
-// Excedente (somado em cima, se configurado): reaproveita o "KM incluso no
-// frete" já configurado em Entregadores (kmIncluso) como franquia — o que
-// passar disso multiplica pelo valor por km excedente do produto e SOMA à base.
+// Base (sempre, mostrada como "Frete motoboy" no checkout): % do preço OU
+// valor fixo, tipo escolhido no produto. Válida até o "KM incluso no frete"
+// já configurado em Entregadores (kmIncluso).
+// Excedente (mostrado como "Excedente distância", somado à base no total): o
+// que passar do kmIncluso multiplica pelo valor por km excedente do produto.
+export function resolverFreteEmbutidoDetalhado(
+  config: FreteEmbutidoConfig,
+  precoBase: number,
+  distanciaKm: number | null,
+  kmIncluso: number,
+): { base: number; excedente: number } {
+  if (!config.frete_embutido) return { base: 0, excedente: 0 };
+
+  const base = config.frete_embutido_tipo === 'percentual'
+    ? (config.frete_embutido_percentual != null ? precoBase * (config.frete_embutido_percentual / 100) : 0)
+    : (config.frete_embutido_valor_fixo ?? 0);
+
+  const excedenteKm = distanciaKm != null ? Math.max(0, distanciaKm - kmIncluso) : 0;
+  const excedente = excedenteKm > 0 && config.frete_embutido_valor_km != null
+    ? excedenteKm * config.frete_embutido_valor_km
+    : 0;
+
+  return { base: Math.round(base * 100) / 100, excedente: Math.round(excedente * 100) / 100 };
+}
+
+// Snapshot combinado (base+excedente), gravado em order_items.frete_embutido_unitario.
 export function resolverFreteEmbutidoUnitario(
   config: FreteEmbutidoConfig,
   precoBase: number,
@@ -44,18 +68,9 @@ export function resolverFreteEmbutidoUnitario(
   kmIncluso: number,
 ): number | null {
   if (!config.frete_embutido) return null;
-
-  const base = config.frete_embutido_tipo === 'percentual'
-    ? (config.frete_embutido_percentual != null ? precoBase * (config.frete_embutido_percentual / 100) : 0)
-    : (config.frete_embutido_valor_fixo ?? 0);
-
-  const excedenteKm = distanciaKm != null ? Math.max(0, distanciaKm - kmIncluso) : 0;
-  const extra = excedenteKm > 0 && config.frete_embutido_valor_km != null
-    ? excedenteKm * config.frete_embutido_valor_km
-    : 0;
-
-  if (base === 0 && extra === 0) return null;
-  return Math.round((base + extra) * 100) / 100;
+  const { base, excedente } = resolverFreteEmbutidoDetalhado(config, precoBase, distanciaKm, kmIncluso);
+  if (base === 0 && excedente === 0) return null;
+  return Math.round((base + excedente) * 100) / 100;
 }
 
 @Injectable()
