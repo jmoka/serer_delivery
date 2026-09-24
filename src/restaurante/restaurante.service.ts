@@ -1265,7 +1265,7 @@ export class RestauranteService {
     const { data } = await this.supabase.client
       .from('restaurants')
       .select(
-        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, permite_retirada_balcao, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
+        'payment_config, pagamento_manual, frete_motoboy, usa_motoboy, permite_retirada_balcao, somente_retirada, motoboy_comissao_tipo, motoboy_comissao_valor_fixo, motoboy_comissao_percentual, motoboy_comissao_valor_km, motoboy_comissao_km_fallback, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, geocode_falhou, gorjeta_percentual, taxa_cartao_percentual, salao_modo, recibo_impressora_id, sangria_acrescimo_impressora_id, auto_atendimento_habilitado',
       )
       .eq('id', restaurantId)
       .maybeSingle();
@@ -1287,6 +1287,7 @@ export class RestauranteService {
       frete_motoboy: parseFloat(data?.frete_motoboy ?? 0),
       usa_motoboy: data?.usa_motoboy ?? true,
       permite_retirada_balcao: !!data?.permite_retirada_balcao,
+      somente_retirada: !!data?.somente_retirada,
       motoboy_comissao_tipo: data?.motoboy_comissao_tipo ?? 'fixo',
       motoboy_comissao_valor_fixo: parseFloat(data?.motoboy_comissao_valor_fixo ?? 0),
       motoboy_comissao_percentual: parseFloat(data?.motoboy_comissao_percentual ?? 0),
@@ -1318,6 +1319,7 @@ export class RestauranteService {
       frete_motoboy?: number;
       usa_motoboy?: boolean;
       permite_retirada_balcao?: boolean;
+      somente_retirada?: boolean;
       motoboy_comissao_tipo?: 'fixo' | 'percentual' | 'km';
       motoboy_comissao_valor_fixo?: number;
       motoboy_comissao_percentual?: number;
@@ -1357,6 +1359,10 @@ export class RestauranteService {
     if (body.frete_motoboy !== undefined) update.frete_motoboy = body.frete_motoboy;
     if (body.usa_motoboy !== undefined) update.usa_motoboy = body.usa_motoboy;
     if (body.permite_retirada_balcao !== undefined) update.permite_retirada_balcao = body.permite_retirada_balcao;
+    if (body.somente_retirada !== undefined) update.somente_retirada = body.somente_retirada;
+    // Sem entrega, só implica sentido com retirada no balcão habilitada — nunca confia
+    // só no front pra manter os dois em sincronia.
+    if (update.somente_retirada === true) update.permite_retirada_balcao = true;
     if (body.motoboy_comissao_tipo !== undefined) update.motoboy_comissao_tipo = body.motoboy_comissao_tipo;
     if (body.motoboy_comissao_valor_fixo !== undefined) update.motoboy_comissao_valor_fixo = body.motoboy_comissao_valor_fixo;
     if (body.motoboy_comissao_percentual !== undefined) update.motoboy_comissao_percentual = body.motoboy_comissao_percentual;

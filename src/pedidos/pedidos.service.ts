@@ -374,7 +374,7 @@ export class PedidosService {
     // Busca frete do restaurante e soma ao total
     const { data: rest } = await this.supabase.client
       .from('restaurants')
-      .select('frete_motoboy, motoboy_comissao_tipo, lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, permite_retirada_balcao')
+      .select('frete_motoboy, motoboy_comissao_tipo, lat, lng, km_incluso_frete, valor_km_excedente, raio_maximo_entrega_km, permite_retirada_balcao, somente_retirada')
       .eq('id', body.restaurant_id)
       .maybeSingle();
 
@@ -383,6 +383,11 @@ export class PedidosService {
     // em preço/config vindo do cliente).
     if (body.retirada_balcao && !rest?.permite_retirada_balcao) {
       throw new BadRequestException('Este estabelecimento não oferece retirada no balcão');
+    }
+    // Sem entrega, somente retirada — bloqueia pedido de entrega mesmo que o
+    // front não tenha escondido a aba (app desatualizado, chamada direta à API).
+    if (!body.retirada_balcao && rest?.somente_retirada) {
+      throw new BadRequestException('Este estabelecimento não faz entregas — só retirada no balcão');
     }
     const retiradaBalcao = !!body.retirada_balcao;
     const frete = retiradaBalcao ? 0 : parseFloat(rest?.frete_motoboy ?? 0);
