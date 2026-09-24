@@ -363,7 +363,7 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, frete_embutido, frete_embutido_tipo, frete_embutido_valor, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name)')
+      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, frete_embutido, frete_embutido_tipo, frete_embutido_valor_fixo, frete_embutido_percentual, frete_embutido_valor_km, frete_embutido_km_fallback, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
@@ -388,7 +388,9 @@ export class RestauranteService {
       name: string; description?: string; price: number; image_url?: string;
       category_id: number; grupo_id?: number | null; tags?: string[]; preco_promo?: number; destaque?: boolean;
       impressora_id?: number; quantidade_estoque?: number; preco_custo?: number; quantidade_minima?: number;
-      frete_embutido?: boolean; frete_embutido_tipo?: 'percentual' | 'fixo'; frete_embutido_valor?: number;
+      frete_embutido?: boolean; frete_embutido_tipo?: 'fixo' | 'percentual' | 'km';
+      frete_embutido_valor_fixo?: number; frete_embutido_percentual?: number;
+      frete_embutido_valor_km?: number; frete_embutido_km_fallback?: number;
     },
   ) {
     await this.planos.verificarLimiteProdutos(restaurantId);
@@ -429,7 +431,10 @@ export class RestauranteService {
         quantidade_minima: body.quantidade_minima ?? 0,
         frete_embutido: body.frete_embutido ?? false,
         frete_embutido_tipo: body.frete_embutido_tipo ?? null,
-        frete_embutido_valor: body.frete_embutido_valor ?? null,
+        frete_embutido_valor_fixo: body.frete_embutido_valor_fixo ?? null,
+        frete_embutido_percentual: body.frete_embutido_percentual ?? null,
+        frete_embutido_valor_km: body.frete_embutido_valor_km ?? null,
+        frete_embutido_km_fallback: body.frete_embutido_km_fallback ?? null,
         is_active: true,
       })
       .select()
@@ -523,8 +528,11 @@ export class RestauranteService {
         preco_custo: item?.preco_custo != null ? Number(item.preco_custo) : 0,
         quantidade_minima: item?.quantidade_minima != null ? Number(item.quantidade_minima) : 0,
         frete_embutido: !!item?.frete_embutido,
-        frete_embutido_tipo: item?.frete_embutido_tipo === 'percentual' || item?.frete_embutido_tipo === 'fixo' ? item.frete_embutido_tipo : null,
-        frete_embutido_valor: item?.frete_embutido_valor != null ? Number(item.frete_embutido_valor) : null,
+        frete_embutido_tipo: ['fixo', 'percentual', 'km'].includes(item?.frete_embutido_tipo) ? item.frete_embutido_tipo : null,
+        frete_embutido_valor_fixo: item?.frete_embutido_valor_fixo != null ? Number(item.frete_embutido_valor_fixo) : null,
+        frete_embutido_percentual: item?.frete_embutido_percentual != null ? Number(item.frete_embutido_percentual) : null,
+        frete_embutido_valor_km: item?.frete_embutido_valor_km != null ? Number(item.frete_embutido_valor_km) : null,
+        frete_embutido_km_fallback: item?.frete_embutido_km_fallback != null ? Number(item.frete_embutido_km_fallback) : null,
         is_active: true,
       });
 
@@ -563,7 +571,10 @@ export class RestauranteService {
     if (body.quantidade_minima !== undefined) update.quantidade_minima = body.quantidade_minima;
     if (body.frete_embutido !== undefined) update.frete_embutido = body.frete_embutido;
     if (body.frete_embutido_tipo !== undefined) update.frete_embutido_tipo = body.frete_embutido_tipo;
-    if (body.frete_embutido_valor !== undefined) update.frete_embutido_valor = body.frete_embutido_valor;
+    if (body.frete_embutido_valor_fixo !== undefined) update.frete_embutido_valor_fixo = body.frete_embutido_valor_fixo;
+    if (body.frete_embutido_percentual !== undefined) update.frete_embutido_percentual = body.frete_embutido_percentual;
+    if (body.frete_embutido_valor_km !== undefined) update.frete_embutido_valor_km = body.frete_embutido_valor_km;
+    if (body.frete_embutido_km_fallback !== undefined) update.frete_embutido_km_fallback = body.frete_embutido_km_fallback;
     if (body.category_id !== undefined) {
       const { data: cat } = await this.supabase.client
         .from('categories').select('id, restaurant_id').eq('id', body.category_id).maybeSingle();

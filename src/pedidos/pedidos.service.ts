@@ -342,7 +342,7 @@ export class PedidosService {
     const prodIds = itensDiretos.map((i) => i.product_id as number);
     const { data: produtos, error: errProd } = await this.supabase.client
       .from('products')
-      .select('id, price, preco_promo, is_active, frete_embutido, frete_embutido_tipo, frete_embutido_valor')
+      .select('id, price, preco_promo, is_active, frete_embutido, frete_embutido_tipo, frete_embutido_valor_fixo, frete_embutido_percentual, frete_embutido_valor_km, frete_embutido_km_fallback')
       .in('id', prodIds.length ? prodIds : [0]);
 
     if (errProd) throw errProd;
@@ -361,6 +361,8 @@ export class PedidosService {
       await Promise.all(itensCombo.map((i) => this.combos.expandir(i.combo_id as number, i.quantity, body.restaurant_id)))
     ).flat();
 
+    // Ainda não resolve frete_embutido_unitario aqui — o modo 'km' depende da
+    // distância do pedido inteiro, calculada mais abaixo (ver loop após foraDoRaio).
     const linhasDiretas: ItemExpandido[] = itensDiretos.map((item) => {
       const prod = prodMap[item.product_id as number];
       const unitPrice = prod.preco_promo ?? prod.price;
@@ -368,7 +370,12 @@ export class PedidosService {
         product_id: item.product_id as number,
         quantity: item.quantity,
         unit_price: unitPrice,
-        frete_embutido_unitario: resolverFreteEmbutidoUnitario(prod, unitPrice),
+        frete_embutido: prod.frete_embutido,
+        frete_embutido_tipo: prod.frete_embutido_tipo,
+        frete_embutido_valor_fixo: prod.frete_embutido_valor_fixo,
+        frete_embutido_percentual: prod.frete_embutido_percentual,
+        frete_embutido_valor_km: prod.frete_embutido_valor_km,
+        frete_embutido_km_fallback: prod.frete_embutido_km_fallback,
       };
     });
 
@@ -451,6 +458,13 @@ export class PedidosService {
     if (foraDoRaio) {
       throw new BadRequestException(`Esse endereço fica a ${distanciaKm}km, fora do raio de entrega do estabelecimento (${rest?.raio_maximo_entrega_km}km).`);
     }
+
+    // Só agora dá pra resolver frete embutido no modo 'km' (precisa da distância
+    // do pedido inteiro, que acabou de ficar pronta acima).
+    for (const l of linhasFinais) {
+      l.frete_embutido_unitario = resolverFreteEmbutidoUnitario(l, l.unit_price, distanciaKm);
+    }
+
     const total = subtotal + frete + valorExcedente;
 
     // Busca caixa aberto para vincular o pedido
