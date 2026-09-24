@@ -460,9 +460,11 @@ export class PedidosService {
     }
 
     // Só agora dá pra resolver frete embutido no modo 'km' (precisa da distância
-    // do pedido inteiro, que acabou de ficar pronta acima).
+    // do pedido inteiro, que acabou de ficar pronta acima). Reaproveita o mesmo
+    // km_incluso_frete já configurado em Entregadores como franquia.
+    const kmInclusoFrete = parseFloat(rest?.km_incluso_frete ?? 1);
     for (const l of linhasFinais) {
-      l.frete_embutido_unitario = resolverFreteEmbutidoUnitario(l, l.unit_price, distanciaKm);
+      l.frete_embutido_unitario = resolverFreteEmbutidoUnitario(l, l.unit_price, distanciaKm, kmInclusoFrete);
     }
 
     const total = subtotal + frete + valorExcedente;

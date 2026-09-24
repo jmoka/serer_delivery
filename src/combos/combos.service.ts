@@ -30,10 +30,15 @@ export interface ItemExpandido extends FreteEmbutidoConfig {
 // comissão da plataforma, que continuam incidindo sobre precoBase cheio.
 // distanciaKm vem do pedido inteiro (mesma distância já calculada pro
 // excedente de km do frete do motoboy) — null quando é retirada no balcão.
+// No modo 'km', reaproveita o "KM incluso no frete" já configurado em
+// Entregadores (kmIncluso) como franquia — só cobra o excedente, mesma lógica
+// do excedente de distância cobrado do cliente, só que aplicada ao valor do
+// produto em vez de somar no total do pedido.
 export function resolverFreteEmbutidoUnitario(
   config: FreteEmbutidoConfig,
   precoBase: number,
   distanciaKm: number | null,
+  kmIncluso: number,
 ): number | null {
   if (!config.frete_embutido) return null;
   if (config.frete_embutido_tipo === 'percentual') {
@@ -42,7 +47,8 @@ export function resolverFreteEmbutidoUnitario(
   }
   if (config.frete_embutido_tipo === 'km') {
     if (distanciaKm != null && config.frete_embutido_valor_km != null) {
-      return Math.round(distanciaKm * config.frete_embutido_valor_km * 100) / 100;
+      const excedenteKm = Math.max(0, distanciaKm - kmIncluso);
+      return Math.round(excedenteKm * config.frete_embutido_valor_km * 100) / 100;
     }
     return config.frete_embutido_km_fallback ?? null;
   }
