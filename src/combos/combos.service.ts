@@ -29,11 +29,14 @@ export interface ItemExpandido extends FreteEmbutidoConfig {
 // bookkeeping interno da loja: nunca muda o preço cobrado do cliente nem a
 // comissão da plataforma, que continuam incidindo sobre precoBase cheio.
 // distanciaKm vem do pedido inteiro (mesma distância já calculada pro
-// excedente de km do frete do motoboy) — null quando é retirada no balcão.
-// No modo 'km', reaproveita o "KM incluso no frete" já configurado em
-// Entregadores (kmIncluso) como franquia — só cobra o excedente, mesma lógica
-// do excedente de distância cobrado do cliente, só que aplicada ao valor do
-// produto em vez de somar no total do pedido.
+// excedente de km do frete do motoboy) — null quando é retirada no balcão ou
+// endereço não localizado (nesse caso o excedente simplesmente não se aplica,
+// só a base).
+//
+// Base (sempre): % do preço OU valor fixo, tipo escolhido no produto.
+// Excedente (somado em cima, se configurado): reaproveita o "KM incluso no
+// frete" já configurado em Entregadores (kmIncluso) como franquia — o que
+// passar disso multiplica pelo valor por km excedente do produto e SOMA à base.
 export function resolverFreteEmbutidoUnitario(
   config: FreteEmbutidoConfig,
   precoBase: number,
@@ -41,18 +44,18 @@ export function resolverFreteEmbutidoUnitario(
   kmIncluso: number,
 ): number | null {
   if (!config.frete_embutido) return null;
-  if (config.frete_embutido_tipo === 'percentual') {
-    if (config.frete_embutido_percentual == null) return null;
-    return Math.round(precoBase * (config.frete_embutido_percentual / 100) * 100) / 100;
-  }
-  if (config.frete_embutido_tipo === 'km') {
-    if (distanciaKm != null && config.frete_embutido_valor_km != null) {
-      const excedenteKm = Math.max(0, distanciaKm - kmIncluso);
-      return Math.round(excedenteKm * config.frete_embutido_valor_km * 100) / 100;
-    }
-    return config.frete_embutido_km_fallback ?? null;
-  }
-  return config.frete_embutido_valor_fixo ?? null;
+
+  const base = config.frete_embutido_tipo === 'percentual'
+    ? (config.frete_embutido_percentual != null ? precoBase * (config.frete_embutido_percentual / 100) : 0)
+    : (config.frete_embutido_valor_fixo ?? 0);
+
+  const excedenteKm = distanciaKm != null ? Math.max(0, distanciaKm - kmIncluso) : 0;
+  const extra = excedenteKm > 0 && config.frete_embutido_valor_km != null
+    ? excedenteKm * config.frete_embutido_valor_km
+    : 0;
+
+  if (base === 0 && extra === 0) return null;
+  return Math.round((base + extra) * 100) / 100;
 }
 
 @Injectable()
