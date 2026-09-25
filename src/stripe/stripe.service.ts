@@ -202,7 +202,7 @@ export class StripeService {
   // transferido pra conta conectada da loja (transfer_data.destination) e a
   // comissão fica retida automaticamente via application_fee_amount — mesmo
   // resultado do split do PagBank, só que resolvido pela própria Stripe.
-  async criarPaymentIntent(params: { restaurantId: number; orderId: number; valorReais: number }) {
+  async criarPaymentIntent(params: { restaurantId: number; orderId: number; valorReais: number; freteReais?: number }) {
     const client = await this.getClient();
 
     const [{ data: restaurante }, { data: plat }] = await Promise.all([
@@ -223,7 +223,12 @@ export class StripeService {
 
     const comissaoPct: number = restaurante.comissao_pct ?? (plat?.config as any)?.comissao_padrao_pct ?? 5;
     const valorCentavos = Math.round(params.valorReais * 100);
-    const taxaCentavos = Math.round(valorCentavos * comissaoPct / 100);
+    // application_fee_amount é a comissão da plataforma — nunca incide sobre o frete
+    // (freteReais: frete_cobrado + frete_excedente_cobrado), que é 100% repasse ao
+    // motoboy, mesmo quando embutido no preço do produto (ver frete_embutido).
+    const freteCentavos = Math.round((params.freteReais ?? 0) * 100);
+    const baseComissao = Math.max(0, valorCentavos - freteCentavos);
+    const taxaCentavos = Math.round(baseComissao * comissaoPct / 100);
 
     const intent = await client.paymentIntents.create({
       amount: valorCentavos,

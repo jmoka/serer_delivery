@@ -31,7 +31,7 @@ export class PagamentosService {
   private async buscarPedido(orderId: number) {
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, status, restaurant_id, user_id')
+      .select('id, total, status, restaurant_id, user_id, frete_cobrado, frete_excedente_cobrado')
       .eq('id', orderId)
       .maybeSingle();
 
@@ -128,8 +128,15 @@ export class PagamentosService {
   // Formato exato exigido pela PagBank: objeto único (não array), fica dentro de
   // charges[0].splits — não na raiz do pedido (raiz aceita qualquer campo desconhecido
   // sem erro, então um split mal posicionado nunca falha, só é ignorado em silêncio).
-  private buildSplits(valorCentavos: number, split: SplitConfig) {
-    const adminAmount = Math.round(valorCentavos * split.comissaoPct / 100);
+  //
+  // freteCentavos (frete_cobrado + frete_excedente_cobrado) fica FORA da base de cálculo
+  // da comissão — a plataforma cobra % só da venda do produto, nunca do frete, que é
+  // 100% repasse pro motoboy (mesmo quando embutido no preço, ver frete_embutido). Ainda
+  // assim soma no sellerAmount igual antes: o valor total splitado continua batendo com
+  // valorCentavos, só a fatia que vai pra plataforma que fica menor.
+  private buildSplits(valorCentavos: number, freteCentavos: number, split: SplitConfig) {
+    const baseComissao = Math.max(0, valorCentavos - freteCentavos);
+    const adminAmount = Math.round(baseComissao * split.comissaoPct / 100);
     const sellerAmount = valorCentavos - adminAmount; // resto para evitar erro de arredondamento
 
     return {
@@ -172,10 +179,11 @@ export class PagamentosService {
     }
 
     const valorCentavos = Math.round(pedido.total * 100);
+    const freteCentavos = Math.round(((pedido.frete_cobrado ?? 0) + (pedido.frete_excedente_cobrado ?? 0)) * 100);
     const refId = `DELIVERY_${pedido.id}_${Date.now()}`;
     const { client: pagbank, webhookUrl, splitConfig } = await this.getPagBankClient(pedido.restaurant_id);
 
-    const splits = splitConfig ? this.buildSplits(valorCentavos, splitConfig) : undefined;
+    const splits = splitConfig ? this.buildSplits(valorCentavos, freteCentavos, splitConfig) : undefined;
     const phones = await this.buscarTelefonePagBank(callerUserId);
 
     let resposta: any;
@@ -249,11 +257,12 @@ export class PagamentosService {
     }
 
     const valorCentavos = Math.round(pedido.total * 100);
+    const freteCentavos = Math.round(((pedido.frete_cobrado ?? 0) + (pedido.frete_excedente_cobrado ?? 0)) * 100);
     const refId = `DELIVERY_${pedido.id}_${Date.now()}`;
     const tipo = body.tipo ?? 'CREDIT_CARD';
     const { client: pagbank, webhookUrl, splitConfig } = await this.getPagBankClient(pedido.restaurant_id);
 
-    const splits = splitConfig ? this.buildSplits(valorCentavos, splitConfig) : undefined;
+    const splits = splitConfig ? this.buildSplits(valorCentavos, freteCentavos, splitConfig) : undefined;
     const phones = await this.buscarTelefonePagBank(callerUserId);
 
     let resposta: any;
@@ -324,6 +333,7 @@ export class PagamentosService {
       restaurantId: pedido.restaurant_id,
       orderId: pedido.id,
       valorReais: pedido.total,
+      freteReais: (pedido.frete_cobrado ?? 0) + (pedido.frete_excedente_cobrado ?? 0),
     });
 
     const { data: pagamento, error } = await this.supabase.client

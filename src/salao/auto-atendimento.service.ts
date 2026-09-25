@@ -4,6 +4,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { SalaoService, ItemComandaBody } from './salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
+import { precoVenda } from '../common/preco.util';
 
 const SESSAO_TTL_MS = 6 * 60 * 60 * 1000; // 6h — renovada a cada ação do cliente na mesa.
 
@@ -238,7 +239,7 @@ export class AutoAtendimentoService {
     const linhasDiretas: (ItemExpandido & { observacao?: string })[] = itensDiretos.map((i) => ({
       product_id: i.product_id as number,
       quantity: i.quantity,
-      unit_price: prodMap[i.product_id as number].preco_promo ?? prodMap[i.product_id as number].price,
+      unit_price: precoVenda(prodMap[i.product_id as number]),
       observacao: i.observacao,
     }));
 

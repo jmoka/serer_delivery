@@ -6,6 +6,7 @@ import { SalaoService } from '../salao/salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido, resolverFreteEmbutidoUnitario, resolverFreteEmbutidoDetalhado } from '../combos/combos.service';
 import { haversineKm } from '../common/geo.util';
+import { precoVenda } from '../common/preco.util';
 import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { TelegramService } from '../telegram/telegram.service';
 
@@ -92,14 +93,17 @@ export class PedidosService {
     return Math.round(excedenteKm * valorPorKm * 100) / 100;
   }
 
-  // Decide o frete/excedente FINAL do pedido: se algum item do carrinho tem
-  // frete embutido, ele SUBSTITUI o frete_motoboy/excedente geral do
-  // restaurante — "Frete motoboy" no checkout vira a soma da BASE (%/fixo)
-  // de cada linha marcada, e "Excedente distância" vira a soma só da parte
-  // de km excedente (mesmos dois campos que já existiam, só a origem do
-  // valor muda). Itens sem frete embutido não somam nada a mais, pegam
-  // carona na mesma entrega. Sem nenhum item de peso, segue a regra normal.
-  // Retirada no balcão sempre zera os dois, independente de peso.
+  // Resolve o valor de frete/excedente a REPASSAR AO MOTOBOY (frete_cobrado/
+  // frete_excedente_cobrado, usados por ComissaoService e pela estimativa de
+  // ganho no app do motoboy) — não é necessariamente o que o cliente paga.
+  // Se algum item do carrinho tem frete embutido, esses dois campos passam a
+  // refletir a BASE (%/fixo) e o excedente de km configurados no PRODUTO em
+  // vez do frete geral do restaurante (o motoboy ainda precisa ser pago por
+  // entregar algo pesado, mesmo que o cliente não veja essa cobrança —
+  // ver totalDoCliente() logo abaixo, que exclui esse valor do total).
+  // Itens sem frete embutido não somam nada a mais, pegam carona na mesma
+  // entrega. Sem nenhum item de peso, segue a regra normal. Retirada no
+  // balcão sempre zera os dois, independente de peso.
   private resolverFreteDoCarrinho(
     linhasFinais: ItemExpandido[],
     retiradaBalcao: boolean,
@@ -236,7 +240,7 @@ export class PedidosService {
       .filter((item) => prodMap[item.product_id as number])
       .map((item) => {
         const prod = prodMap[item.product_id as number];
-        const unitPrice = prod.preco_promo ?? prod.price;
+        const unitPrice = precoVenda(prod);
         return {
           product_id: item.product_id as number,
           quantity: item.quantity,
@@ -299,8 +303,12 @@ export class PedidosService {
     }
     const freteMotoboyPadrao = parseFloat(rest.frete_motoboy ?? 0);
     const { frete, excedente } = this.resolverFreteDoCarrinho(linhasFinais, false, freteMotoboyPadrao, valorExcedente);
+    const freteEmbutidoNoPedido = linhasFinais.some((l) => l.frete_embutido);
 
-    return { distanciaKm, valorExcedente: excedente, foraDoRaio, frete };
+    // frete/valorExcedente aqui são os valores REAIS (repasse ao motoboy) — o front usa
+    // freteEmbutidoNoPedido pra decidir se soma no total (regra normal) ou só exibe
+    // riscado como "Grátis" (peso, já embutido no preço do produto).
+    return { distanciaKm, valorExcedente: excedente, foraDoRaio, frete, freteEmbutidoNoPedido };
   }
 
   private async geocodificarEnderecoCliente(customerId: number) {
@@ -374,7 +382,7 @@ export class PedidosService {
   async buscarBruto(id: number) {
     const { data: pedido, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, troco_para, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, entrega_pagamento, status, payment_method, canal, retirada_balcao, pago_em, comprovante_pagamento_url, comprovante_pulado, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
+      .select('id, total, troco_para, frete_cobrado, distancia_entrega_km, frete_excedente_cobrado, frete_embutido_no_pedido, entrega_pagamento, status, payment_method, canal, retirada_balcao, pago_em, comprovante_pagamento_url, comprovante_pulado, restaurant_id, customer_id, user_id, motoboy_id, motoboy_lat, motoboy_lng, motoboy_location_at, delivery_notes, delivery_occurrence, cancel_reason, created_at, updated_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -565,7 +573,13 @@ export class PedidosService {
     }
 
     const { frete, excedente } = this.resolverFreteDoCarrinho(linhasFinais, retiradaBalcao, freteMotoboyPadrao, valorExcedente);
-    const total = subtotal + frete + excedente;
+    // Peso: só a BASE (%/fixo) já está embutida no preço do produto — cobrar de novo no
+    // total seria frete em dobro, por isso não soma. O excedente de km, não: cobre só a
+    // distância normal/média já embutida no preço, quilômetro que passar disso é custo
+    // real extra e É cobrado do cliente igual a regra normal (nunca "grátis"). Os dois
+    // continuam gravados em frete_cobrado/frete_excedente_cobrado (repasse ao motoboy).
+    const temItemPeso = linhasFinais.some((l) => l.frete_embutido);
+    const total = subtotal + (temItemPeso ? 0 : frete) + excedente;
 
     // Busca caixa aberto para vincular o pedido
     const { data: caixaAberto } = await this.supabase.client
@@ -589,6 +603,7 @@ export class PedidosService {
         retirada_balcao: retiradaBalcao,
         distancia_entrega_km: distanciaKm,
         frete_excedente_cobrado: parseFloat(excedente.toFixed(2)),
+        frete_embutido_no_pedido: temItemPeso,
         status: 'pending',
         caixa_id: caixaAberto?.id ?? null,
       })

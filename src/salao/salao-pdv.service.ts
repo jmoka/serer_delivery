@@ -5,6 +5,7 @@ import type { ItemComandaBody } from './salao.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido } from '../combos/combos.service';
 import { aplicarEspacoCorte } from './espaco-corte.util';
+import { precoVenda } from '../common/preco.util';
 
 // PDV do caixa (lado estabelecimento): ações de cancelar/desconto/acréscimo/pagar
 // são exclusivas do dono (RestaurantOwnerGuard) — o garçom nunca tem acesso a
@@ -623,7 +624,7 @@ export class SalaoPdvService {
     const linhasDiretas: (ItemExpandido & { observacao?: string; nao_enviar_cozinha?: boolean })[] = itensDiretos.map((i) => ({
       product_id: i.product_id as number,
       quantity: i.quantity,
-      unit_price: prodMap[i.product_id as number].preco_promo ?? prodMap[i.product_id as number].price,
+      unit_price: precoVenda(prodMap[i.product_id as number]),
       observacao: i.observacao,
       nao_enviar_cozinha: i.nao_enviar_cozinha,
     }));

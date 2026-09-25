@@ -1012,6 +1012,36 @@ export class MotoboyService {
   // afiliado a 3 lojas só recebia alerta da 3ª (última aceita), perdendo pedido pronto nas
   // outras duas mesmo com o app aberto. Sem isso, "todo motoboy afiliado recebe o alerta"
   // (regra de negócio do toggle "Usar motoboy") nunca era verdade na prática.
+  // Ganho estimado = exatamente o que o pedido já tem gravado como frete repassado
+  // (frete_cobrado + frete_excedente_cobrado), calculado uma vez em PedidosService.criar()
+  // — inclui tanto o frete normal do restaurante quanto o frete embutido por peso quando
+  // aplicável (ver resolverFreteDoCarrinho). Não soma o "adicional" de
+  // motoboy_comissao_tipo (fixo/percentual/km) — esse é só aplicado de fato em
+  // ComissaoService.registrarComissaoEntrega na hora da entrega, e o pedido disponível
+  // ainda pode ser pego por qualquer motoboy afiliado, cada um com config de comissão
+  // própria não relevante nesse preview.
+  private calcularGanhoEstimado(p: { frete_cobrado?: number | null; frete_excedente_cobrado?: number | null }): number {
+    return Math.round(((p.frete_cobrado ?? 0) + (p.frete_excedente_cobrado ?? 0)) * 100) / 100;
+  }
+
+  // Busca o nome de todos os produtos citados nos itens dos pedidos de uma vez só
+  // (evita N+1 — 1 query pro lote inteiro, não 1 por pedido).
+  private async anexarNomesDeProdutos(pedidos: any[]): Promise<any[]> {
+    const todosProductIds = [...new Set(pedidos.flatMap((p) => (p.itens ?? []).map((i: any) => i.product_id)))];
+    const nomeProduto: Record<number, string> = {};
+    if (todosProductIds.length) {
+      const { data: prods } = await this.supabase.client
+        .from('products')
+        .select('id, name')
+        .in('id', todosProductIds);
+      for (const pr of prods ?? []) nomeProduto[pr.id] = pr.name;
+    }
+    return pedidos.map((p) => ({
+      ...p,
+      itens: (p.itens ?? []).map((i: any) => ({ ...i, product_name: nomeProduto[i.product_id] ?? null })),
+    }));
+  }
+
   async pedidosDisponiveisTodos(motoboyId: number) {
     const { data: afiliacoes, error: afError } = await this.supabase.client
       .from('motoboy_estabelecimentos')
@@ -1035,7 +1065,7 @@ export class MotoboyService {
 
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, restaurant_id, total, status, payment_method, created_at, customer_id')
+      .select('id, restaurant_id, total, status, payment_method, created_at, customer_id, distancia_entrega_km, frete_cobrado, frete_excedente_cobrado')
       .in('restaurant_id', idsValidos)
       .eq('status', 'ready')
       .eq('retirada_balcao', false)
@@ -1078,10 +1108,17 @@ export class MotoboyService {
           .from('order_items')
           .select('id, quantity, unit_price, product_id')
           .eq('order_id', p.id);
-        return { ...p, restaurant_name: nomeLoja[p.restaurant_id], cliente: c, itens: itensRaw ?? [] };
+        return {
+          ...p,
+          restaurant_name: nomeLoja[p.restaurant_id],
+          cliente: c,
+          itens: itensRaw ?? [],
+          distancia_km: p.distancia_entrega_km,
+          ganho_estimado: this.calcularGanhoEstimado(p),
+        };
       }),
     );
-    return { pedidos };
+    return { pedidos: await this.anexarNomesDeProdutos(pedidos) };
   }
 
   // Pedidos em produção (confirmed/preparing, ainda sem motoboy) de todas as lojas
@@ -1290,7 +1327,7 @@ export class MotoboyService {
 
     const { data, error } = await this.supabase.client
       .from('orders')
-      .select('id, total, status, payment_method, created_at, customer_id')
+      .select('id, total, status, payment_method, created_at, customer_id, distancia_entrega_km, frete_cobrado, frete_excedente_cobrado')
       .eq('restaurant_id', restaurantId)
       .eq('status', 'ready')
       .eq('retirada_balcao', false)
@@ -1311,10 +1348,16 @@ export class MotoboyService {
           .from('order_items')
           .select('id, quantity, unit_price, product_id')
           .eq('order_id', p.id);
-        return { ...p, cliente: c, itens: itensRaw ?? [] };
+        return {
+          ...p,
+          cliente: c,
+          itens: itensRaw ?? [],
+          distancia_km: p.distancia_entrega_km,
+          ganho_estimado: this.calcularGanhoEstimado(p),
+        };
       }),
     );
-    return { pedidos };
+    return { pedidos: await this.anexarNomesDeProdutos(pedidos) };
   }
 
   async pegarPedido(pedidoId: number, motoboyId: number) {

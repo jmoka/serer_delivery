@@ -435,7 +435,7 @@ export class CatalogoController {
 
     const destaques = (produtos ?? []).filter((p) => p.destaque);
     const promos = (produtos ?? []).filter(
-      (p) => Array.isArray(p.tags) && p.tags.includes('promo') && p.preco_promo != null,
+      (p) => Array.isArray(p.tags) && p.tags.includes('promo') && p.preco_promo > 0,
     );
 
     // Combos são entidade separada de products — mesmos campos de exibição
