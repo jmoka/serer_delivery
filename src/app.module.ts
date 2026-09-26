@@ -35,6 +35,7 @@ import { TwoFactorModule } from './two-factor/two-factor.module';
 import { FavoritosMenuModule } from './favoritos-menu/favoritos-menu.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { AcademiaModule } from './academia/academia.module';
+import { PaginasLegaisModule } from './paginas-legais/paginas-legais.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { AcademiaModule } from './academia/academia.module';
     FavoritosMenuModule,
     TelegramModule,
     AcademiaModule,
+    PaginasLegaisModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
