@@ -8,8 +8,27 @@ import { gerarSegredoTotp, gerarOtpAuthUrl, verificarCodigoTotp } from './totp.u
 
 const CHALLENGE_TTL_S = 5 * 60;
 const MAX_TENTATIVAS_CODIGO = 5;
+const VERIFICACAO_EMAIL_TTL_S = 10 * 60;
 
 type Metodo2FA = 'none' | 'totp' | 'email';
+
+interface VerificacaoEmailSeguranca {
+  email: string;
+  codigo: string;
+}
+
+const chaveVerificacaoEmail = (userId: string) => `email-seguranca:verificacao:${userId}`;
+const chaveTentativasEmail = (userId: string) => `email-seguranca:tentativas:${userId}`;
+
+const RESET_SENHA_TTL_S = 15 * 60;
+
+interface DesafioResetSenha {
+  userId: string;
+  codigo: string;
+}
+
+const chaveResetSenha = (resetId: string) => `reset-senha:${resetId}`;
+const chaveTentativasResetSenha = (resetId: string) => `reset-senha:tentativas:${resetId}`;
 
 interface Desafio2FA {
   userId: string;
@@ -122,11 +141,124 @@ export class TwoFactorService {
   }
 
   async enrollEmail(userId: string): Promise<{ method: Metodo2FA }> {
+    // Exige e-mail de segurança já verificado — sem isso, o código de 2FA iria
+    // pro e-mail de login, que é exatamente o que pode ser fake/inexistente
+    // (ver EmailSegurancaService/motivação no topo do módulo).
+    const { data } = await this.supabase.client
+      .from('user_profiles')
+      .select('email_seguranca_verificado_em')
+      .eq('id', userId)
+      .maybeSingle();
+    if (!data?.email_seguranca_verificado_em) {
+      throw new BadRequestException('Verifique um e-mail de segurança antes de ativar o 2FA por e-mail.');
+    }
+
     await this.supabase.client
       .from('user_profiles')
       .update({ two_factor_method: 'email', two_factor_totp_secret: null })
       .eq('id', userId);
     return { method: 'email' };
+  }
+
+  // ── E-mail de segurança (endereço alternativo, usado por 2FA por e-mail e
+  // recuperação de senha — ver motivação no topo do arquivo de migration) ──
+
+  async getStatusEmailSeguranca(userId: string): Promise<{ email_seguranca: string | null; verificado: boolean }> {
+    const { data } = await this.supabase.client
+      .from('user_profiles')
+      .select('email_seguranca, email_seguranca_verificado_em')
+      .eq('id', userId)
+      .maybeSingle();
+    return { email_seguranca: data?.email_seguranca ?? null, verificado: !!data?.email_seguranca_verificado_em };
+  }
+
+  async solicitarVerificacaoEmailSeguranca(userId: string, email: string): Promise<{ enviado: true }> {
+    const emailNormalizado = (email ?? '').trim().toLowerCase();
+    if (!emailNormalizado || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNormalizado)) {
+      throw new BadRequestException('Informe um e-mail válido.');
+    }
+
+    const codigo = String(Math.floor(100000 + Math.random() * 900000));
+    await this.email.enviarCodigo(emailNormalizado, codigo);
+    await this.redis.setJSONStrict(
+      chaveVerificacaoEmail(userId),
+      { email: emailNormalizado, codigo } satisfies VerificacaoEmailSeguranca,
+      VERIFICACAO_EMAIL_TTL_S,
+    );
+    return { enviado: true };
+  }
+
+  async confirmarVerificacaoEmailSeguranca(userId: string, codigo: string): Promise<{ email_seguranca: string; verificado: true }> {
+    if (!codigo) throw new BadRequestException('Informe o código.');
+
+    const tentativas = await this.redis.incrWithTtl(chaveTentativasEmail(userId), VERIFICACAO_EMAIL_TTL_S);
+    if (tentativas > MAX_TENTATIVAS_CODIGO) {
+      await this.redis.del(chaveVerificacaoEmail(userId));
+      throw new BadRequestException('Muitas tentativas erradas — solicite um novo código.');
+    }
+
+    const pendente = await this.redis.getJSONStrict<VerificacaoEmailSeguranca>(chaveVerificacaoEmail(userId));
+    if (!pendente) throw new BadRequestException('Código expirado — solicite um novo.');
+    if (pendente.codigo !== codigo) throw new BadRequestException('Código inválido.');
+
+    await this.supabase.client
+      .from('user_profiles')
+      .update({ email_seguranca: pendente.email, email_seguranca_verificado_em: new Date().toISOString() })
+      .eq('id', userId);
+
+    await this.redis.del(chaveVerificacaoEmail(userId));
+    await this.redis.del(chaveTentativasEmail(userId));
+    return { email_seguranca: pendente.email, verificado: true };
+  }
+
+  async removerEmailSeguranca(userId: string): Promise<{ email_seguranca: null }> {
+    const { data } = await this.supabase.client
+      .from('user_profiles')
+      .select('two_factor_method')
+      .eq('id', userId)
+      .maybeSingle();
+    if (data?.two_factor_method === 'email') {
+      throw new BadRequestException('Desative o 2FA por e-mail antes de remover o e-mail de segurança.');
+    }
+
+    await this.supabase.client
+      .from('user_profiles')
+      .update({ email_seguranca: null, email_seguranca_verificado_em: null })
+      .eq('id', userId);
+    return { email_seguranca: null };
+  }
+
+  // ── Recuperação de senha via e-mail de segurança (AuthLoginService chama
+  // depois de resolver o e-mail de login pro userId/email_seguranca) ──
+
+  async enviarCodigoRecuperacaoSenha(userId: string, emailDestino: string): Promise<{ resetId: string }> {
+    const resetId = crypto.randomUUID();
+    const codigo = String(Math.floor(100000 + Math.random() * 900000));
+    await this.email.enviarCodigo(emailDestino, codigo);
+    await this.redis.setJSONStrict(
+      chaveResetSenha(resetId),
+      { userId, codigo } satisfies DesafioResetSenha,
+      RESET_SENHA_TTL_S,
+    );
+    return { resetId };
+  }
+
+  async verificarCodigoRecuperacaoSenha(resetId: string, codigo: string): Promise<{ userId: string }> {
+    if (!resetId || !codigo) throw new BadRequestException('Informe o código.');
+
+    const tentativas = await this.redis.incrWithTtl(chaveTentativasResetSenha(resetId), RESET_SENHA_TTL_S);
+    if (tentativas > MAX_TENTATIVAS_CODIGO) {
+      await this.redis.del(chaveResetSenha(resetId));
+      throw new UnauthorizedException('Muitas tentativas erradas. Solicite a recuperação novamente.');
+    }
+
+    const desafio = await this.redis.getJSONStrict<DesafioResetSenha>(chaveResetSenha(resetId));
+    if (!desafio) throw new UnauthorizedException('Código expirado. Solicite a recuperação novamente.');
+    if (desafio.codigo !== codigo) throw new UnauthorizedException('Código inválido.');
+
+    await this.redis.del(chaveResetSenha(resetId));
+    await this.redis.del(chaveTentativasResetSenha(resetId));
+    return { userId: desafio.userId };
   }
 
   async desativar(userId: string, senhaAtual: string): Promise<{ method: Metodo2FA }> {

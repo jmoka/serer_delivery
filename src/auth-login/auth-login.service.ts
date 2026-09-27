@@ -52,7 +52,7 @@ export class AuthLoginService {
 
     const { data: perfil } = await this.supabase.client
       .from('user_profiles')
-      .select('id, tentativas_login_falhas, bloqueado_login_ate, two_factor_method')
+      .select('id, tentativas_login_falhas, bloqueado_login_ate, two_factor_method, email_seguranca, email_seguranca_verificado_em')
       .eq('email', emailNormalizado)
       .maybeSingle();
 
@@ -91,12 +91,20 @@ export class AuthLoginService {
     // seguem exatamente como antes — a sessão só fica "retida" pra quem
     // ativou 2FA no /admin ou /restaurante (ver TwoFactorService).
     if (perfil?.two_factor_method === 'totp' || perfil?.two_factor_method === 'email') {
+      // Código de 2FA por e-mail vai pro e-mail de segurança verificado quando
+      // existir (é exatamente pra isso que ele serve — ver enrollEmail, que já
+      // exige isso pra ativar) — só cai pro e-mail de login em contas antigas
+      // que ativaram o 2FA antes desse recurso existir.
+      const emailDestino = perfil.email_seguranca_verificado_em && perfil.email_seguranca
+        ? perfil.email_seguranca
+        : emailNormalizado;
+
       let challengeId: string;
       try {
         ({ challengeId } = await this.twoFactor.criarDesafio({
           userId: perfil.id,
           method: perfil.two_factor_method,
-          email: emailNormalizado,
+          email: emailDestino,
           session,
         }));
       } catch {
@@ -117,5 +125,43 @@ export class AuthLoginService {
 
   verifyTwoFactor(challengeId: string, code: string) {
     return this.twoFactor.verificarDesafio(challengeId, code);
+  }
+
+  // ── Recuperação de senha ── e-mail de login pode ser fake (ver Seção sobre
+  // email_seguranca); quando a conta tem um e-mail de segurança verificado, o
+  // código vai pra lá em vez de depender do fluxo nativo do Supabase Auth
+  // (que só sabe mandar pro e-mail de login). Sem e-mail de segurança
+  // verificado, cai no comportamento de sempre (nativo, sem regressão).
+  async solicitarRecuperacaoSenha(email: string): Promise<{ modo: 'seguranca' | 'nativo'; reset_id?: string }> {
+    const emailNormalizado = (email ?? '').trim().toLowerCase();
+    if (!emailNormalizado) throw new BadRequestException('Informe o email');
+
+    const { data: perfil } = await this.supabase.client
+      .from('user_profiles')
+      .select('id, email_seguranca, email_seguranca_verificado_em')
+      .eq('email', emailNormalizado)
+      .maybeSingle();
+
+    if (perfil?.email_seguranca_verificado_em && perfil.email_seguranca) {
+      const { resetId } = await this.twoFactor.enviarCodigoRecuperacaoSenha(perfil.id, perfil.email_seguranca);
+      return { modo: 'seguranca', reset_id: resetId };
+    }
+
+    // Sem conta com esse email, ou sem email de segurança verificado — cai no
+    // nativo do Supabase (best-effort, nunca revela se a conta existe).
+    await this.authClient.auth.resetPasswordForEmail(emailNormalizado).catch(() => {});
+    return { modo: 'nativo' };
+  }
+
+  async confirmarRecuperacaoSenha(resetId: string, codigo: string, novaSenha: string): Promise<{ success: true }> {
+    if (!novaSenha || novaSenha.length < 8) {
+      throw new BadRequestException('A senha precisa ter no mínimo 8 caracteres.');
+    }
+    const { userId } = await this.twoFactor.verificarCodigoRecuperacaoSenha(resetId, codigo);
+
+    const { error } = await this.supabase.client.auth.admin.updateUserById(userId, { password: novaSenha });
+    if (error) throw new BadRequestException(error.message);
+
+    return { success: true };
   }
 }

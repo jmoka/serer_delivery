@@ -25,4 +25,17 @@ export class AuthLoginController {
   verify2fa(@Body() body: { challenge_id: string; code: string }) {
     return this.service.verifyTwoFactor(body.challenge_id, body.code);
   }
+
+  // ── Recuperação de senha (ver AuthLoginService.solicitarRecuperacaoSenha) ──
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('recuperar-senha')
+  recuperarSenha(@Body() body: { email: string }) {
+    return this.service.solicitarRecuperacaoSenha(body.email);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('recuperar-senha/confirmar')
+  confirmarRecuperacaoSenha(@Body() body: { reset_id: string; codigo: string; nova_senha: string }) {
+    return this.service.confirmarRecuperacaoSenha(body.reset_id, body.codigo, body.nova_senha);
+  }
 }
