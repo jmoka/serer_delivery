@@ -33,6 +33,12 @@ export const DEFAULT_APARENCIA_MARKETPLACE = {
   texto_secundario_color: '#71717A',
   texto_secundario_bg_color: '',
   texto_secundario_bg_opacity: 100,
+  // Nome do restaurante no carrossel "Restaurantes populares" (abaixo da logo
+  // redonda) — controle próprio, independente do texto_principal geral.
+  rest_populares_nome_color: '#18181B',
+  rest_populares_nome_size: 11, // px
+  rest_populares_nome_bg_color: '',
+  rest_populares_nome_bg_opacity: 100,
   hero_tagline: 'Pediu. Vai.',
   hero_titulo: 'Seu delivery favorito',
   hero_subtitulo: 'Peça dos melhores restaurantes da sua cidade',
