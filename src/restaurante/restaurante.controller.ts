@@ -186,6 +186,30 @@ export class RestauranteController {
     return this.service.salvarObservacaoCategoria(req.restaurantId, id, body.observacao ?? '');
   }
 
+  @Get('adicionais')
+  listarAdicionais(@Req() req: any) {
+    return this.service.listarAdicionais(req.restaurantId);
+  }
+
+  @Post('adicionais')
+  criarAdicional(@Req() req: any, @Body() body: { name: string; price: number }) {
+    return this.service.criarAdicional(req.restaurantId, body);
+  }
+
+  @Patch('adicionais/:id')
+  editarAdicional(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { name?: string; price?: number; is_active?: boolean },
+    @Req() req: any,
+  ) {
+    return this.service.editarAdicional(id, req.restaurantId, body);
+  }
+
+  @Delete('adicionais/:id')
+  removerAdicional(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.removerAdicional(id, req.restaurantId);
+  }
+
   @Get('clientes')
   listarClientes(
     @Req() req: any,

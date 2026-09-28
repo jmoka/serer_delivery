@@ -10,6 +10,19 @@ import { DEFAULT_APARENCIA_MARKETPLACE } from '../plataforma/aparencia-marketpla
 import * as os from 'os';
 
 const PRODUTO_FIELDS = 'id, name, description, price, preco_promo, image_url, category_id, restaurant_id, tags, destaque, is_active, quantidade_estoque';
+// Adicionais do produto só pra exibição pública — sempre via nested select (nunca
+// exposto se is_active=false, cliente não pode marcar um adicional desativado).
+const PRODUTO_ADICIONAIS_FIELDS = 'produto_adicionais(adicionais(id, name, price, is_active))';
+
+// Achata `produto_adicionais(adicionais(...))` pra `adicionais: [{id,name,price}]`
+// direto no produto — resto do front nunca precisa saber da tabela de junção.
+function comAdicionais<T extends { produto_adicionais?: any[] }>(produto: T) {
+  const { produto_adicionais, ...resto } = produto;
+  const adicionais = (produto_adicionais ?? [])
+    .map((pa: any) => pa.adicionais)
+    .filter((a: any) => a?.is_active);
+  return { ...resto, adicionais };
+}
 const RAIO_KM_PADRAO = 15;
 
 // TTL curto: aceita alguns segundos de defasagem de estoque/preço no marketplace
@@ -220,7 +233,7 @@ export class CatalogoController {
     // Busca diretamente por restaurant_id (não depende de category chain)
     const { data: produtos, error } = await this.supabase.client
       .from('products')
-      .select(PRODUTO_FIELDS)
+      .select(`${PRODUTO_FIELDS}, ${PRODUTO_ADICIONAIS_FIELDS}`)
       .eq('is_active', true)
       .gt('quantidade_estoque', 0)
       .in('restaurant_id', restIds)
@@ -231,7 +244,7 @@ export class CatalogoController {
 
     const resultado = {
       produtos: (produtos ?? []).map((p) => ({
-        ...p,
+        ...comAdicionais(p as any),
         restaurante: restMap[p.restaurant_id] ?? null,
       })).filter((p) => p.restaurante),
     };
@@ -419,14 +432,16 @@ export class CatalogoController {
       .order('name');
 
     // Produtos via restaurant_id (forma correta e direta)
-    const { data: produtos } = await this.supabase.client
+    const { data: produtosRaw } = await this.supabase.client
       .from('products')
-      .select(PRODUTO_FIELDS)
+      .select(`${PRODUTO_FIELDS}, ${PRODUTO_ADICIONAIS_FIELDS}`)
       .eq('is_active', true)
       .gt('quantidade_estoque', 0)
       .eq('restaurant_id', restaurante.id)
       .order('destaque', { ascending: false })
       .order('name');
+
+    const produtos = (produtosRaw ?? []).map((p) => comAdicionais(p as any));
 
     const cardapio = (categorias ?? []).map((cat) => ({
       ...cat,

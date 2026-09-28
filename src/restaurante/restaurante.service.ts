@@ -363,7 +363,7 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, frete_embutido, frete_embutido_tipo, frete_embutido_valor_fixo, frete_embutido_percentual, frete_embutido_valor_km, frete_embutido_km_fallback, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name)')
+      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, frete_embutido, frete_embutido_tipo, frete_embutido_valor_fixo, frete_embutido_percentual, frete_embutido_valor_km, frete_embutido_km_fallback, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name), produto_adicionais(adicional_id)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
@@ -374,12 +374,33 @@ export class RestauranteService {
     // grupo_id é sempre uma categoria PRÓPRIA do restaurante (nunca global) —
     // reaproveita a mesma tabela categories só que como "grupo" no cardápio
     // impresso (ver categorias/gerenciarGrupo abaixo).
-    const produtos = (data ?? []).map((p: any) => ({
-      ...p,
-      category_name: p.categorias?.name ?? 'Outros',
-      grupo_name: p.grupo?.name ?? null,
-    }));
+    const produtos = (data ?? []).map((p: any) => {
+      const { produto_adicionais, ...resto } = p;
+      return {
+        ...resto,
+        category_name: p.categorias?.name ?? 'Outros',
+        grupo_name: p.grupo?.name ?? null,
+        adicionais_ids: (produto_adicionais ?? []).map((pa: any) => pa.adicional_id),
+      };
+    });
     return { produtos };
+  }
+
+  // Adicionais vinculados a um produto — sempre lista o que já existe cadastrado
+  // pro restaurante (não confia em ids vindos do cliente) e filtra só os que
+  // realmente pertencem a ele, ignorando o resto silenciosamente.
+  private async sincronizarAdicionaisProduto(produtoId: number, restaurantId: number, adicionaisIds: number[]) {
+    const { data: validos } = await this.supabase.client
+      .from('adicionais').select('id').eq('restaurant_id', restaurantId).in('id', adicionaisIds);
+    const idsValidos = (validos ?? []).map((a: any) => a.id);
+
+    await this.supabase.client.from('produto_adicionais').delete().eq('product_id', produtoId);
+    if (idsValidos.length === 0) return;
+
+    const { error } = await this.supabase.client
+      .from('produto_adicionais')
+      .insert(idsValidos.map((adicionalId: number) => ({ product_id: produtoId, adicional_id: adicionalId })));
+    if (error) throw error;
   }
 
   async criarProduto(
@@ -391,6 +412,7 @@ export class RestauranteService {
       frete_embutido?: boolean; frete_embutido_tipo?: 'fixo' | 'percentual' | 'km';
       frete_embutido_valor_fixo?: number; frete_embutido_percentual?: number;
       frete_embutido_valor_km?: number; frete_embutido_km_fallback?: number;
+      adicionais_ids?: number[];
     },
   ) {
     await this.planos.verificarLimiteProdutos(restaurantId);
@@ -441,6 +463,9 @@ export class RestauranteService {
       .single();
 
     if (error) throw error;
+    if (body.adicionais_ids !== undefined) {
+      await this.sincronizarAdicionaisProduto(data.id, restaurantId, body.adicionais_ids ?? []);
+    }
     return data;
   }
 
@@ -598,6 +623,9 @@ export class RestauranteService {
     const { data, error } = await this.supabase.client
       .from('products').update(update).eq('id', produtoId).select().single();
     if (error) throw error;
+    if (body.adicionais_ids !== undefined) {
+      await this.sincronizarAdicionaisProduto(produtoId, restaurantId, body.adicionais_ids ?? []);
+    }
     return data;
   }
 
@@ -758,6 +786,57 @@ export class RestauranteService {
     if (!data) throw new NotFoundException('Categoria não encontrada neste restaurante');
     if (!name?.trim()) throw new BadRequestException('Nome não pode ser vazio');
     return this.categorias.atualizar(categoriaId, { name: name.trim() });
+  }
+
+  // ── Adicionais ──────────────────────────────────────────────────────────────
+
+  async listarAdicionais(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('adicionais')
+      .select('*')
+      .eq('restaurant_id', restaurantId)
+      .order('name');
+    if (error) throw error;
+    return { adicionais: data ?? [] };
+  }
+
+  async criarAdicional(restaurantId: number, body: { name: string; price: number }) {
+    if (!body?.name?.trim()) throw new BadRequestException('Nome não pode ser vazio');
+    const { data, error } = await this.supabase.client
+      .from('adicionais')
+      .insert({ restaurant_id: restaurantId, name: body.name.trim(), price: body.price ?? 0 })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async editarAdicional(adicionalId: number, restaurantId: number, body: { name?: string; price?: number; is_active?: boolean }) {
+    const { data: atual } = await this.supabase.client
+      .from('adicionais').select('id').eq('id', adicionalId).eq('restaurant_id', restaurantId).maybeSingle();
+    if (!atual) throw new NotFoundException('Adicional não encontrado neste restaurante');
+
+    const update: any = {};
+    if (body.name !== undefined) {
+      if (!body.name.trim()) throw new BadRequestException('Nome não pode ser vazio');
+      update.name = body.name.trim();
+    }
+    if (body.price !== undefined) update.price = body.price;
+    if (body.is_active !== undefined) update.is_active = body.is_active;
+
+    const { data, error } = await this.supabase.client
+      .from('adicionais').update(update).eq('id', adicionalId).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async removerAdicional(adicionalId: number, restaurantId: number) {
+    const { data: atual } = await this.supabase.client
+      .from('adicionais').select('id').eq('id', adicionalId).eq('restaurant_id', restaurantId).maybeSingle();
+    if (!atual) throw new NotFoundException('Adicional não encontrado neste restaurante');
+    const { error } = await this.supabase.client.from('adicionais').delete().eq('id', adicionalId);
+    if (error) throw error;
+    return { ok: true };
   }
 
   // Observação por categoria (cardápio impresso) — sempre desta loja, mesmo
@@ -1446,7 +1525,7 @@ export class RestauranteService {
       (data ?? []).map(async (o: any) => {
         const { data: itensRaw } = await this.supabase.client
           .from('order_items')
-          .select('id, quantity, unit_price, product_id')
+          .select('id, quantity, unit_price, product_id, adicionais')
           .eq('order_id', o.id);
 
         let itens: any[] = itensRaw ?? [];
@@ -1475,7 +1554,7 @@ export class RestauranteService {
     const limiteProntos = inicioDoDia.toISOString();
     const { data: itens, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, unit_price, observacao, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, garcom_nao_entregou, garcom_indo_buscar, ordem_fila, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, total, payment_method, created_at, mesas(numero, nome), garcons(nome))')
+      .select('id, quantity, unit_price, observacao, adicionais, product_id, status, enviado_em, preparando_em, pronto_em, entregue_garcom, garcom_nao_entregou, garcom_indo_buscar, ordem_fila, order_id, products(name), orders(id, restaurant_id, mesa_id, cliente_mesa_nome, garcom_id, customer_id, status, numero_comanda, is_venda_balcao, aberto_por_nome, motoboy_lat, motoboy_lng, delivery_occurrence, total, payment_method, created_at, mesas(numero, nome), garcons(nome))')
       .eq('impressora_id', impressoraId)
       .or(`status.in.(enviado,preparando),and(status.eq.pronto,pronto_em.gte.${limiteProntos})`)
       .order('ordem_fila', { ascending: true, nullsFirst: false })
@@ -1536,6 +1615,7 @@ export class RestauranteService {
           product_name: i.products?.name,
           quantity: i.quantity,
           observacao: i.observacao,
+          adicionais: i.adicionais,
           status: i.status,
           enviado_em: i.enviado_em,
           preparando_em: i.preparando_em,
