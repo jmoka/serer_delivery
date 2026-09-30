@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { haversineKm } from '../common/geo.util';
+import { EncryptionService } from '../common/encryption.service';
 
 const SELECT_ENDERECO = 'id, apelido, address_json, lat, lng, address_geocode_hash, padrao, lat_ajustado_manualmente';
 const SELECT_PERFIL = 'id, name, email, phone_e164, address_json, foto_perfil_url, cpf_cnpj';
@@ -18,6 +19,7 @@ export class EnderecosService {
   constructor(
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
+    private encryption: EncryptionService,
   ) {}
 
   private hashEndereco(addressJson: Record<string, any>) {
@@ -84,12 +86,20 @@ export class EnderecosService {
       .order('id', { ascending: false });
 
     // Flags baratas (sem chamar geocoding) — a divergência geográfica de
-    // verdade (cenário 2) só é checada sob demanda em verificar().
-    return (data ?? []).map((e) => ({
-      ...e,
-      semPino: e.lat == null || e.lng == null,
-      textoDesatualizado: this.hashEndereco(e.address_json) !== e.address_geocode_hash,
-    }));
+    // verdade (cenário 2) só é checada sob demanda em verificar(). address_json
+    // é gravado criptografado (envelope {v,enc}) — decifra antes de calcular o
+    // hash/devolver pro frontend, senão textoDesatualizado dá sempre true (hash
+    // de ciphertext nunca bate, já que o IV muda a cada gravação).
+    return (data ?? []).map((e) => {
+      // address_json é NOT NULL em customer_addresses — nunca vem null do banco.
+      const addressJson = this.encryption.decryptJson(e.address_json)!;
+      return {
+        ...e,
+        address_json: addressJson,
+        semPino: e.lat == null || e.lng == null,
+        textoDesatualizado: this.hashEndereco(addressJson) !== e.address_geocode_hash,
+      };
+    });
   }
 
   async criar(
@@ -120,7 +130,7 @@ export class EnderecosService {
       .insert({
         customer_id: customerId,
         apelido: body.apelido ?? null,
-        address_json: body.address_json,
+        address_json: this.encryption.encryptJson(body.address_json),
         lat,
         lng,
         address_geocode_hash: hash,
@@ -134,7 +144,7 @@ export class EnderecosService {
     if (body.definirComoAtivo !== false) {
       return this.selecionar(userId, data.id);
     }
-    return data;
+    return { ...data, address_json: body.address_json };
   }
 
   async editar(
@@ -155,9 +165,11 @@ export class EnderecosService {
 
     const update: Record<string, any> = { updated_at: new Date().toISOString() };
     if (body.apelido !== undefined) update.apelido = body.apelido;
-    if (body.address_json) update.address_json = body.address_json;
+    if (body.address_json) update.address_json = this.encryption.encryptJson(body.address_json);
 
-    const addressJson = body.address_json ?? existing.address_json;
+    // existing.address_json vem criptografado do banco (NOT NULL) — decifra só
+    // quando vai ser usado como fallback (body não trouxe endereço novo).
+    const addressJson = body.address_json ?? this.encryption.decryptJson(existing.address_json)!;
     const pinoManual = body.lat != null && body.lng != null;
 
     if (pinoManual) {
@@ -188,7 +200,7 @@ export class EnderecosService {
     if (existing.padrao) {
       await this.selecionar(userId, id, pinoManual ? { lat: body.lat, lng: body.lng } : undefined);
     }
-    return data;
+    return { ...data, address_json: this.encryption.decryptJson(data.address_json) };
   }
 
   async excluir(userId: string, id: number) {
@@ -231,7 +243,7 @@ export class EnderecosService {
       .maybeSingle();
     if (!endereco) throw new NotFoundException('Endereço não encontrado.');
 
-    const coords = await this.geocoding.geocodeEnderecoBr(endereco.address_json);
+    const coords = await this.geocoding.geocodeEnderecoBr(this.encryption.decryptJson(endereco.address_json));
     if (!coords) return { divergente: false, latSugerido: null, lngSugerido: null, distanciaKm: null };
 
     if (endereco.lat == null || endereco.lng == null) {
@@ -286,6 +298,10 @@ export class EnderecosService {
     }
     await this.supabase.client.from('customer_addresses').update(updateEndereco).eq('id', id);
 
-    return perfil;
+    return {
+      ...perfil,
+      cpf_cnpj: this.encryption.decryptNullable(perfil.cpf_cnpj ?? null),
+      address_json: this.encryption.decryptJson(perfil.address_json ?? null),
+    };
   }
 }

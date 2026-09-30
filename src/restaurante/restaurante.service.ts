@@ -14,6 +14,7 @@ import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { RedisService } from '../redis/redis.service';
 import { GarcomTurnoService } from '../salao/garcom-turno.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { EncryptionService } from '../common/encryption.service';
 
 const TTL_MINHA_EMPRESA = 15;
 
@@ -32,6 +33,7 @@ export class RestauranteService {
     private redis: RedisService,
     private garcomTurnoService: GarcomTurnoService,
     private telegram: TelegramService,
+    private encryption: EncryptionService,
   ) {}
 
   // Cacheada porque o header do painel (menu lateral) monta 3 hooks que bateriam
@@ -271,7 +273,11 @@ export class RestauranteService {
         : Promise.resolve({ data: [] as any[] }),
     ]);
     const motoboyMap = Object.fromEntries((motoboys ?? []).map((m: any) => [m.id, m]));
-    const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c]));
+    // address_json vem criptografado do banco — decifra aqui (endereço de
+    // entrega mostrado pro dono/motoboy nessa tela).
+    const customerMap = Object.fromEntries(
+      (customers ?? []).map((c: any) => [c.id, { ...c, address_json: this.encryption.decryptJson(c.address_json) }]),
+    );
 
     let entregas = (data ?? []).map((o) => ({
       ...o,
@@ -363,7 +369,7 @@ export class RestauranteService {
   async meusProdutos(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('products')
-      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, frete_embutido, frete_embutido_tipo, frete_embutido_valor_fixo, frete_embutido_percentual, frete_embutido_valor_km, frete_embutido_km_fallback, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name)')
+      .select('id, name, description, price, preco_promo, preco_custo, image_url, is_active, category_id, grupo_id, restaurant_id, tags, destaque, impressora_id, quantidade_estoque, quantidade_minima, frete_embutido, frete_embutido_tipo, frete_embutido_valor_fixo, frete_embutido_percentual, frete_embutido_valor_km, frete_embutido_km_fallback, created_at, categorias:categories!products_category_id_fkey(name), grupo:categories!products_grupo_id_fkey(name), produto_adicionais(adicional_id)')
       .eq('restaurant_id', restaurantId)
       .order('destaque', { ascending: false })
       .order('name');
@@ -374,11 +380,15 @@ export class RestauranteService {
     // grupo_id é sempre uma categoria PRÓPRIA do restaurante (nunca global) —
     // reaproveita a mesma tabela categories só que como "grupo" no cardápio
     // impresso (ver categorias/gerenciarGrupo abaixo).
-    const produtos = (data ?? []).map((p: any) => ({
-      ...p,
-      category_name: p.categorias?.name ?? 'Outros',
-      grupo_name: p.grupo?.name ?? null,
-    }));
+    const produtos = (data ?? []).map((p: any) => {
+      const { produto_adicionais, ...resto } = p;
+      return {
+        ...resto,
+        category_name: p.categorias?.name ?? 'Outros',
+        grupo_name: p.grupo?.name ?? null,
+        adicionais_ids: (produto_adicionais ?? []).map((pa: any) => pa.adicional_id),
+      };
+    });
     return { produtos };
   }
 
@@ -391,10 +401,12 @@ export class RestauranteService {
       frete_embutido?: boolean; frete_embutido_tipo?: 'fixo' | 'percentual' | 'km';
       frete_embutido_valor_fixo?: number; frete_embutido_percentual?: number;
       frete_embutido_valor_km?: number; frete_embutido_km_fallback?: number;
+      adicionais_ids?: number[];
     },
   ) {
     await this.planos.verificarLimiteProdutos(restaurantId);
     await this.validarLimiteOrganicoTags(restaurantId, body.tags ?? []);
+    await this.validarAdicionaisDoRestaurante(restaurantId, body.adicionais_ids ?? []);
 
     // Valida se a categoria é do restaurante ou global (restaurant_id IS NULL)
     const { data: cat } = await this.supabase.client
@@ -441,7 +453,14 @@ export class RestauranteService {
       .single();
 
     if (error) throw error;
-    return data;
+
+    if (body.adicionais_ids?.length) {
+      await this.supabase.client.from('produto_adicionais').insert(
+        body.adicionais_ids.map((adicional_id) => ({ product_id: data.id, adicional_id })),
+      );
+    }
+
+    return { ...data, adicionais_ids: body.adicionais_ids ?? [] };
   }
 
   // Importação em massa via JSON. Duplicado = mesmo nome (sem diferenciar
@@ -595,9 +614,29 @@ export class RestauranteService {
       }
     }
 
-    const { data, error } = await this.supabase.client
-      .from('products').update(update).eq('id', produtoId).select().single();
-    if (error) throw error;
+    let data: any;
+    if (Object.keys(update).length > 0) {
+      const { data: atualizado, error } = await this.supabase.client
+        .from('products').update(update).eq('id', produtoId).select().single();
+      if (error) throw error;
+      data = atualizado;
+    }
+
+    if (body.adicionais_ids !== undefined) {
+      await this.sincronizarAdicionaisDoProduto(produtoId, restaurantId, body.adicionais_ids ?? []);
+    }
+
+    // Só o update de colunas retorna a linha completa — se essa chamada só mexeu em
+    // adicionais_ids (nenhuma coluna de products mudou), busca a linha atual pra
+    // devolver o produto completo do mesmo jeito (frontend substitui o item na lista).
+    if (!data) {
+      const { data: atual, error } = await this.supabase.client
+        .from('products').select().eq('id', produtoId).single();
+      if (error) throw error;
+      data = atual;
+    }
+    if (body.adicionais_ids !== undefined) data.adicionais_ids = body.adicionais_ids ?? [];
+
     return data;
   }
 
@@ -735,6 +774,83 @@ export class RestauranteService {
     const { error } = await this.supabase.client.from('combos').delete().eq('id', comboId);
     if (error) throw error;
     return { ok: true };
+  }
+
+  // ── Adicionais ──────────────────────────────────────────────────────────────
+  // Lista simples por restaurante (sem grupos/obrigatoriedade) — cadastrada uma vez
+  // e reaproveitada em quantos produtos o dono quiser (ver produto_adicionais).
+
+  async meusAdicionais(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('adicionais')
+      .select('id, name, price, is_active, created_at')
+      .eq('restaurant_id', restaurantId)
+      .order('name');
+    if (error) throw error;
+    return { adicionais: data ?? [] };
+  }
+
+  async criarAdicional(restaurantId: number, body: { name: string; price: number }) {
+    if (!body.name?.trim()) throw new BadRequestException('Nome do adicional é obrigatório');
+    if (body.price == null || Number.isNaN(Number(body.price)) || Number(body.price) < 0) {
+      throw new BadRequestException('Preço do adicional inválido');
+    }
+
+    const { data, error } = await this.supabase.client
+      .from('adicionais')
+      .insert({ restaurant_id: restaurantId, name: body.name.trim(), price: body.price, is_active: true })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  private async verificarAdicionalDoRestaurante(adicionalId: number, restaurantId: number) {
+    const { data } = await this.supabase.client
+      .from('adicionais').select('id').eq('id', adicionalId).eq('restaurant_id', restaurantId).maybeSingle();
+    if (!data) throw new NotFoundException('Adicional não encontrado');
+  }
+
+  // Zero Trust — o dono não pode marcar num produto um adicional de outro restaurante
+  // (mesmo princípio de validarLimiteOrganicoTags/checagem de categoria em criarProduto).
+  private async validarAdicionaisDoRestaurante(restaurantId: number, adicionalIds: number[]) {
+    if (!adicionalIds.length) return;
+    const { data } = await this.supabase.client
+      .from('adicionais').select('id').eq('restaurant_id', restaurantId).in('id', adicionalIds);
+    const encontrados = new Set((data ?? []).map((a) => a.id));
+    const faltando = adicionalIds.filter((id) => !encontrados.has(id));
+    if (faltando.length) throw new BadRequestException(`Adicional(is) inválido(s): ${faltando.join(', ')}`);
+  }
+
+  async editarAdicional(adicionalId: number, restaurantId: number, body: Partial<{ name: string; price: number; is_active: boolean }>) {
+    await this.verificarAdicionalDoRestaurante(adicionalId, restaurantId);
+
+    const update: any = {};
+    if (body.name !== undefined) update.name = body.name.trim();
+    if (body.price !== undefined) update.price = body.price;
+    if (body.is_active !== undefined) update.is_active = body.is_active;
+
+    const { data, error } = await this.supabase.client
+      .from('adicionais').update(update).eq('id', adicionalId).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async deletarAdicional(adicionalId: number, restaurantId: number) {
+    await this.verificarAdicionalDoRestaurante(adicionalId, restaurantId);
+    const { error } = await this.supabase.client.from('adicionais').delete().eq('id', adicionalId);
+    if (error) throw error;
+    return { ok: true };
+  }
+
+  private async sincronizarAdicionaisDoProduto(produtoId: number, restaurantId: number, adicionalIds: number[]) {
+    await this.validarAdicionaisDoRestaurante(restaurantId, adicionalIds);
+    await this.supabase.client.from('produto_adicionais').delete().eq('product_id', produtoId);
+    if (adicionalIds.length) {
+      await this.supabase.client.from('produto_adicionais').insert(
+        adicionalIds.map((adicional_id) => ({ product_id: produtoId, adicional_id })),
+      );
+    }
   }
 
   async minhasCategorias(restaurantId: number) {
@@ -908,7 +1024,12 @@ export class RestauranteService {
       .single();
 
     if (error) throw error;
-    return data;
+    // .select() sem colunas devolve a linha inteira — cpf_cnpj/address_json vêm criptografados.
+    return {
+      ...data,
+      cpf_cnpj: this.encryption.decryptNullable((data as any).cpf_cnpj ?? null),
+      address_json: this.encryption.decryptJson((data as any).address_json ?? null),
+    };
   }
 
   // Histórico + métricas de gosto/frequência de um cliente neste restaurante — cobre

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PlanosService } from '../planos/planos.service';
+import { EncryptionService } from '../common/encryption.service';
 
 const normalizarCnpj = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '');
 
@@ -40,7 +41,7 @@ const telefoneDiverge = (a: string | null, b: string | null) => {
 
 @Injectable()
 export class GdoorService {
-  constructor(private supabase: SupabaseService, private planos: PlanosService) {}
+  constructor(private supabase: SupabaseService, private planos: PlanosService, private encryption: EncryptionService) {}
 
   // ── Lado dono (RestaurantOwnerGuard) ──────────────────────────────
 
@@ -246,7 +247,9 @@ export class GdoorService {
         .select('id, name, email, phone_e164, cpf_cnpj')
         .eq('id', pedido.customer_id)
         .maybeSingle();
-      if (clienteDelivery) cliente = clienteDelivery;
+      // cpf_cnpj vem criptografado do banco — o job pro agente GDOOR precisa do
+      // valor em claro (é ele quem escreve no sistema externo).
+      if (clienteDelivery) cliente = { ...clienteDelivery, cpf_cnpj: this.encryption.decryptNullable(clienteDelivery.cpf_cnpj) };
     }
 
     return this.criarJob(restaurantId, pedidoId, cliente, itens);
@@ -725,11 +728,14 @@ export class GdoorService {
     if (errCache) throw errCache;
     if (errMapa) throw errMapa;
 
+    // cpf_cnpj vem criptografado — decifra antes de comparar/exibir.
+    const clientesDecifrados = (clientes ?? []).map((c: any) => ({ ...c, cpf_cnpj: this.encryption.decryptNullable(c.cpf_cnpj) }));
+
     const mapaPorCliente = Object.fromEntries((mapeamentos ?? []).map((m: any) => [m.customer_id, m]));
     const mapaPorCodigo = Object.fromEntries((mapeamentos ?? []).map((m: any) => [m.codigo_gdoor, m]));
     const cachePorCodigo = Object.fromEntries((cacheGdoor ?? []).map((e: any) => [e.codigo, e]));
 
-    const clientesDelivery = (clientes ?? []).map((c: any) => {
+    const clientesDelivery = clientesDecifrados.map((c: any) => {
       const mapa = mapaPorCliente[c.id];
       const item = mapa ? cachePorCodigo[mapa.codigo_gdoor] : null;
       const diverge = !!item && (nomeDiverge(c.name, item.nome) || telefoneDiverge(c.phone_e164, item.telefone) || nomeDiverge(c.email, item.email));
@@ -738,7 +744,7 @@ export class GdoorService {
 
     const clientesGdoor = (cacheGdoor ?? []).map((e: any) => {
       const mapa = mapaPorCodigo[e.codigo];
-      const cliente = mapa ? (clientes ?? []).find((c: any) => c.id === mapa.customer_id) : null;
+      const cliente = mapa ? clientesDecifrados.find((c: any) => c.id === mapa.customer_id) : null;
       const diverge = !!cliente && (nomeDiverge(cliente.name, e.nome) || telefoneDiverge(cliente.phone_e164, e.telefone) || nomeDiverge(cliente.email, e.email));
       return { codigo: e.codigo, nome: e.nome, cnpj_cnpf: e.cnpj_cnpf, telefone: e.telefone, email: e.email, bloqueado_sync: e.bloqueado_sync, customer_id: mapa?.customer_id ?? null, nome_delivery: cliente?.name ?? null, diverge, sincronizavel: !!normalizarCnpj(e.cnpj_cnpf) };
     });
@@ -766,10 +772,13 @@ export class GdoorService {
       .in('codigo_gdoor', codigos);
     const jaMapeados = new Set((mapeamentos ?? []).map((m: any) => m.codigo_gdoor));
 
-    const { data: candidatosCpf } = await this.supabase.client
+    const { data: candidatosCpfRaw } = await this.supabase.client
       .from('customers')
       .select('id, cpf_cnpj')
       .not('cpf_cnpj', 'is', null);
+    // cpf_cnpj vem criptografado — decifra pra poder comparar (normalizarCnpj)
+    // com o CPF/CNPJ em claro que vem do GDOOR.
+    const candidatosCpf = (candidatosCpfRaw ?? []).map((c: any) => ({ ...c, cpf_cnpj: this.encryption.decryptNullable(c.cpf_cnpj) }));
 
     const importados: string[] = [];
     const ignorados: { codigo: string; motivo: string }[] = [];
@@ -805,8 +814,9 @@ export class GdoorService {
             name: item.nome.trim(),
             email: item.email || null,
             phone_e164: item.telefone || null,
-            cpf_cnpj: item.cnpj_cnpf || null,
-            address_json: {
+            cpf_cnpj: this.encryption.encryptNullable(item.cnpj_cnpf || null),
+            cpf_cnpj_hash: cnpjNormalizado ? this.encryption.hashForLookup(cnpjNormalizado) : null,
+            address_json: this.encryption.encryptJson({
               logradouro: item.endereco ?? '',
               numero: item.numero ?? '',
               complemento: item.complemento ?? '',
@@ -814,7 +824,7 @@ export class GdoorService {
               cidade: item.cidade ?? '',
               estado: item.uf ?? '',
               cep: item.cep ?? '',
-            },
+            }),
             lat: item.lat ?? null,
             lng: item.lon ?? null,
           })
@@ -846,11 +856,18 @@ export class GdoorService {
   // direto (sem pedir job novo pro agente) — evita duplicar cadastro no GDOOR
   // de quem já está lá.
   async exportarClientesParaGdoor(restaurantId: number, customerIds: number[]) {
-    const { data: clientes, error: errClientes } = await this.supabase.client
+    const { data: clientesRaw, error: errClientes } = await this.supabase.client
       .from('customers')
       .select('id, name, email, phone_e164, cpf_cnpj, address_json')
       .in('id', customerIds);
     if (errClientes) throw errClientes;
+    // cpf_cnpj/address_json vêm criptografados — decifra aqui: o job enfileirado
+    // pro agente GDOOR (abaixo) precisa do dado em claro.
+    const clientes = (clientesRaw ?? []).map((c: any) => ({
+      ...c,
+      cpf_cnpj: this.encryption.decryptNullable(c.cpf_cnpj),
+      address_json: this.encryption.decryptJson(c.address_json),
+    }));
 
     const { data: mapeamentos } = await this.supabase.client
       .from('gdoor_cliente_mapeamento')

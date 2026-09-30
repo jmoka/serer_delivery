@@ -5,6 +5,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { PlanosService } from '../planos/planos.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
+import { EncryptionService } from '../common/encryption.service';
 
 @Controller('restaurante')
 export class OnboardingController {
@@ -13,6 +14,7 @@ export class OnboardingController {
     private geocoding: GeocodingService,
     private planos: PlanosService,
     private usuarios: UsuariosService,
+    private encryption: EncryptionService,
   ) {}
 
   // Público (sem guard) — a wizard de cadastro mostra os planos antes do
@@ -35,29 +37,33 @@ export class OnboardingController {
   // Checa CNPJ/WhatsApp/email contra os demais restaurantes (excluindo o
   // próprio, pra reenvio do mesmo formulário não acusar conflito consigo
   // mesmo). CNPJ é opcional — null nunca conflita (UNIQUE do Postgres também
-  // trata assim).
+  // trata assim). CNPJ é criptografado em repouso (AES-256-GCM, não
+  // determinístico) — comparação de igualdade é feita via cnpj_hash (índice
+  // cego HMAC), nunca contra a coluna cnpj em si.
   private async checarDuplicados(
     restaurantId: number,
     valores: { cnpj: string | null; whatsapp: string | null; email: string | null },
   ) {
+    const cnpjHash = valores.cnpj ? this.encryption.hashForLookup(valores.cnpj) : null;
+
     const ors: string[] = [];
-    if (valores.cnpj) ors.push(`cnpj.eq.${valores.cnpj}`);
+    if (cnpjHash) ors.push(`cnpj_hash.eq.${cnpjHash}`);
     if (valores.whatsapp) ors.push(`whatsapp.eq.${valores.whatsapp}`);
     if (valores.email) ors.push(`email.eq.${valores.email}`);
     if (!ors.length) return { cnpj: false, whatsapp: false, email: false };
 
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, cnpj, whatsapp, email')
+      .select('id, cnpj_hash, whatsapp, email')
       .or(ors.join(','))
       .neq('id', restaurantId);
     if (error) throw error;
 
-    const conflita = (campo: 'cnpj' | 'whatsapp' | 'email', valor: string | null) =>
+    const conflita = (campo: 'cnpj_hash' | 'whatsapp' | 'email', valor: string | null) =>
       !!valor && (data ?? []).some((r: any) => r[campo] === valor);
 
     return {
-      cnpj: conflita('cnpj', valores.cnpj),
+      cnpj: conflita('cnpj_hash', cnpjHash),
       whatsapp: conflita('whatsapp', valores.whatsapp),
       email: conflita('email', valores.email),
     };
@@ -255,7 +261,10 @@ export class OnboardingController {
       if (tipo?.name !== 'Restaurante') campos.modulo_salao = false;
     }
 
-    if (body.cnpj !== undefined) campos.cnpj = cnpjNorm;
+    if (body.cnpj !== undefined) {
+      campos.cnpj = this.encryption.encryptNullable(cnpjNorm);
+      campos.cnpj_hash = cnpjNorm ? this.encryption.hashForLookup(cnpjNorm) : null;
+    }
     if (body.whatsapp !== undefined) campos.whatsapp = whatsappNorm;
     if (body.email !== undefined) campos.email = emailNorm;
 
@@ -293,6 +302,8 @@ export class OnboardingController {
     // bug em produção onde o dono nunca via o botão do painel).
     await this.usuarios.sincronizarVinculoDono(restaurantId, userId);
 
-    return { restaurant };
+    // .select() sem colunas devolve a linha inteira — cnpj vem criptografado,
+    // decifra antes de responder pro frontend.
+    return { restaurant: { ...restaurant, cnpj: this.encryption.decryptNullable((restaurant as any).cnpj ?? null) } };
   }
 }

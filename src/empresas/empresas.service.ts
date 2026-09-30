@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class EmpresasService {
   constructor(
     private supabase: SupabaseService,
     private usuarios: UsuariosService,
+    private encryption: EncryptionService,
   ) {}
 
   private gerarSlug(name: string): string {
@@ -141,7 +143,8 @@ export class EmpresasService {
 
     if (error) throw error;
     if (!data) throw new NotFoundException(`Empresa ${id} não encontrada`);
-    return data;
+    // .select() sem colunas devolve a linha inteira — cnpj vem criptografado.
+    return { ...data, cnpj: this.encryption.decryptNullable((data as any).cnpj ?? null) };
   }
 
   async bloquear(id: number, bloqueado: boolean) {

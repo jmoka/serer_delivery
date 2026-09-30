@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { SupabaseService } from '../supabase/supabase.service';
 import { CnpjService } from './cnpj.service';
 import { uploadDocumentoMotoboy } from './upload-documento-motoboy.util';
+import { EncryptionService } from '../common/encryption.service';
 
 // e-mail/phone entram direto num filtro .or() do PostgREST — sem validar formato,
 // um valor com vírgula/parênteses injeta cláusulas extras no filtro (ex. ",id.gt.0").
@@ -42,7 +43,7 @@ export async function resolverSituacaoMei(cnpjService: CnpjService, cnpj: string
 
 @Injectable()
 export class MotoboyAuthService {
-  constructor(private supabase: SupabaseService, private cnpj: CnpjService) {}
+  constructor(private supabase: SupabaseService, private cnpj: CnpjService, private encryption: EncryptionService) {}
 
   private uploadDocumento(motoboyId: number, campo: string, base64: string): Promise<string> {
     return uploadDocumentoMotoboy(this.supabase, motoboyId, campo, base64);
@@ -103,7 +104,8 @@ export class MotoboyAuthService {
         precisa_completar_cadastro: false,
         status_plataforma: 'pendente',
         veiculo_tipo: body.veiculo_tipo,
-        cnpj: cnpjNorm,
+        cnpj: this.encryption.encryptNullable(cnpjNorm),
+        cnpj_hash: this.encryption.hashForLookup(cnpjNorm),
       })
       .select('id')
       .single();

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { EncryptionService } from '../common/encryption.service';
 
 const SELECT_PERFIL = 'id, name, email, phone_e164, address_json, foto_perfil_url, cpf_cnpj';
 
@@ -11,7 +12,20 @@ export class PerfilService {
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
     private telegram: TelegramService,
+    private encryption: EncryptionService,
   ) {}
+
+  // cpf_cnpj (AES-256-GCM) e address_json (envelope {v,enc} dentro do JSONB) são
+  // gravados criptografados — essa função descriptografa o resultado de qualquer
+  // select(SELECT_PERFIL) antes de devolver pro controller/frontend.
+  private descriptografarPerfil<T extends { cpf_cnpj?: string | null; address_json?: any } | null>(perfil: T): T {
+    if (!perfil) return perfil;
+    return {
+      ...perfil,
+      cpf_cnpj: this.encryption.decryptNullable(perfil.cpf_cnpj ?? null),
+      address_json: this.encryption.decryptJson(perfil.address_json ?? null),
+    };
+  }
 
   async gerarLinkTelegramCliente(userId: string) {
     const perfil = await this.getMeuPerfil(userId);
@@ -52,7 +66,7 @@ export class PerfilService {
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (data) return data;
+    if (data) return this.descriptografarPerfil(data);
 
     // Primeira vez: cria a partir dos dados do user_profiles
     const { data: up } = await this.supabase.client
@@ -67,7 +81,7 @@ export class PerfilService {
       .select(SELECT_PERFIL)
       .single();
 
-    return novo;
+    return this.descriptografarPerfil(novo);
   }
 
   async updateMeuPerfil(
@@ -87,13 +101,26 @@ export class PerfilService {
       .eq('user_id', userId)
       .maybeSingle();
 
+    // cpf_cnpj/address_json entram em claro no body (request) — geocodificação
+    // abaixo continua usando body.address_json (a variável local não muda), só o
+    // objeto gravado no banco (campos) leva a versão criptografada.
+    const campos: Record<string, any> = { ...body };
+    if (body.cpf_cnpj !== undefined) {
+      const digitos = body.cpf_cnpj ? body.cpf_cnpj.replace(/\D/g, '') : null;
+      campos.cpf_cnpj = this.encryption.encryptNullable(digitos);
+      campos.cpf_cnpj_hash = digitos ? this.encryption.hashForLookup(digitos) : null;
+    }
+    if (body.address_json !== undefined) {
+      campos.address_json = this.encryption.encryptJson(body.address_json);
+    }
+
     let data: any;
     let customerId: number;
 
     if (existing) {
       const res = await this.supabase.client
         .from('customers')
-        .update({ ...body, updated_at: new Date().toISOString() })
+        .update({ ...campos, updated_at: new Date().toISOString() })
         .eq('id', existing.id)
         .select(SELECT_PERFIL)
         .single();
@@ -108,7 +135,7 @@ export class PerfilService {
 
       const res = await this.supabase.client
         .from('customers')
-        .insert({ ...body, email: up?.email ?? null, user_id: userId })
+        .insert({ ...campos, email: up?.email ?? null, user_id: userId })
         .select(SELECT_PERFIL)
         .single();
       data = res.data;
@@ -134,7 +161,7 @@ export class PerfilService {
       }
     }
 
-    return data;
+    return this.descriptografarPerfil(data);
   }
 
   // Pino arrastado manualmente no mapa (StepEndereco do checkout) — sobrescreve o

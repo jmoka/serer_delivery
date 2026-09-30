@@ -8,6 +8,7 @@ import { EMAIL_RE, PHONE_RE, VEICULO_TIPOS, resolverSituacaoMei } from './motobo
 import { CnpjService } from './cnpj.service';
 import { uploadDocumentoMotoboy } from './upload-documento-motoboy.util';
 import { TelegramService } from '../telegram/telegram.service';
+import { EncryptionService } from '../common/encryption.service';
 
 export interface MotoboyPeloRestauranteBody {
   name?: string;
@@ -50,6 +51,7 @@ export class MotoboyService {
     private salaoService: SalaoService,
     private cnpj: CnpjService,
     private telegram: TelegramService,
+    private encryption: EncryptionService,
   ) {}
 
   gerarLinkTelegram(motoboyId: number) {
@@ -189,7 +191,8 @@ export class MotoboyService {
         tipo_vinculo: tipoVinculo,
         motoboy_clt: motoboyClt,
         transporte_clt: transporteClt,
-        cnpj: cnpjNorm,
+        cnpj: this.encryption.encryptNullable(cnpjNorm || null),
+        cnpj_hash: cnpjNorm ? this.encryption.hashForLookup(cnpjNorm) : null,
       })
       .select('id, name, phone, email')
       .single();
@@ -427,6 +430,7 @@ export class MotoboyService {
         solicitado_em: row.solicitado_em,
         motoboy: {
           ...row.motoboy,
+          cnpj: this.encryption.decryptNullable(row.motoboy?.cnpj ?? null),
           foto_perfil_url: await this.signedUrl(row.motoboy?.foto_perfil_url),
           documento_frente_url: await this.signedUrl(row.motoboy?.documento_frente_url),
           documento_verso_url: await this.signedUrl(row.motoboy?.documento_verso_url),
@@ -478,7 +482,14 @@ export class MotoboyService {
     if (status) q = q.eq('status', status);
     const { data, error } = await q;
     if (error) throw error;
-    return { solicitacoes: (data ?? []).map((s: any) => ({ ...s, motoboy_nome: s.motoboys?.name, motoboy_phone: s.motoboys?.phone })) };
+    return {
+      solicitacoes: (data ?? []).map((s: any) => ({
+        ...s,
+        chave_pix_motoboy: this.encryption.decryptNullable(s.chave_pix_motoboy),
+        motoboy_nome: s.motoboys?.name,
+        motoboy_phone: s.motoboys?.phone,
+      })),
+    };
   }
 
   async contarSolicitacoesRepassePendentes(restaurantId: number) {
@@ -772,7 +783,10 @@ export class MotoboyService {
           itens = itens.map((i: any) => ({ ...i, product_name: prodMap[i.product_id] ?? `Produto #${i.product_id}` }));
         }
 
-        return { ...p, cliente: c, itens, restaurante: restMap[p.restaurant_id] ?? null };
+        // address_json vem criptografado do banco — decifra pro app do motoboy
+        // mostrar o endereço de entrega de verdade.
+        const clienteDecifrado = c ? { ...c, address_json: this.encryption.decryptJson((c as any).address_json) } : null;
+        return { ...p, cliente: clienteDecifrado, itens, restaurante: restMap[p.restaurant_id] ?? null };
       }),
     );
     return { pedidos };
@@ -1111,7 +1125,7 @@ export class MotoboyService {
         return {
           ...p,
           restaurant_name: nomeLoja[p.restaurant_id],
-          cliente: c,
+          cliente: c ? { ...c, address_json: this.encryption.decryptJson((c as any).address_json) } : null,
           itens: itensRaw ?? [],
           distancia_km: p.distancia_entrega_km,
           ganho_estimado: this.calcularGanhoEstimado(p),
@@ -1176,7 +1190,9 @@ export class MotoboyService {
     const { data: customers } = customerIds.length
       ? await this.supabase.client.from('customers').select('id, name, phone_e164, address_json').in('id', customerIds)
       : { data: [] as any[] };
-    const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c]));
+    const customerMap = Object.fromEntries(
+      (customers ?? []).map((c: any) => [c.id, { ...c, address_json: this.encryption.decryptJson(c.address_json) }]),
+    );
 
     const pedidos = data.map((p) => {
       const interessados = interessadosPorPedido.get(p.id) ?? [];
@@ -1279,7 +1295,8 @@ export class MotoboyService {
       .select('chave_pix')
       .eq('id', motoboyId)
       .maybeSingle();
-    if (!motoboy?.chave_pix?.trim()) {
+    const chavePix = this.encryption.decryptNullable(motoboy?.chave_pix ?? null);
+    if (!chavePix?.trim()) {
       throw new BadRequestException('Cadastre sua chave PIX no perfil antes de solicitar o resgate');
     }
 
@@ -1296,7 +1313,7 @@ export class MotoboyService {
         motoboy_id: motoboyId,
         restaurant_id: restaurantId,
         valor_solicitado: valor,
-        chave_pix_motoboy: motoboy.chave_pix.trim(),
+        chave_pix_motoboy: this.encryption.encrypt(chavePix.trim()),
       })
       .select('id')
       .single();
@@ -1350,7 +1367,7 @@ export class MotoboyService {
           .eq('order_id', p.id);
         return {
           ...p,
-          cliente: c,
+          cliente: c ? { ...c, address_json: this.encryption.decryptJson((c as any).address_json) } : null,
           itens: itensRaw ?? [],
           distancia_km: p.distancia_entrega_km,
           ganho_estimado: this.calcularGanhoEstimado(p),
@@ -1518,6 +1535,7 @@ export class MotoboyService {
 
     return {
       ...mb,
+      chave_pix: this.encryption.decryptNullable(mb.chave_pix),
       foto_perfil_url: await this.signedUrl(mb.foto_perfil_url),
       estabelecimentos: afiliacoes.filter((a: any) => a.status === 'aceito').map((a: any) => a.restaurant),
       limite_revisoes_plataforma: await this.limiteRevisoesPlataforma(),
@@ -1537,7 +1555,7 @@ export class MotoboyService {
       campos.name = body.name.trim();
     }
     if (body.phone !== undefined) campos.phone = body.phone || null;
-    if (body.chave_pix !== undefined) campos.chave_pix = body.chave_pix.trim() || null;
+    if (body.chave_pix !== undefined) campos.chave_pix = this.encryption.encryptNullable(body.chave_pix.trim() || null);
     if (body.foto_perfil) {
       const matches = body.foto_perfil.match(/^data:([\w/+-]+);base64,(.+)$/);
       const mimeType = matches ? matches[1] : 'image/jpeg';
@@ -1717,6 +1735,7 @@ export class MotoboyService {
 
     return {
       ...mb,
+      cnpj: this.encryption.decryptNullable(mb.cnpj),
       foto_perfil_url: await this.signedUrl(mb.foto_perfil_url),
       documento_frente_url: await this.signedUrl(mb.documento_frente_url),
       documento_verso_url: await this.signedUrl(mb.documento_verso_url),

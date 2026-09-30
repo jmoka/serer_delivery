@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeocodingService } from './geocoding.service';
 import { Coordenadas, haversineKm } from '../common/geo.util';
+import { EncryptionService } from '../common/encryption.service';
 
 interface PedidoParaComissao {
   id: number;
@@ -21,6 +22,7 @@ export class ComissaoService {
   constructor(
     private supabase: SupabaseService,
     private geocoding: GeocodingService,
+    private encryption: EncryptionService,
   ) {}
 
   // Idempotente via UNIQUE(pedido_id) — chamado sempre que um pedido é marcado como entregue.
@@ -129,13 +131,15 @@ export class ComissaoService {
 
     let { lat, lng } = customer;
     if (lat == null || lng == null) {
+      // address_json vem criptografado do banco — decifra antes de geocodificar/hashear.
+      const addressJson = this.encryption.decryptJson(customer.address_json);
       // Best-effort: geocodifica agora caso não tenha sido feito no checkout.
-      const coords = await this.geocoding.geocodeEnderecoBr(customer.address_json);
+      const coords = await this.geocoding.geocodeEnderecoBr(addressJson);
       if (!coords) return null;
 
       lat = coords.lat;
       lng = coords.lng;
-      const hash = crypto.createHash('md5').update(JSON.stringify(customer.address_json ?? {})).digest('hex');
+      const hash = crypto.createHash('md5').update(JSON.stringify(addressJson ?? {})).digest('hex');
       await this.supabase.client
         .from('customers')
         .update({ lat, lng, address_geocode_hash: hash, address_geocoded_at: new Date().toISOString() })

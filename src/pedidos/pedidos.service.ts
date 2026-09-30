@@ -9,6 +9,7 @@ import { haversineKm } from '../common/geo.util';
 import { precoVenda } from '../common/preco.util';
 import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
 import { TelegramService } from '../telegram/telegram.service';
+import { EncryptionService } from '../common/encryption.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
 type Status = typeof STATUS_VALIDOS[number];
@@ -23,6 +24,7 @@ export class PedidosService {
     private estoque: EstoqueService,
     private combos: CombosService,
     private telegram: TelegramService,
+    private encryption: EncryptionService,
   ) {}
 
   // Roteia os itens do pedido delivery pro mesmo mecanismo de KDS por setor que o
@@ -319,7 +321,10 @@ export class PedidosService {
       .maybeSingle();
     if (!customer) return;
 
-    const resultado = await this.geocoding.geocodificarSeNecessario(customer.address_json, customer.address_geocode_hash);
+    const resultado = await this.geocoding.geocodificarSeNecessario(
+      this.encryption.decryptJson(customer.address_json),
+      customer.address_geocode_hash,
+    );
     if (!resultado) return;
 
     const update: Record<string, any> = { lat: resultado.lat, lng: resultado.lng, address_geocoded_at: new Date().toISOString() };
@@ -423,7 +428,15 @@ export class PedidosService {
       itens = itens.map((i: any) => ({ ...i, product_name: prodMap[i.product_id] ?? `Produto #${i.product_id}` }));
     }
 
-    return { pedido, itens, cliente, empresa, motoboy, pagamento_pago: pagamento ?? null };
+    // cliente.address_json/cpf_cnpj vêm criptografados do banco — decifra aqui,
+    // no chokepoint único de leitura de pedido (rastreio do cliente, tela de
+    // pedido do dono, impressão), pra nenhum dos consumidores precisar saber
+    // que o dado está cifrado em repouso.
+    const clienteDecifrado = cliente
+      ? { ...cliente, address_json: this.encryption.decryptJson((cliente as any).address_json), cpf_cnpj: this.encryption.decryptNullable((cliente as any).cpf_cnpj) }
+      : null;
+
+    return { pedido, itens, cliente: clienteDecifrado, empresa, motoboy, pagamento_pago: pagamento ?? null };
   }
 
   async criar(body: {
