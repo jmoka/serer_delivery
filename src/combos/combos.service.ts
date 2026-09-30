@@ -21,6 +21,7 @@ export interface ItemExpandido extends FreteEmbutidoConfig {
   unit_price: number;
   combo_nome?: string;
   combo_quantidade?: number;
+  adicionais?: { id: number; name: string; price: number }[] | null; // snapshot, gravado em order_items
   frete_embutido_unitario?: number | null; // snapshot combinado (base+excedente), gravado em order_items
   frete_embutido_base?: number; // transiente — só pra montar frete/excedente do pedido, não persiste separado
   frete_embutido_excedente?: number; // transiente — idem

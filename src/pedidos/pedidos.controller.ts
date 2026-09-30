@@ -46,7 +46,7 @@ export class PedidosController {
   @Post('estimativa-frete')
   @UseGuards(JwtGuard)
   estimativaFrete(
-    @Body() body: { restaurant_id: number; itens?: { product_id?: number; combo_id?: number; quantity: number }[] },
+    @Body() body: { restaurant_id: number; itens?: { product_id?: number; combo_id?: number; quantity: number; adicionais_ids?: number[] }[] },
     @Req() req: any,
   ) {
     return this.service.estimarFrete(req.userId, body.restaurant_id, body.itens ?? []);
@@ -85,7 +85,7 @@ export class PedidosController {
       customer_id?: number;
       payment_method: string;
       troco_para?: number;
-      itens: { product_id: number; quantity: number }[];
+      itens: { product_id: number; quantity: number; adicionais_ids?: number[] }[];
       retirada_balcao?: boolean;
     },
     @Req() req: any,

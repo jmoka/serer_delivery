@@ -220,13 +220,29 @@ export class PedidosService {
     };
   }
 
+  // Busca adicionais válidos (existem, pertencem a este restaurante) por id — nunca
+  // confia em nome/preço vindo do cliente, só no id; o preço somado ao item sempre
+  // vem fresco do banco. Ids que não pertencem ao restaurante somem silenciosamente
+  // (mesmo tratamento de "item inválido é ignorado" do resto do carrinho aqui).
+  private async buscarAdicionaisValidos(restaurantId: number, ids: number[]) {
+    const unicos = [...new Set(ids)];
+    if (unicos.length === 0) return new Map<number, { id: number; name: string; price: number }>();
+    const { data } = await this.supabase.client
+      .from('adicionais')
+      .select('id, name, price')
+      .eq('restaurant_id', restaurantId)
+      .eq('is_active', true)
+      .in('id', unicos);
+    return new Map((data ?? []).map((a: any) => [a.id, a]));
+  }
+
   // Monta as linhas do carrinho (produto direto + combo expandido) só com os
   // campos de frete embutido, pra preview — não valida estoque/ativo com o
   // mesmo rigor de criar() (é só cálculo, item inválido é ignorado em vez de
   // travar a tela de checkout).
   private async montarLinhasParaEstimativa(
     restaurantId: number,
-    itens: { product_id?: number; combo_id?: number; quantity: number }[],
+    itens: { product_id?: number; combo_id?: number; quantity: number; adicionais_ids?: number[] }[],
   ): Promise<ItemExpandido[]> {
     const itensDiretos = (itens ?? []).filter((i) => i.product_id != null);
     const itensCombo = (itens ?? []).filter((i) => i.combo_id != null);
@@ -238,15 +254,24 @@ export class PedidosService {
       .in('id', prodIds.length ? prodIds : [0]);
     const prodMap = Object.fromEntries((produtos ?? []).map((p) => [p.id, p]));
 
+    const adicionaisMap = await this.buscarAdicionaisValidos(
+      restaurantId,
+      itensDiretos.flatMap((i) => i.adicionais_ids ?? []),
+    );
+
     const linhasDiretas: ItemExpandido[] = itensDiretos
       .filter((item) => prodMap[item.product_id as number])
       .map((item) => {
         const prod = prodMap[item.product_id as number];
-        const unitPrice = precoVenda(prod);
+        const adicionaisSelecionados = (item.adicionais_ids ?? [])
+          .map((id) => adicionaisMap.get(id))
+          .filter((a): a is { id: number; name: string; price: number } => !!a);
+        const unitPrice = precoVenda(prod) + adicionaisSelecionados.reduce((acc, a) => acc + a.price, 0);
         return {
           product_id: item.product_id as number,
           quantity: item.quantity,
           unit_price: unitPrice,
+          adicionais: adicionaisSelecionados.length ? adicionaisSelecionados : null,
           frete_embutido: prod.frete_embutido,
           frete_embutido_tipo: prod.frete_embutido_tipo,
           frete_embutido_valor_fixo: prod.frete_embutido_valor_fixo,
@@ -271,7 +296,7 @@ export class PedidosService {
   async estimarFrete(
     userId: string,
     restaurantId: number,
-    itens: { product_id?: number; combo_id?: number; quantity: number }[] = [],
+    itens: { product_id?: number; combo_id?: number; quantity: number; adicionais_ids?: number[] }[] = [],
   ) {
     const { data: customer } = await this.supabase.client
       .from('customers')
@@ -397,7 +422,7 @@ export class PedidosService {
     const [{ data: itensRaw }, { data: cliente }, { data: empresaRaw }, { data: motoboy }, { data: pagamento }, { data: tipoRestauranteRow }] = await Promise.all([
       this.supabase.client
         .from('order_items')
-        .select('id, quantity, unit_price, product_id, combo_nome, combo_quantidade, status, enviado_em, preparando_em')
+        .select('id, quantity, unit_price, product_id, combo_nome, combo_quantidade, adicionais, status, enviado_em, preparando_em')
         .eq('order_id', id),
       pedido.customer_id
         ? this.supabase.client.from('customers').select('id, name, email, phone_e164, address_json, lat, lng, cpf_cnpj').eq('id', pedido.customer_id).maybeSingle()
@@ -445,7 +470,7 @@ export class PedidosService {
     payment_method: string;
     troco_para?: number;
     user_id: string;
-    itens: { product_id?: number; combo_id?: number; quantity: number }[];
+    itens: { product_id?: number; combo_id?: number; quantity: number; adicionais_ids?: number[] }[];
     retirada_balcao?: boolean;
   }) {
     if (!body.itens?.length) throw new BadRequestException('Pedido precisa de pelo menos 1 item');
@@ -476,15 +501,24 @@ export class PedidosService {
       await Promise.all(itensCombo.map((i) => this.combos.expandir(i.combo_id as number, i.quantity, body.restaurant_id)))
     ).flat();
 
+    const adicionaisMap = await this.buscarAdicionaisValidos(
+      body.restaurant_id,
+      itensDiretos.flatMap((i) => i.adicionais_ids ?? []),
+    );
+
     // Ainda não resolve frete_embutido_unitario aqui — o modo 'km' depende da
     // distância do pedido inteiro, calculada mais abaixo (ver loop após foraDoRaio).
     const linhasDiretas: ItemExpandido[] = itensDiretos.map((item) => {
       const prod = prodMap[item.product_id as number];
-      const unitPrice = prod.preco_promo ?? prod.price;
+      const adicionaisSelecionados = (item.adicionais_ids ?? [])
+        .map((id) => adicionaisMap.get(id))
+        .filter((a): a is { id: number; name: string; price: number } => !!a);
+      const unitPrice = (prod.preco_promo ?? prod.price) + adicionaisSelecionados.reduce((acc, a) => acc + a.price, 0);
       return {
         product_id: item.product_id as number,
         quantity: item.quantity,
         unit_price: unitPrice,
+        adicionais: adicionaisSelecionados.length ? adicionaisSelecionados : null,
         frete_embutido: prod.frete_embutido,
         frete_embutido_tipo: prod.frete_embutido_tipo,
         frete_embutido_valor_fixo: prod.frete_embutido_valor_fixo,
@@ -634,6 +668,7 @@ export class PedidosService {
       combo_nome: l.combo_nome ?? null,
       combo_quantidade: l.combo_quantidade ?? null,
       frete_embutido_unitario: l.frete_embutido_unitario ?? null,
+      adicionais: l.adicionais ?? null,
     }));
 
     const { error: errItens } = await this.supabase.client
