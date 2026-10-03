@@ -16,26 +16,28 @@ export class PlataformaService {
     ] = await Promise.all([
       this.supabase.client.from('restaurants').select('id, name, comissao_pct'),
       this.supabase.client.from('orders').select('id, total, status, restaurant_id'),
-      this.supabase.client.from('plataforma_comissoes').select('comissao_valor, empresa_id, criado_em'),
+      this.supabase.client.from('plataforma_comissoes').select('valor_venda, comissao_valor, empresa_id, criado_em'),
     ]);
 
     const entregues = (pedidos ?? []).filter((p) => p.status === 'delivered');
     const cancelados = (pedidos ?? []).filter((p) => p.status === 'canceled');
-    const faturamentoTotal = entregues.reduce((acc, p) => acc + (p.total ?? 0), 0);
-    const comissaoTotal = (comissoes ?? []).reduce((acc, c) => acc + (c.comissao_valor ?? 0), 0);
+
+    // Faturamento conta a partir do PAGAMENTO CONFIRMADO, não da entrega --
+    // plataforma_comissoes já reflete isso (online na hora do pagamento via
+    // split, dinheiro na entrega, ver registrar_comissao_entrega), então é a
+    // fonte certa pra "venda confirmada", igual ao resto do admin/comissoes.
+    const vendasConfirmadas = comissoes ?? [];
+    const faturamentoTotal = vendasConfirmadas.reduce((acc, c) => acc + (c.valor_venda ?? 0), 0);
+    const comissaoTotal = vendasConfirmadas.reduce((acc, c) => acc + (c.comissao_valor ?? 0), 0);
 
     // Faturamento por empresa (top 5)
     const porEmpresa: Record<number, { nome: string; faturamento: number; comissao: number }> = {};
     for (const e of empresas ?? []) {
       porEmpresa[e.id] = { nome: e.name, faturamento: 0, comissao: 0 };
     }
-    for (const p of entregues) {
-      if (porEmpresa[p.restaurant_id]) {
-        porEmpresa[p.restaurant_id].faturamento += p.total ?? 0;
-      }
-    }
-    for (const c of comissoes ?? []) {
+    for (const c of vendasConfirmadas) {
       if (porEmpresa[c.empresa_id]) {
+        porEmpresa[c.empresa_id].faturamento += c.valor_venda ?? 0;
         porEmpresa[c.empresa_id].comissao += c.comissao_valor ?? 0;
       }
     }
@@ -53,7 +55,7 @@ export class PlataformaService {
         pedidos_cancelados: cancelados.length,
         faturamento_total: parseFloat(faturamentoTotal.toFixed(2)),
         comissao_total: parseFloat(comissaoTotal.toFixed(2)),
-        ticket_medio: entregues.length > 0 ? parseFloat((faturamentoTotal / entregues.length).toFixed(2)) : 0,
+        ticket_medio: vendasConfirmadas.length > 0 ? parseFloat((faturamentoTotal / vendasConfirmadas.length).toFixed(2)) : 0,
       },
       top_empresas: topEmpresas,
     };
