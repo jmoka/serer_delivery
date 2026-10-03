@@ -82,9 +82,26 @@ export class PlataformaService {
 
     const total = (data ?? []).reduce((acc, c) => acc + (c.comissao_valor ?? 0), 0);
 
+    // Código da transação (pra conferência manual no painel PagBank) -- vem
+    // de `pagamentos`, não de plataforma_comissoes, pois pedido em dinheiro
+    // nunca tem linha ali (fica null pra esses, o que é esperado).
+    const pedidoIds = (data ?? []).map((c) => c.pedido_id);
+    let codigoPorPedido = new Map<number, string | null>();
+    if (pedidoIds.length > 0) {
+      const { data: pagamentosRows } = await this.supabase.client
+        .from('pagamentos')
+        .select('order_id, pagbank_charge_id, pagbank_order_id')
+        .in('order_id', pedidoIds);
+      codigoPorPedido = new Map(
+        (pagamentosRows ?? []).map((p: any) => [p.order_id, p.pagbank_charge_id ?? p.pagbank_order_id ?? null]),
+      );
+    }
+
+    const comissoes = (data ?? []).map((c) => ({ ...c, codigo_transacao: codigoPorPedido.get(c.pedido_id) ?? null }));
+
     return {
-      comissoes: data,
-      total_registros: data?.length ?? 0,
+      comissoes,
+      total_registros: comissoes.length,
       total_comissao: parseFloat(total.toFixed(2)),
     };
   }
