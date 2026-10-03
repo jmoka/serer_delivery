@@ -2049,6 +2049,51 @@ export class RestauranteService {
     };
   }
 
+  // Venda/Plataforma/Líquido por pedido delivery, só a partir do PAGAMENTO
+  // CONFIRMADO (não precisa esperar "entregue" -- diferente do trigger
+  // on_order_delivered que alimenta plataforma_comissoes/fatura, que
+  // continua esperando entrega de propósito, ver buscarComissoesNaoColetadas
+  // em planos.service.ts). Reflete dinheiro que JÁ se moveu: se o split do
+  // PagBank estava ativo, a plataforma já recebeu a comissão na hora --
+  // senão, tudo ficou com a loja por ora e a comissão só vira cobrança
+  // depois, na fatura do plano (mesmo critério de split_ativo usado lá).
+  private async calcularFinanceiroPlataformaDelivery(restaurantId: number, pedidosDelivery: any[]) {
+    const mapa = new Map<number, { pagamento_confirmado: boolean; comissao_valor: number; valor_liquido: number }>();
+    if (!pedidosDelivery.length) return mapa;
+
+    const [{ data: pagamentosRows }, { data: restData }, { data: platData }] = await Promise.all([
+      this.supabase.client
+        .from('pagamentos')
+        .select('order_id, status, split_ativo')
+        .in('order_id', pedidosDelivery.map((p: any) => p.id)),
+      this.supabase.client.from('restaurants').select('comissao_pct').eq('id', restaurantId).maybeSingle(),
+      this.supabase.client.from('platform_settings').select('config').eq('id', 1).maybeSingle(),
+    ]);
+
+    const comissaoPct: number = restData?.comissao_pct ?? parseFloat(platData?.config?.comissao_padrao_pct ?? '5') ?? 5;
+    const pagamentoPorPedido = new Map((pagamentosRows ?? []).map((p: any) => [p.order_id, p]));
+
+    for (const o of pedidosDelivery as any[]) {
+      const pagamento = pagamentoPorPedido.get(o.id);
+      const pagamentoConfirmado = pagamento?.status === 'paid';
+      if (!pagamentoConfirmado) {
+        mapa.set(o.id, { pagamento_confirmado: false, comissao_valor: 0, valor_liquido: 0 });
+        continue;
+      }
+      if (!pagamento.split_ativo) {
+        // Split não rodou nessa venda -- dinheiro 100% com a loja por ora,
+        // comissão vira cobrança na fatura do plano depois (não agora).
+        mapa.set(o.id, { pagamento_confirmado: true, comissao_valor: 0, valor_liquido: parseFloat(o.total) });
+        continue;
+      }
+      const freteBase = parseFloat(o.frete_cobrado ?? 0) + parseFloat(o.frete_excedente_cobrado ?? 0);
+      const baseComissao = Math.max(0, parseFloat(o.total) - freteBase);
+      const comissaoValor = Math.round(baseComissao * comissaoPct) / 100;
+      mapa.set(o.id, { pagamento_confirmado: true, comissao_valor: comissaoValor, valor_liquido: parseFloat((parseFloat(o.total) - comissaoValor).toFixed(2)) });
+    }
+    return mapa;
+  }
+
   async getCaixa(restaurantId: number) {
     const { data: restaurantData } = await this.supabase.client
       .from('restaurants')
@@ -2086,7 +2131,7 @@ export class RestauranteService {
 
     const { data: ordersData } = await this.supabase.client
       .from('orders')
-      .select('id, total, frete_cobrado, troco_para, status, payment_method, canal, retirada_balcao, created_at, updated_at, customer_id, motoboy_id, caixa_id, mesa_id, cliente_mesa_nome, numero_comanda, entrega_pagamento, customers(name, phone_e164), motoboys(name), mesas(numero, nome)')
+      .select('id, total, frete_cobrado, frete_excedente_cobrado, troco_para, status, payment_method, canal, retirada_balcao, created_at, updated_at, customer_id, motoboy_id, caixa_id, mesa_id, cliente_mesa_nome, numero_comanda, entrega_pagamento, customers(name, phone_e164), motoboys(name), mesas(numero, nome)')
       .eq('restaurant_id', restaurantId)
       .or(`caixa_id.eq.${caixa.id},and(caixa_id.is.null,created_at.gte.${caixa.aberto_em})`)
       .order('created_at', { ascending: false });
@@ -2099,10 +2144,14 @@ export class RestauranteService {
 
     // Dá autonomia pro painel Delivery ver, sem abrir cada pedido, quais praças (Cozinha/
     // Bar/Drinks...) já terminaram e quais faltam antes de liberar pro motoboy.
-    const idsDelivery = pedidosBrutos.filter((p: any) => p.canal !== 'presencial').map((p: any) => p.id);
+    const pedidosDelivery = pedidosBrutos.filter((p: any) => p.canal !== 'presencial');
+    const idsDelivery = pedidosDelivery.map((p: any) => p.id);
     const pracas = await this.pracasPorPedido(idsDelivery);
+    const financeiroPorPedido = await this.calcularFinanceiroPlataformaDelivery(restaurantId, pedidosDelivery);
     const pedidos = pedidosBrutos.map((p: any) => (
-      p.canal !== 'presencial' ? { ...p, pracas: pracas[p.id] ?? [] } : p
+      p.canal !== 'presencial'
+        ? { ...p, pracas: pracas[p.id] ?? [], financeiro_plataforma: financeiroPorPedido.get(p.id) ?? null }
+        : p
     ));
 
     return {
