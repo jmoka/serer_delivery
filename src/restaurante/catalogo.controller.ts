@@ -25,6 +25,13 @@ function comAdicionais<T extends { produto_adicionais?: any[] }>(produto: T) {
 }
 const RAIO_KM_PADRAO = 15;
 
+// Fallback só usado se MARKETPLACE_BASE_URL não estiver setada no ambiente.
+const MARKETPLACE_BASE_URL = process.env.MARKETPLACE_BASE_URL ?? 'https://pediuvai.teucurso.top';
+
+function montarLinkRestaurante(r: { slug: string; custom_domain?: string | null }) {
+  return r.custom_domain ? `https://${r.custom_domain}` : `${MARKETPLACE_BASE_URL}/r/${r.slug}`;
+}
+
 // TTL curto: aceita alguns segundos de defasagem de estoque/preço no marketplace
 // público em troca de menos carga no Supabase (mesmo trade-off que iFood/Rappi fazem).
 const TTL_CARDAPIO = 15;
@@ -212,15 +219,21 @@ export class CatalogoController {
     return resultado;
   }
 
+  // `q` é usado pela tool `buscar_produto` do agente (n8n) — busca enxuta, sem o
+  // payload pesado de `aparencia` (carousel_images pode ter dezenas de URLs) que o
+  // marketplace público precisa mas o agente não, e sem cache (TTL de 15s não compensa
+  // pra uma query que já é rápida e tem combinação de termo praticamente ilimitada).
   @Get('produtos')
-  async todosOsProdutos() {
-    const cacheKey = 'catalogo:produtos:marketplace';
-    const cached = await this.redis.getJSON<{ produtos: any[] }>(cacheKey);
-    if (cached) return cached;
+  async todosOsProdutos(@Query('q') q?: string) {
+    const cacheKey = q ? null : 'catalogo:produtos:marketplace';
+    if (cacheKey) {
+      const cached = await this.redis.getJSON<{ produtos: any[] }>(cacheKey);
+      if (cached) return cached;
+    }
 
     const { data: restaurantes } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, logo_url, slug, aparencia, frete_motoboy, permite_retirada_balcao, somente_retirada, pagamento_manual, payment_config')
+      .select('id, name, logo_url, slug, custom_domain, aparencia, frete_motoboy, permite_retirada_balcao, somente_retirada, pagamento_manual, payment_config')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
       .eq('modulo_delivery', true);
@@ -228,27 +241,42 @@ export class CatalogoController {
     if (!restaurantes?.length) return { produtos: [] };
 
     const restIds = restaurantes.map((r) => r.id);
-    const restMap = Object.fromEntries(restaurantes.map((r) => [r.id, this.exporPagamentoPublico(r)]));
+    const restMap = Object.fromEntries(
+      restaurantes.map((r) => [
+        r.id,
+        q
+          ? { id: r.id, name: r.name, slug: r.slug, link: montarLinkRestaurante(r) }
+          : { ...this.exporPagamentoPublico(r), link: montarLinkRestaurante(r) },
+      ]),
+    );
 
     // Busca diretamente por restaurant_id (não depende de category chain)
-    const { data: produtos, error } = await this.supabase.client
+    let query = this.supabase.client
       .from('products')
       .select(`${PRODUTO_FIELDS}, ${PRODUTO_ADICIONAIS_FIELDS}`)
       .eq('is_active', true)
       .gt('quantidade_estoque', 0)
       .in('restaurant_id', restIds)
       .order('name')
-      .limit(200);
+      .limit(q ? 20 : 200);
 
+    if (q) query = query.ilike('name', `%${q}%`);
+
+    const { data: produtos, error } = await query;
     if (error) throw error;
 
     const resultado = {
-      produtos: (produtos ?? []).map((p) => ({
-        ...comAdicionais(p as any),
-        restaurante: restMap[p.restaurant_id] ?? null,
-      })).filter((p) => p.restaurante),
+      produtos: (produtos ?? [])
+        .map((p: any) => {
+          const restaurante = restMap[p.restaurant_id];
+          if (!restaurante) return null;
+          return q
+            ? { id: p.id, name: p.name, price: p.price, preco_promo: p.preco_promo, restaurante }
+            : { ...comAdicionais(p), restaurante };
+        })
+        .filter((p) => p !== null),
     };
-    await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
+    if (cacheKey) await this.redis.setJSON(cacheKey, resultado, TTL_CARDAPIO);
     return resultado;
   }
 
