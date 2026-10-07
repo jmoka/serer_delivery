@@ -32,6 +32,25 @@ function montarLinkRestaurante(r: { slug: string; custom_domain?: string | null 
   return r.custom_domain ? `https://${r.custom_domain}` : `${MARKETPLACE_BASE_URL}/r/${r.slug}`;
 }
 
+// `ilike` do Postgres ignora maiúscula/minúscula mas NÃO ignora acento ("grafica"
+// não acha "Gráfica") — grave pra busca vinda de texto livre de chat/LLM, que
+// gera "cafe", "sao paulo" sem acento o tempo todo. Normaliza os dois lados e
+// compara em memória em vez de depender da extensão unaccent do Postgres (histórico
+// do projeto evita essa dependência — ver generate_restaurant_slug). Marcas de
+// acento (combining diacritical marks) ocupam U+0300..U+036F depois do
+// normalize('NFD') — remove por code point em vez de regex pra não depender de
+// caractere especial literal no código-fonte.
+function normalizarBusca(texto: string | null | undefined): string {
+  return Array.from((texto ?? '').normalize('NFD'))
+    .filter((c) => {
+      const code = c.codePointAt(0) ?? 0;
+      return code < 0x0300 || code > 0x036f;
+    })
+    .join('')
+    .toLowerCase()
+    .trim();
+}
+
 // TTL curto: aceita alguns segundos de defasagem de estoque/preço no marketplace
 // público em troca de menos carga no Supabase (mesmo trade-off que iFood/Rappi fazem).
 const TTL_CARDAPIO = 15;
@@ -225,38 +244,44 @@ export class CatalogoController {
   // `tipo` casa com o nome em `establishment_types` (Restaurante, Farmácia, Gráfica...);
   // `bairro`/`cidade`/`estado` filtram por localização — o agente pergunta o bairro do
   // cliente antes de listar (ver prompt), então esses filtros precisam existir aqui.
-  // Tudo com `%...%` (não exato) porque vem de texto livre digitado no chat, não de um
-  // dropdown. Sem cache: combinação de filtros é grande e a query já é rápida.
+  // Filtro em memória (normalizarBusca), não `ilike` do Postgres: `ilike` ignora
+  // maiúscula/minúscula mas NÃO ignora acento, e texto livre de chat/LLM vem sem
+  // acento o tempo todo ("grafica" precisa achar "Gráfica"). Sem cache: combinação
+  // de filtros é grande e a query já é rápida.
   @Get('estabelecimentos')
   async listarEstabelecimentos(
     @Query() query: { tipo?: string; estado?: string; cidade?: string; bairro?: string },
   ) {
     const { tipo, estado, cidade, bairro } = query;
 
-    let q = this.supabase.client
+    const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select(`id, name, slug, custom_domain, state, city, neighborhood, establishment_types${tipo ? '!inner' : ''}(name)`)
+      .select('id, name, slug, custom_domain, state, city, neighborhood, establishment_types(name)')
       .not('slug', 'is', null)
       .eq('bloqueado', false)
-      .or('modulo_delivery.eq.true,modulo_servicos.eq.true');
-
-    if (tipo) q = q.ilike('establishment_types.name', `%${tipo}%`);
-    if (estado) q = q.ilike('state', `%${estado}%`);
-    if (cidade) q = q.ilike('city', `%${cidade}%`);
-    if (bairro) q = q.ilike('neighborhood', `%${bairro}%`);
-
-    const { data, error } = await q.order('name');
+      .or('modulo_delivery.eq.true,modulo_servicos.eq.true')
+      .order('name');
     if (error) throw error;
 
-    const estabelecimentos = (data ?? []).map((r: any) => ({
-      id: r.id,
-      name: r.name,
-      tipo: r.establishment_types?.name ?? null,
-      bairro: r.neighborhood,
-      cidade: r.city,
-      estado: r.state,
-      link: montarLinkRestaurante(r),
-    }));
+    const tipoBusca = tipo ? normalizarBusca(tipo) : null;
+    const estadoBusca = estado ? normalizarBusca(estado) : null;
+    const cidadeBusca = cidade ? normalizarBusca(cidade) : null;
+    const bairroBusca = bairro ? normalizarBusca(bairro) : null;
+
+    const estabelecimentos = (data ?? [])
+      .map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        tipo: r.establishment_types?.name ?? null,
+        bairro: r.neighborhood,
+        cidade: r.city,
+        estado: r.state,
+        link: montarLinkRestaurante(r),
+      }))
+      .filter((r) => !tipoBusca || normalizarBusca(r.tipo).includes(tipoBusca))
+      .filter((r) => !estadoBusca || normalizarBusca(r.estado).includes(estadoBusca))
+      .filter((r) => !cidadeBusca || normalizarBusca(r.cidade).includes(cidadeBusca))
+      .filter((r) => !bairroBusca || normalizarBusca(r.bairro).includes(bairroBusca));
 
     return { estabelecimentos, total: estabelecimentos.length };
   }
