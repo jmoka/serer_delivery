@@ -219,6 +219,48 @@ export class CatalogoController {
     return resultado;
   }
 
+  // Usado pela tool `buscar_estabelecimentos` do agente (n8n) — responde "quantos
+  // restaurantes existem", "tem alguma gráfica" etc., que `buscar_produto` não cobre
+  // (esse só acha item de cardápio por nome, não lista/conta estabelecimentos por tipo).
+  // `tipo` casa com o nome em `establishment_types` (Restaurante, Farmácia, Gráfica...);
+  // `bairro`/`cidade`/`estado` filtram por localização — o agente pergunta o bairro do
+  // cliente antes de listar (ver prompt), então esses filtros precisam existir aqui.
+  // Tudo com `%...%` (não exato) porque vem de texto livre digitado no chat, não de um
+  // dropdown. Sem cache: combinação de filtros é grande e a query já é rápida.
+  @Get('estabelecimentos')
+  async listarEstabelecimentos(
+    @Query() query: { tipo?: string; estado?: string; cidade?: string; bairro?: string },
+  ) {
+    const { tipo, estado, cidade, bairro } = query;
+
+    let q = this.supabase.client
+      .from('restaurants')
+      .select(`id, name, slug, custom_domain, state, city, neighborhood, establishment_types${tipo ? '!inner' : ''}(name)`)
+      .not('slug', 'is', null)
+      .eq('bloqueado', false)
+      .or('modulo_delivery.eq.true,modulo_servicos.eq.true');
+
+    if (tipo) q = q.ilike('establishment_types.name', `%${tipo}%`);
+    if (estado) q = q.ilike('state', `%${estado}%`);
+    if (cidade) q = q.ilike('city', `%${cidade}%`);
+    if (bairro) q = q.ilike('neighborhood', `%${bairro}%`);
+
+    const { data, error } = await q.order('name');
+    if (error) throw error;
+
+    const estabelecimentos = (data ?? []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      tipo: r.establishment_types?.name ?? null,
+      bairro: r.neighborhood,
+      cidade: r.city,
+      estado: r.state,
+      link: montarLinkRestaurante(r),
+    }));
+
+    return { estabelecimentos, total: estabelecimentos.length };
+  }
+
   // `q` é usado pela tool `buscar_produto` do agente (n8n) — busca enxuta, sem o
   // payload pesado de `aparencia` (carousel_images pode ter dezenas de URLs) que o
   // marketplace público precisa mas o agente não, e sem cache (TTL de 15s não compensa
