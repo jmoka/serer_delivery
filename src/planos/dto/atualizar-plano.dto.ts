@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, Min, MaxLength } from 'class-validator';
 
 export class AtualizarPlanoDto {
   @IsOptional()
@@ -43,9 +43,12 @@ export class AtualizarPlanoDto {
   @Min(0)
   piso_faturamento?: number | null;
 
+  // "Grátis pra sempre" é o checkbox de cortesia do admin (assinaturas.cortesia_ate),
+  // não um trial gigante — ver mesmo comentário em CriarPlanoDto.
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(3650)
   trial_dias?: number;
 
   @IsOptional()

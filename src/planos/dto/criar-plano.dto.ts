@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, Min, MaxLength } from 'class-validator';
 
 export class CriarPlanoDto {
   @IsString()
@@ -37,9 +37,14 @@ export class CriarPlanoDto {
   @Min(0)
   piso_faturamento?: number;
 
+  // "Grátis pra sempre" é o checkbox de cortesia do admin (assinaturas.cortesia_ate),
+  // não um trial gigante — um valor absurdo aqui faz a data de fim do trial
+  // (hoje + trial_dias) passar do ano 9999 e virar um timestamp que o Postgres
+  // rejeita na escrita (bug real já visto em produção com trial_dias=9999999).
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(3650)
   trial_dias?: number;
 
   @IsOptional()
