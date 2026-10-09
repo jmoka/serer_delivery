@@ -6,6 +6,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { RestauranteService } from './restaurante.service';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { SalaoService } from '../salao/salao.service';
+import { TelegramService } from '../telegram/telegram.service';
 
 @Controller('restaurante')
 @UseGuards(RestaurantOwnerGuard)
@@ -13,7 +14,20 @@ export class RestauranteController {
   constructor(
     private service: RestauranteService,
     private salaoService: SalaoService,
+    private telegram: TelegramService,
   ) {}
+
+  // Notificações via Telegram do próprio estabelecimento (pedido novo etc.) —
+  // vínculo por deep-link, opt-in, mesmo padrão já usado por cliente/motoboy.
+  @Post('minha-empresa/telegram/link')
+  gerarLinkTelegram(@Req() req: any) {
+    return this.telegram.gerarLinkEstabelecimento(req.restaurantId);
+  }
+
+  @Get('minha-empresa/telegram/status')
+  statusTelegram(@Req() req: any) {
+    return this.telegram.statusEstabelecimento(req.restaurantId);
+  }
 
   @Get('minha-empresa')
   minhaEmpresa(@Req() req: any) {

@@ -6,6 +6,9 @@ import { GeocodingService } from '../motoboy/geocoding.service';
 import { PlanosService } from '../planos/planos.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
 import { EncryptionService } from '../common/encryption.service';
+import { validarCNPJ } from '../common/cnpj.util';
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 @Controller('restaurante')
 export class OnboardingController {
@@ -80,10 +83,19 @@ export class OnboardingController {
     @Body() body: { cnpj?: string; whatsapp?: string; email?: string },
   ) {
     const restaurantId: number = req.restaurantId;
+    const cnpjNorm = this.normalizarDigitos(body.cnpj);
+    const emailNorm = this.normalizarEmail(body.email);
+    const whatsappNorm = this.normalizarDigitos(body.whatsapp);
+    if (cnpjNorm && !validarCNPJ(cnpjNorm)) throw new BadRequestException('CNPJ inválido.');
+    if (emailNorm && !EMAIL_REGEX.test(emailNorm)) throw new BadRequestException('Email inválido.');
+    if (whatsappNorm && whatsappNorm.length !== 10 && whatsappNorm.length !== 11) {
+      throw new BadRequestException('WhatsApp inválido — informe DDD + número.');
+    }
+
     const duplicados = await this.checarDuplicados(restaurantId, {
-      cnpj: this.normalizarDigitos(body.cnpj),
-      whatsapp: this.normalizarDigitos(body.whatsapp),
-      email: this.normalizarEmail(body.email),
+      cnpj: cnpjNorm,
+      whatsapp: whatsappNorm,
+      email: emailNorm,
     });
     return {
       cnpj_disponivel: !duplicados.cnpj,
@@ -222,6 +234,12 @@ export class OnboardingController {
     const cnpjNorm = this.normalizarDigitos(body.cnpj);
     const whatsappNorm = this.normalizarDigitos(body.whatsapp);
     const emailNorm = this.normalizarEmail(body.email);
+
+    if (cnpjNorm && !validarCNPJ(cnpjNorm)) throw new BadRequestException('CNPJ inválido.');
+    if (emailNorm && !EMAIL_REGEX.test(emailNorm)) throw new BadRequestException('Email inválido.');
+    if (whatsappNorm && whatsappNorm.length !== 10 && whatsappNorm.length !== 11) {
+      throw new BadRequestException('WhatsApp inválido — informe DDD + número.');
+    }
 
     // Última barreira antes de gravar — a wizard já checou isso passo a passo
     // (verificar-disponibilidade), mas dois cadastros concorrentes com o mesmo

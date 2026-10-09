@@ -54,7 +54,7 @@ export class TelegramService implements OnModuleInit {
     }
   }
 
-  private async gerarLink(tipo: 'cliente' | 'motoboy', entidadeId: number) {
+  private async gerarLink(tipo: 'cliente' | 'motoboy' | 'estabelecimento', entidadeId: number) {
     // Só pode existir um token válido por entidade — gerar de novo invalida
     // qualquer link anterior ainda não resgatado.
     await this.supabase.client.from('telegram_link_tokens').delete().eq('tipo', tipo).eq('entidade_id', entidadeId);
@@ -77,6 +77,10 @@ export class TelegramService implements OnModuleInit {
     return this.gerarLink('motoboy', motoboyId);
   }
 
+  gerarLinkEstabelecimento(restaurantId: number) {
+    return this.gerarLink('estabelecimento', restaurantId);
+  }
+
   async statusCliente(customerId: number) {
     const { data } = await this.supabase.client
       .from('customers')
@@ -95,6 +99,15 @@ export class TelegramService implements OnModuleInit {
     return { vinculado: !!data?.telegram_chat_id };
   }
 
+  async statusEstabelecimento(restaurantId: number) {
+    const { data } = await this.supabase.client
+      .from('restaurants')
+      .select('telegram_chat_id')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    return { vinculado: !!data?.telegram_chat_id };
+  }
+
   // Chamado pelo webhook quando chega "/start <token>". Resgate apaga o token
   // (não só marca usado) — mesmo espírito do padrão do cozinha-portal.
   async redimirToken(token: string, chatId: number) {
@@ -109,7 +122,12 @@ export class TelegramService implements OnModuleInit {
       return;
     }
 
-    const tabela = data.tipo === 'cliente' ? 'customers' : 'motoboys';
+    const tabelaPorTipo: Record<string, string> = {
+      cliente: 'customers',
+      motoboy: 'motoboys',
+      estabelecimento: 'restaurants',
+    };
+    const tabela = tabelaPorTipo[data.tipo];
     await this.supabase.client.from(tabela).update({ telegram_chat_id: chatId }).eq('id', data.entidade_id);
     await this.supabase.client.from('telegram_link_tokens').delete().eq('token', token);
 
@@ -122,6 +140,19 @@ export class TelegramService implements OnModuleInit {
         chatId,
         '📍 Antes de fazer seu primeiro pedido, cadastre seu endereço no app e ajuste o pino no mapa exatamente onde fica sua casa. ' +
           'É isso que o motoboy usa pra chegar até você — só o endereço escrito não garante a entrega no lugar certo.',
+      );
+      return;
+    }
+
+    if (data.tipo === 'estabelecimento') {
+      await this.enviarMensagem(
+        chatId,
+        '✅ Telegram vinculado! Bem-vindo ao PediuVai 🎉\nA partir de agora os avisos do seu estabelecimento chegam por aqui também.',
+      );
+      await this.enviarMensagem(
+        chatId,
+        '📍 Se ainda não ajustou, confirme o pino do endereço do seu estabelecimento no mapa (em Configurações) — ' +
+          'é isso que o motoboy usa pra encontrar o local certo na hora da coleta.',
       );
       return;
     }
