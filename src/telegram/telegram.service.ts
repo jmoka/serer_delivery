@@ -113,6 +113,19 @@ export class TelegramService implements OnModuleInit {
     await this.supabase.client.from(tabela).update({ telegram_chat_id: chatId }).eq('id', data.entidade_id);
     await this.supabase.client.from('telegram_link_tokens').delete().eq('token', token);
 
+    if (data.tipo === 'cliente') {
+      await this.enviarMensagem(
+        chatId,
+        '✅ Telegram vinculado! Bem-vindo(a) ao PediuVai 🎉\nAgora você vai receber por aqui a confirmação e o status dos seus pedidos.',
+      );
+      await this.enviarMensagem(
+        chatId,
+        '📍 Antes de fazer seu primeiro pedido, cadastre seu endereço no app e ajuste o pino no mapa exatamente onde fica sua casa. ' +
+          'É isso que o motoboy usa pra chegar até você — só o endereço escrito não garante a entrega no lugar certo.',
+      );
+      return;
+    }
+
     await this.enviarMensagem(chatId, '✅ Telegram vinculado! Você vai receber as notificações do PediuVai por aqui.');
   }
 
