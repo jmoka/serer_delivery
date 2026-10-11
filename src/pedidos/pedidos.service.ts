@@ -7,7 +7,7 @@ import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService, ItemExpandido, resolverFreteEmbutidoUnitario, resolverFreteEmbutidoDetalhado } from '../combos/combos.service';
 import { haversineKm } from '../common/geo.util';
 import { precoVenda } from '../common/preco.util';
-import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
+import { aplicarEspacoCorte, aplicarEspacoInicio } from '../salao/espaco-corte.util';
 import { TelegramService } from '../telegram/telegram.service';
 import { EncryptionService } from '../common/encryption.service';
 
@@ -36,7 +36,7 @@ export class PedidosService {
   private async rotearItensParaSetor(pedidoId: number, restauranteId: number) {
     const { data: pendentes, error } = await this.supabase.client
       .from('order_items')
-      .select('id, quantity, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema, espaco_corte_linhas))')
+      .select('id, quantity, products(name, description, impressora_id, impressoras(id, nome, setor, nome_sistema, espaco_corte_linhas, espaco_inicio_linhas))')
       .eq('order_id', pedidoId)
       .is('enviado_em', null);
     if (error) throw error;
@@ -55,13 +55,13 @@ export class PedidosService {
       }
     }
 
-    const grupos = new Map<string, { setor: string; impressora_id: number; nome_sistema: string | null; espaco_corte_linhas: number | null; itens: any[] }>();
+    const grupos = new Map<string, { setor: string; impressora_id: number; nome_sistema: string | null; espaco_corte_linhas: number | null; espaco_inicio_linhas: number | null; itens: any[] }>();
     for (const item of pendentes as any[]) {
       const impressora = item.products?.impressoras;
       if (!impressora?.id) continue; // produto sem impressora configurada — não gera job
       const chave = String(impressora.id);
       if (!grupos.has(chave)) {
-        grupos.set(chave, { setor: impressora.setor, impressora_id: impressora.id, nome_sistema: impressora.nome_sistema ?? null, espaco_corte_linhas: impressora.espaco_corte_linhas ?? null, itens: [] });
+        grupos.set(chave, { setor: impressora.setor, impressora_id: impressora.id, nome_sistema: impressora.nome_sistema ?? null, espaco_corte_linhas: impressora.espaco_corte_linhas ?? null, espaco_inicio_linhas: impressora.espaco_inicio_linhas ?? null, itens: [] });
       }
       grupos.get(chave)!.itens.push({
         product_name: item.products?.name,
@@ -77,7 +77,7 @@ export class PedidosService {
       const { error: errJob } = await this.supabase.client.from('impressao_jobs').insert({
         restaurant_id: restauranteId,
         impressora_id: grupo.impressora_id,
-        conteudo: aplicarEspacoCorte(conteudo, grupo.espaco_corte_linhas),
+        conteudo: aplicarEspacoInicio(aplicarEspacoCorte(conteudo, grupo.espaco_corte_linhas), grupo.espaco_inicio_linhas),
       });
       if (errJob) throw errJob;
     }

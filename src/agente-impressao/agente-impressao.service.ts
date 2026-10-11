@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
-import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
+import { aplicarEspacoCorte, aplicarEspacoInicio } from '../salao/espaco-corte.util';
 
 // Bump manual a cada novo release do agente Python (junto com o rebuild do
 // .exe em print-agent/releases/) — é o que os agentes já instalados comparam
@@ -89,7 +89,7 @@ export class AgenteImpressaoService {
   async criarJobTeste(restaurantId: number, impressoraId: number) {
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome, setor, nome_sistema, espaco_corte_linhas')
+      .select('id, nome, setor, nome_sistema, espaco_corte_linhas, espaco_inicio_linhas')
       .eq('id', impressoraId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -107,13 +107,14 @@ export class AgenteImpressaoService {
       'Se você está lendo isso,',
       'a impressora está funcionando!',
       `Espaço de corte: ${impressora.espaco_corte_linhas} linha(s)`,
+      `Espaço início: ${impressora.espaco_inicio_linhas ?? 0} linha(s)`,
       '--------------------------------',
     ].join('\n');
 
     const { error } = await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,
-      conteudo: aplicarEspacoCorte(conteudo, impressora.espaco_corte_linhas),
+      conteudo: aplicarEspacoInicio(aplicarEspacoCorte(conteudo, impressora.espaco_corte_linhas), impressora.espaco_inicio_linhas),
     });
     if (error) throw error;
     return { ok: true };

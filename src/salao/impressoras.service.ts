@@ -12,6 +12,7 @@ export interface ImpressoraBody {
   ponto_preparo?: boolean;
   icone?: string;
   espaco_corte_linhas?: number;
+  espaco_inicio_linhas?: number;
 }
 
 @Injectable()
@@ -24,7 +25,7 @@ export class ImpressorasService {
   async listar(restaurantId: number) {
     const { data, error } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome, setor, tipo_conexao, endereco, ativo, nome_sistema, token, ponto_preparo, icone, espaco_corte_linhas, created_at')
+      .select('id, nome, setor, tipo_conexao, endereco, ativo, nome_sistema, token, ponto_preparo, icone, espaco_corte_linhas, espaco_inicio_linhas, created_at')
       .eq('restaurant_id', restaurantId)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -79,6 +80,7 @@ export class ImpressorasService {
     if (body.ponto_preparo !== undefined) campos.ponto_preparo = body.ponto_preparo;
     if (body.icone !== undefined) campos.icone = body.icone;
     if (body.espaco_corte_linhas !== undefined) campos.espaco_corte_linhas = body.espaco_corte_linhas;
+    if (body.espaco_inicio_linhas !== undefined) campos.espaco_inicio_linhas = body.espaco_inicio_linhas;
 
     const { data, error } = await this.supabase.client
       .from('impressoras')

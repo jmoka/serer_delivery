@@ -10,7 +10,7 @@ import { MotoboyService } from '../motoboy/motoboy.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { CombosService } from '../combos/combos.service';
 import { PlanosService } from '../planos/planos.service';
-import { aplicarEspacoCorte } from '../salao/espaco-corte.util';
+import { aplicarEspacoCorte, aplicarEspacoInicio } from '../salao/espaco-corte.util';
 import { RedisService } from '../redis/redis.service';
 import { GarcomTurnoService } from '../salao/garcom-turno.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -2470,7 +2470,7 @@ export class RestauranteService {
 
     const { data: impressora } = await this.supabase.client
       .from('impressoras')
-      .select('id, nome_sistema, espaco_corte_linhas')
+      .select('id, nome_sistema, espaco_corte_linhas, espaco_inicio_linhas')
       .eq('id', impressoraId)
       .eq('restaurant_id', restaurantId)
       .maybeSingle();
@@ -2493,7 +2493,7 @@ export class RestauranteService {
     await this.supabase.client.from('impressao_jobs').insert({
       restaurant_id: restaurantId,
       impressora_id: impressoraId,
-      conteudo: aplicarEspacoCorte(conteudo, (impressora as any).espaco_corte_linhas),
+      conteudo: aplicarEspacoInicio(aplicarEspacoCorte(conteudo, (impressora as any).espaco_corte_linhas), (impressora as any).espaco_inicio_linhas),
     });
     return { via: 'agente' };
   }

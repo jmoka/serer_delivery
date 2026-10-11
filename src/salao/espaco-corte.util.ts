@@ -7,3 +7,11 @@ export function aplicarEspacoCorte(conteudo: string, espacoCorteLinhas: number |
   const linhas = Math.max(0, espacoCorteLinhas ?? 0);
   return linhas > 0 ? conteudo + '\n'.repeat(linhas) : conteudo;
 }
+
+// Acrescenta no início do ticket o espaço (em linhas de avanço de papel) configurado pra
+// aquela impressora (ver coluna impressoras.espaco_inicio_linhas) — mesma ideia do espaço
+// de corte, mas pra folga antes do conteúdo começar a imprimir, não antes do corte.
+export function aplicarEspacoInicio(conteudo: string, espacoInicioLinhas: number | null | undefined): string {
+  const linhas = Math.max(0, espacoInicioLinhas ?? 0);
+  return linhas > 0 ? '\n'.repeat(linhas) + conteudo : conteudo;
+}
