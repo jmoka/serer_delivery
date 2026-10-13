@@ -15,6 +15,7 @@ import { RedisService } from '../redis/redis.service';
 import { GarcomTurnoService } from '../salao/garcom-turno.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { EncryptionService } from '../common/encryption.service';
+import { R2Service } from '../r2/r2.service';
 
 const TTL_MINHA_EMPRESA = 15;
 
@@ -34,6 +35,7 @@ export class RestauranteService {
     private garcomTurnoService: GarcomTurnoService,
     private telegram: TelegramService,
     private encryption: EncryptionService,
+    private r2: R2Service,
   ) {}
 
   // Cacheada porque o header do painel (menu lateral) monta 3 hooks que bateriam
@@ -2696,20 +2698,18 @@ export class RestauranteService {
   }
 
   async uploadImage(folder: string, file: Express.Multer.File) {
-    const BUCKET = 'restaurante-imagens';
-    await this.setupStorage();
-
     const ext = (file.originalname.split('.').pop() ?? 'jpg').toLowerCase();
-    const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const chave = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-    const { error } = await this.supabase.client.storage
-      .from(BUCKET)
-      .upload(path, file.buffer, { cacheControl: '3600', upsert: false, contentType: file.mimetype });
+    await this.r2.enviarArquivo(chave, file.buffer, file.mimetype);
 
-    if (error) throw error;
-
-    const { data } = this.supabase.client.storage.from(BUCKET).getPublicUrl(path);
-    return { url: this.supabase.toPublicUrl(data.publicUrl) };
+    const url = this.r2.montarUrlPublica(chave);
+    if (!url) {
+      throw new Error(
+        'R2_PUBLIC_BASE_URL não configurada — upload foi gravado no R2, mas falta domínio público pra servir a imagem.',
+      );
+    }
+    return { url };
   }
 
   async setupStorage() {

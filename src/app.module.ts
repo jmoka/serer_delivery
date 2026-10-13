@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { join } from 'path';
 import { SupabaseModule } from './supabase/supabase.module';
+import { R2Module } from './r2/r2.module';
 import { CommonModule } from './common/common.module';
 import { RedisModule } from './redis/redis.module';
 import { EstoqueModule } from './estoque/estoque.module';
@@ -52,6 +53,7 @@ import { PaginasLegaisModule } from './paginas-legais/paginas-legais.module';
     // @Throttle com limite mais apertado (ver motoboy-auth/garcom-auth).
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     SupabaseModule,
+    R2Module,
     CommonModule,
     RedisModule,
     EstoqueModule,
