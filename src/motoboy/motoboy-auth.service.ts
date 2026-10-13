@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { R2Service } from '../r2/r2.service';
 import { CnpjService } from './cnpj.service';
 import { uploadDocumentoMotoboy } from './upload-documento-motoboy.util';
 import { EncryptionService } from '../common/encryption.service';
@@ -43,10 +44,15 @@ export async function resolverSituacaoMei(cnpjService: CnpjService, cnpj: string
 
 @Injectable()
 export class MotoboyAuthService {
-  constructor(private supabase: SupabaseService, private cnpj: CnpjService, private encryption: EncryptionService) {}
+  constructor(
+    private supabase: SupabaseService,
+    private r2: R2Service,
+    private cnpj: CnpjService,
+    private encryption: EncryptionService,
+  ) {}
 
   private uploadDocumento(motoboyId: number, campo: string, base64: string): Promise<string> {
-    return uploadDocumentoMotoboy(this.supabase, motoboyId, campo, base64);
+    return uploadDocumentoMotoboy(this.r2, motoboyId, campo, base64);
   }
 
   // Chamado logo após o frontend criar a conta via supabase.auth.signUp() —

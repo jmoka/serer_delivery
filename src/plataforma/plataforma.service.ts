@@ -1,12 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { R2Service } from '../r2/r2.service';
 import { DEFAULT_APARENCIA_MARKETPLACE } from './aparencia-marketplace.constants';
-
-const BUCKET_PLATAFORMA = 'restaurante-imagens';
 
 @Injectable()
 export class PlataformaService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(private supabase: SupabaseService, private r2: R2Service) {}
 
   async metricas() {
     const [
@@ -169,16 +168,17 @@ export class PlataformaService {
 
   async uploadImagem(folder: string, file: Express.Multer.File) {
     const ext = (file.originalname.split('.').pop() ?? 'jpg').toLowerCase();
-    const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const chave = `plataforma/${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-    const { error } = await this.supabase.client.storage
-      .from(BUCKET_PLATAFORMA)
-      .upload(path, file.buffer, { cacheControl: '3600', upsert: false, contentType: file.mimetype });
+    await this.r2.enviarArquivo(chave, file.buffer, file.mimetype);
 
-    if (error) throw error;
-
-    const { data } = this.supabase.client.storage.from(BUCKET_PLATAFORMA).getPublicUrl(path);
-    return { url: this.supabase.toPublicUrl(data.publicUrl) };
+    const url = this.r2.montarUrlPublica(chave);
+    if (!url) {
+      throw new Error(
+        'R2_PUBLIC_BASE_URL não configurada — upload foi gravado no R2, mas falta domínio público pra servir a imagem.',
+      );
+    }
+    return { url };
   }
 
   async updateConfig(body: {

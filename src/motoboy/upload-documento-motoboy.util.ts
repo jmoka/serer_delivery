@@ -1,13 +1,12 @@
-import { SupabaseService } from '../supabase/supabase.service';
-
-const BUCKET = 'motoboy-documentos';
+import { R2Service } from '../r2/r2.service';
 
 // Bucket privado — grava o path do objeto, não a URL (URL é gerada sob demanda
 // via signed URL). Compartilhado entre MotoboyAuthService (self-signup) e
-// MotoboyService (cadastro pelo restaurante) — mesmo bucket, mesma convenção
-// de nome de arquivo pros dois fluxos de criação de motoboy.
+// MotoboyService (cadastro pelo restaurante) — mesma convenção de nome de
+// arquivo pros dois fluxos de criação de motoboy. Migrado pro R2 em 2026-10-13
+// (arquivos antigos copiados do Supabase preservando o mesmo path/chave).
 export async function uploadDocumentoMotoboy(
-  supabase: SupabaseService,
+  r2: R2Service,
   motoboyId: number,
   campo: string,
   base64: string,
@@ -19,10 +18,7 @@ export async function uploadDocumentoMotoboy(
   const ext = mimeType === 'application/pdf' ? 'pdf' : mimeType === 'image/png' ? 'png' : 'jpg';
   const path = `${motoboyId}/${campo}-${Date.now()}.${ext}`;
 
-  const { error } = await supabase.client.storage
-    .from(BUCKET)
-    .upload(path, buffer, { contentType: mimeType, upsert: true });
-  if (error) throw error;
+  await r2.enviarArquivo(path, buffer, mimeType);
 
   return path;
 }

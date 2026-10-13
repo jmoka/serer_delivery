@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { R2Service } from '../r2/r2.service';
 import { RedisService } from '../redis/redis.service';
 
 export type PerfilAcademia = 'estabelecimento' | 'motoboy' | 'garcom' | 'cliente';
@@ -21,7 +22,6 @@ export interface VideoAcademiaInput {
 
 const VAZIO: ProgressoAcademia = { assistidos: {} };
 const TTL_CACHE = 300;
-const BUCKET_VIDEOS = 'academia-videos';
 
 // Progresso de "já assisti" da Academia PediuVai — mesmo padrão de
 // FavoritosMenuService: um blob JSONB por escopo em user_profiles, cache
@@ -31,6 +31,7 @@ export class AcademiaService {
   constructor(
     private supabase: SupabaseService,
     private redis: RedisService,
+    private r2: R2Service,
   ) {}
 
   private cacheKey(perfil: PerfilAcademia, userId: string) {
@@ -152,32 +153,18 @@ export class AcademiaService {
     return { ok: true };
   }
 
-  private async setupStorageAcademia() {
-    const { data: buckets } = await this.supabase.client.storage.listBuckets();
-    const exists = (buckets ?? []).some((b: any) => b.id === BUCKET_VIDEOS);
-
-    if (!exists) {
-      const { error } = await this.supabase.client.storage.createBucket(BUCKET_VIDEOS, {
-        public: true,
-        fileSizeLimit: 200 * 1024 * 1024,
-        allowedMimeTypes: ['video/mp4', 'video/webm', 'video/quicktime'],
-      });
-      if (error) throw error;
-    }
-  }
-
   async uploadVideo(file: Express.Multer.File) {
-    await this.setupStorageAcademia();
-
     const ext = (file.originalname.split('.').pop() ?? 'mp4').toLowerCase();
-    const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const chave = `academia/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-    const { error } = await this.supabase.client.storage
-      .from(BUCKET_VIDEOS)
-      .upload(path, file.buffer, { cacheControl: '3600', upsert: false, contentType: file.mimetype });
-    if (error) throw error;
+    await this.r2.enviarArquivo(chave, file.buffer, file.mimetype);
 
-    const { data } = this.supabase.client.storage.from(BUCKET_VIDEOS).getPublicUrl(path);
-    return { url: this.supabase.toPublicUrl(data.publicUrl) };
+    const url = this.r2.montarUrlPublica(chave);
+    if (!url) {
+      throw new Error(
+        'R2_PUBLIC_BASE_URL não configurada — upload foi gravado no R2, mas falta domínio público pra servir o vídeo.',
+      );
+    }
+    return { url };
   }
 }

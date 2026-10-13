@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { R2Service } from '../r2/r2.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { EncryptionService } from '../common/encryption.service';
@@ -10,6 +11,7 @@ const SELECT_PERFIL = 'id, name, email, phone_e164, address_json, foto_perfil_ur
 export class PerfilService {
   constructor(
     private supabase: SupabaseService,
+    private r2: R2Service,
     private geocoding: GeocodingService,
     private telegram: TelegramService,
     private encryption: EncryptionService,
@@ -199,23 +201,6 @@ export class PerfilService {
     return data;
   }
 
-  // Bucket público separado do de imagens de produto/restaurante — foto de perfil não é
-  // documento sensível (diferente das fotos/documentos de motoboy, que usam URL assinada).
-  private async setupStorageAvatares() {
-    const BUCKET = 'customer-avatars';
-    const { data: buckets } = await this.supabase.client.storage.listBuckets();
-    const exists = (buckets ?? []).some((b: any) => b.id === BUCKET);
-
-    if (!exists) {
-      const { error } = await this.supabase.client.storage.createBucket(BUCKET, {
-        public: true,
-        fileSizeLimit: 5 * 1024 * 1024,
-        allowedMimeTypes: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'],
-      });
-      if (error) throw error;
-    }
-  }
-
   async uploadFoto(userId: string, file: Express.Multer.File) {
     const { data: customer } = await this.supabase.client
       .from('customers')
@@ -224,19 +209,17 @@ export class PerfilService {
       .maybeSingle();
     if (!customer) throw new NotFoundException('Perfil não encontrado');
 
-    const BUCKET = 'customer-avatars';
-    await this.setupStorageAvatares();
-
     const ext = (file.originalname.split('.').pop() ?? 'jpg').toLowerCase();
-    const path = `${customer.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const chave = `customer-avatars/${customer.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-    const { error } = await this.supabase.client.storage
-      .from(BUCKET)
-      .upload(path, file.buffer, { cacheControl: '3600', upsert: false, contentType: file.mimetype });
-    if (error) throw error;
+    await this.r2.enviarArquivo(chave, file.buffer, file.mimetype);
 
-    const { data: pub } = this.supabase.client.storage.from(BUCKET).getPublicUrl(path);
-    const fotoPerfilUrl = this.supabase.toPublicUrl(pub.publicUrl);
+    const fotoPerfilUrl = this.r2.montarUrlPublica(chave);
+    if (!fotoPerfilUrl) {
+      throw new Error(
+        'R2_PUBLIC_BASE_URL não configurada — upload foi gravado no R2, mas falta domínio público pra servir a imagem.',
+      );
+    }
 
     await this.supabase.client
       .from('customers')

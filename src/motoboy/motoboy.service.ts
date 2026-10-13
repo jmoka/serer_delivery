@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { R2Service } from '../r2/r2.service';
 import { ComissaoService } from './comissao.service';
 import { GeocodingService } from './geocoding.service';
 import { EstoqueService } from '../estoque/estoque.service';
@@ -38,13 +39,13 @@ export interface MotoboyPeloRestauranteBody {
   comprovante_endereco?: string;
 }
 
-const DOC_BUCKET = 'motoboy-documentos';
 const SIGNED_URL_TTL = 60 * 10; // 10 min
 
 @Injectable()
 export class MotoboyService {
   constructor(
     private supabase: SupabaseService,
+    private r2: R2Service,
     private comissao: ComissaoService,
     private geocoding: GeocodingService,
     private estoque: EstoqueService,
@@ -103,8 +104,7 @@ export class MotoboyService {
 
   private async signedUrl(path: string | null | undefined): Promise<string | null> {
     if (!path) return null;
-    const { data } = await this.supabase.client.storage.from(DOC_BUCKET).createSignedUrl(path, SIGNED_URL_TTL);
-    return data?.signedUrl ?? null;
+    return this.r2.gerarUrlDownloadAssinada(path, SIGNED_URL_TTL);
   }
 
   // Estabelecimento (dono entrega) e próprio+CLT com transporte da empresa
@@ -208,18 +208,18 @@ export class MotoboyService {
       documento_cnpj_url,
       contrato_social_url,
     ] = await Promise.all([
-      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-foto', body.veiculo_foto!) : Promise.resolve(null),
-      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento', body.veiculo_documento!) : Promise.resolve(null),
+      exigeDocumentos ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'veiculo-foto', body.veiculo_foto!) : Promise.resolve(null),
+      exigeDocumentos ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'veiculo-documento', body.veiculo_documento!) : Promise.resolve(null),
       exigeDocumentos && body.veiculo_documento_carretinha
-        ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'veiculo-documento-carretinha', body.veiculo_documento_carretinha)
+        ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'veiculo-documento-carretinha', body.veiculo_documento_carretinha)
         : Promise.resolve(null),
-      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-frente', body.documento_frente!) : Promise.resolve(null),
+      exigeDocumentos ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'documento-frente', body.documento_frente!) : Promise.resolve(null),
       exigeDocumentos && body.documento_verso
-        ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-verso', body.documento_verso)
+        ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'documento-verso', body.documento_verso)
         : Promise.resolve(null),
-      exigeDocumentos ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'comprovante-endereco', body.comprovante_endereco!) : Promise.resolve(null),
-      ehPrestadorServico ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'documento-cnpj', body.documento_cnpj!) : Promise.resolve(null),
-      ehPrestadorServico ? uploadDocumentoMotoboy(this.supabase, motoboy.id, 'contrato-social', body.contrato_social!) : Promise.resolve(null),
+      exigeDocumentos ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'comprovante-endereco', body.comprovante_endereco!) : Promise.resolve(null),
+      ehPrestadorServico ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'documento-cnpj', body.documento_cnpj!) : Promise.resolve(null),
+      ehPrestadorServico ? uploadDocumentoMotoboy(this.r2, motoboy.id, 'contrato-social', body.contrato_social!) : Promise.resolve(null),
     ]);
     // MEI só se aplica a prestador de serviço — motoboy próprio não tem CNPJ pra validar.
     const situacaoMei = ehPrestadorServico ? await resolverSituacaoMei(this.cnpj, cnpjNorm, body.veiculo_tipo!) : {};
@@ -462,15 +462,17 @@ export class MotoboyService {
     const raw = matches ? matches[2] : base64;
     const buffer = Buffer.from(raw, 'base64');
     const ext = mimeType === 'image/png' ? 'png' : 'jpg';
-    const path = `${prefixo}-${id}-${Date.now()}.${ext}`;
+    const chave = `comprovantes-pix/${prefixo}-${id}-${Date.now()}.${ext}`;
 
-    const { error: uploadError } = await this.supabase.client.storage
-      .from('comprovantes-pix')
-      .upload(path, buffer, { contentType: mimeType, upsert: true });
-    if (uploadError) throw uploadError;
+    await this.r2.enviarArquivo(chave, buffer, mimeType);
 
-    const { data: { publicUrl } } = this.supabase.client.storage.from('comprovantes-pix').getPublicUrl(path);
-    return this.supabase.toPublicUrl(publicUrl);
+    const url = this.r2.montarUrlPublica(chave);
+    if (!url) {
+      throw new Error(
+        'R2_PUBLIC_BASE_URL não configurada — upload foi gravado no R2, mas falta domínio público pra servir a imagem.',
+      );
+    }
+    return url;
   }
 
   async listarSolicitacoesRepasse(restaurantId: number, status?: string) {
@@ -1563,10 +1565,7 @@ export class MotoboyService {
       const buffer = Buffer.from(raw, 'base64');
       const ext = mimeType === 'image/png' ? 'png' : 'jpg';
       const path = `${motoboyId}/foto-perfil-${Date.now()}.${ext}`;
-      const { error: uploadError } = await this.supabase.client.storage
-        .from(DOC_BUCKET)
-        .upload(path, buffer, { contentType: mimeType, upsert: true });
-      if (uploadError) throw uploadError;
+      await this.r2.enviarArquivo(path, buffer, mimeType);
       campos.foto_perfil_url = path;
     }
     if (Object.keys(campos).length === 0) return this.infoMotoboy(motoboyId);
