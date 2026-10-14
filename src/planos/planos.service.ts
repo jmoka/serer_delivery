@@ -31,6 +31,12 @@ const somarDias = (data: Date, dias: number) => {
   return d;
 };
 
+// Sentinela de "grátis pra sempre" — mesma data bem no futuro que o admin já
+// usa manualmente em assinaturas.cortesia_ate (ver comentário em
+// atribuirAssinatura/buscarComissoesNaoColetadas). trial_eterno concede isso
+// automaticamente, sem nenhuma conta de data nova no caminho de cobrança.
+const CORTESIA_ETERNA = '2099-12-31T00:00:00.000Z';
+
 @Injectable()
 export class PlanosService {
   constructor(
@@ -140,6 +146,7 @@ export class PlanosService {
         limite_servicos: body.limite_servicos ?? null,
         piso_faturamento: body.piso_faturamento ?? null,
         trial_dias: body.trial_dias ?? 0,
+        trial_eterno: body.trial_eterno ?? false,
         ativo: body.ativo ?? true,
         inclui_delivery: body.inclui_delivery ?? true,
         inclui_salao: body.inclui_salao ?? false,
@@ -169,6 +176,7 @@ export class PlanosService {
     if (body.limite_servicos !== undefined) campos.limite_servicos = body.limite_servicos;
     if (body.piso_faturamento !== undefined) campos.piso_faturamento = body.piso_faturamento;
     if (body.trial_dias !== undefined) campos.trial_dias = body.trial_dias;
+    if (body.trial_eterno !== undefined) campos.trial_eterno = body.trial_eterno;
     if (body.ativo !== undefined) campos.ativo = body.ativo;
     if (body.inclui_delivery !== undefined) campos.inclui_delivery = body.inclui_delivery;
     if (body.inclui_salao !== undefined) campos.inclui_salao = body.inclui_salao;
@@ -318,8 +326,18 @@ export class PlanosService {
 
     const existente = await this.buscarAssinaturaRaw(titular);
     const agora = new Date();
-    const temTrial = (plano.trial_dias ?? 0) > 0;
-    const trialFim = temTrial ? somarDias(agora, plano.trial_dias) : null;
+    const temTrial = plano.trial_eterno || (plano.trial_dias ?? 0) > 0;
+    // trial_eterno nunca passa por somarDias (zero risco do overflow de data
+    // que motivou travar trial_dias em @Max(3650)) — a isenção de cobrança
+    // vem só da cortesia sentinela aplicada logo abaixo.
+    const trialFim = !plano.trial_eterno && temTrial ? somarDias(agora, plano.trial_dias) : null;
+    // cortesiaAte explícito (inclusive null, pra remover) sempre vence; sem
+    // ele, plano trial_eterno concede a cortesia sentinela automaticamente —
+    // mesma regra "só o admin passa esse campo explicitamente" de antes, só
+    // que agora o próprio plano pode ser esse "admin".
+    const cortesiaAteEfetiva = cortesiaAte !== undefined
+      ? cortesiaAte
+      : (plano.trial_eterno ? CORTESIA_ETERNA : undefined);
 
     if (existente) {
       // Troca de plano reinicia o ciclo de cobrança: recalcula trial/status a
@@ -335,7 +353,7 @@ export class PlanosService {
         ultimo_periodo_faturado_fim: (trialFim ?? agora).toISOString(),
         updated_at: agora.toISOString(),
       };
-      if (cortesiaAte !== undefined) camposUpdate.cortesia_ate = cortesiaAte;
+      if (cortesiaAteEfetiva !== undefined) camposUpdate.cortesia_ate = cortesiaAteEfetiva;
 
       const { data, error } = await this.supabase.client
         .from('assinaturas')
@@ -354,7 +372,7 @@ export class PlanosService {
       trial_fim: trialFim?.toISOString() ?? null,
       ultimo_periodo_faturado_fim: (trialFim ?? agora).toISOString(),
     };
-    if (cortesiaAte !== undefined) novaAssinatura.cortesia_ate = cortesiaAte;
+    if (cortesiaAteEfetiva !== undefined) novaAssinatura.cortesia_ate = cortesiaAteEfetiva;
     if ('restaurantId' in titular) novaAssinatura.restaurant_id = titular.restaurantId;
     else novaAssinatura.instalacao_id = titular.instalacaoId;
 

@@ -47,6 +47,16 @@ export class CriarPlanoDto {
   @Max(3650)
   trial_dias?: number;
 
+  // Trial sem data de expiração — em vez de tentar representar "infinito" em
+  // trial_dias (o bug que o comentário acima evita), concede automaticamente
+  // a mesma cortesia (assinaturas.cortesia_ate numa data bem no futuro) que o
+  // admin já usa manualmente pra "grátis pra sempre" — ver
+  // PlanosService.atribuirAssinatura. Zero lógica de data nova no caminho
+  // crítico de cobrança, só reaproveita o mecanismo que já roda em produção.
+  @IsOptional()
+  @IsBoolean()
+  trial_eterno?: boolean;
+
   @IsOptional()
   @IsBoolean()
   ativo?: boolean;

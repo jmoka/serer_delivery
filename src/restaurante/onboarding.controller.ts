@@ -187,7 +187,7 @@ export class OnboardingController {
 
       // Sem trial: gera (forçado) a fatura do período atual pra cobrar já no
       // cadastro. Com trial, não força nada — fica pra próxima renovação natural.
-      const temTrial = (plano.trial_dias ?? 0) > 0;
+      const temTrial = plano.trial_eterno || (plano.trial_dias ?? 0) > 0;
       status = await this.planos.sincronizarPeriodo({ restaurantId: restaurant.id }, !temTrial);
     } else {
       status = await this.planos.sincronizarPeriodo({ restaurantId: restaurant.id });

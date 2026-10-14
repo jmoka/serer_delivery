@@ -51,6 +51,11 @@ export class AtualizarPlanoDto {
   @Max(3650)
   trial_dias?: number;
 
+  // Trial sem data de expiração — ver comentário completo em CriarPlanoDto.
+  @IsOptional()
+  @IsBoolean()
+  trial_eterno?: boolean;
+
   @IsOptional()
   @IsBoolean()
   ativo?: boolean;
