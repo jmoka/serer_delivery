@@ -62,9 +62,17 @@ export class EnderecosService {
       .maybeSingle();
     if (!customer?.address_json) return;
 
+    // address_json pode ainda estar em claro aqui (default '{}'::jsonb da coluna,
+    // de cliente que nunca preencheu endereço — nunca passou pelo backfill de
+    // criptografia). decryptJson tolera esse formato legado; se não sobrar
+    // nenhum campo de endereço de verdade, não vale criar uma linha fantasma em
+    // customer_addresses só com esse objeto vazio.
+    const addressJson = this.encryption.decryptJson(customer.address_json);
+    if (!addressJson || Object.keys(addressJson).length === 0) return;
+
     await this.supabase.client.from('customer_addresses').insert({
       customer_id: customerId,
-      address_json: customer.address_json,
+      address_json: this.encryption.encryptJson(addressJson),
       lat: customer.lat,
       lng: customer.lng,
       address_geocode_hash: customer.address_geocode_hash,

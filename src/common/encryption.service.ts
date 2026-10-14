@@ -80,11 +80,16 @@ export class EncryptionService {
     return { v: 1, enc: this.encrypt(JSON.stringify(value)) };
   }
 
+  // Linhas que nunca passaram pelo backfill (ex.: customers.address_json criado
+  // com o default '{}'::jsonb da coluna, antes do cliente preencher qualquer
+  // endereço) ainda guardam o objeto em claro, não o envelope {v,enc}. Derruba
+  // a tela inteira (500) devolver erro aqui pra um caso tão comum — trata como
+  // valor em claro e devolve como está; o próximo save já regrava criptografado.
   decryptJson<T = Record<string, any>>(wrapped: { v: number; enc: string } | null | undefined): T | null {
     if (wrapped === null || wrapped === undefined) return null;
-    if (typeof wrapped !== 'object' || typeof wrapped.enc !== 'string') {
-      throw new Error('address_json não está no formato criptografado esperado {v, enc} — essa linha pode não ter passado pelo backfill.');
+    if (typeof wrapped === 'object' && typeof (wrapped as any).enc === 'string') {
+      return JSON.parse(this.decrypt((wrapped as any).enc));
     }
-    return JSON.parse(this.decrypt(wrapped.enc));
+    return wrapped as unknown as T;
   }
 }
