@@ -172,7 +172,7 @@ export class RestauranteController {
   }
 
   @Post('categorias')
-  criarCategoria(@Req() req: any, @Body() body: { name: string }) {
+  criarCategoria(@Req() req: any, @Body() body: { name: string; kind?: 'categoria' | 'grupo' }) {
     return this.service.criarCategoria(req.restaurantId, body);
   }
 

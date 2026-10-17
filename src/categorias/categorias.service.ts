@@ -115,7 +115,7 @@ export class CategoriasService {
   async listarPorEmpresa(empresaId: number) {
     const { data, error } = await this.supabase.client
       .from('categories')
-      .select('id, name, icon_name, color_primary, color_secondary, restaurant_id, created_at')
+      .select('id, name, icon_name, color_primary, color_secondary, restaurant_id, kind, created_at')
       .eq('restaurant_id', empresaId)
       .order('name');
 
@@ -160,10 +160,10 @@ export class CategoriasService {
     return data;
   }
 
-  async criar(body: { name: string; restaurant_id: number }) {
+  async criar(body: { name: string; restaurant_id: number; kind?: 'categoria' | 'grupo' }) {
     const { data, error } = await this.supabase.client
       .from('categories')
-      .insert({ name: body.name, restaurant_id: body.restaurant_id })
+      .insert({ name: body.name, restaurant_id: body.restaurant_id, kind: body.kind ?? 'grupo' })
       .select()
       .single();
 

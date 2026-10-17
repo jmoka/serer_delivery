@@ -777,8 +777,8 @@ export class RestauranteService {
     return this.categorias.listarPorEmpresa(restaurantId);
   }
 
-  async criarCategoria(restaurantId: number, body: { name: string }) {
-    return this.categorias.criar({ name: body.name, restaurant_id: restaurantId });
+  async criarCategoria(restaurantId: number, body: { name: string; kind?: 'categoria' | 'grupo' }) {
+    return this.categorias.criar({ name: body.name, restaurant_id: restaurantId, kind: body.kind });
   }
 
   async deletarCategoria(categoriaId: number, restaurantId: number) {
