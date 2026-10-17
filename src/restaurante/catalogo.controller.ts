@@ -420,7 +420,7 @@ export class CatalogoController {
 
     const { data: servicos, error } = await this.supabase.client
       .from('services')
-      .select('id, name, description, image_url, categoria, preco_min, preco_max, restaurant_id')
+      .select('id, name, description, image_url, categoria, preco_min, preco_max, destaque, restaurant_id')
       .eq('is_active', true)
       .in('restaurant_id', restIds)
       .order('name')
@@ -455,7 +455,7 @@ export class CatalogoController {
       .gt('fim_em', new Date().toISOString());
     if (error) throw error;
 
-    const resultado: Record<string, number[]> = { combos: [], mais_vendidos: [], promocao: [], lancamentos: [] };
+    const resultado: Record<string, number[]> = { combos: [], servicos: [], mais_vendidos: [], promocao: [], lancamentos: [] };
     for (const b of (data ?? []) as any[]) {
       for (const [carrossel, ids] of Object.entries(b.itens ?? {})) {
         resultado[carrossel] = [...(resultado[carrossel] ?? []), ...(Array.isArray(ids) ? (ids as number[]) : [])];

@@ -10,6 +10,7 @@ export interface ServicoBody {
   preco_min?: number;
   preco_max?: number;
   is_active?: boolean;
+  destaque?: boolean;
 }
 
 export interface SolicitarOrcamentoBody {
@@ -18,7 +19,7 @@ export interface SolicitarOrcamentoBody {
   mensagem?: string;
 }
 
-const SERVICO_FIELDS = 'id, name, description, image_url, categoria, preco_min, preco_max, is_active, restaurant_id, created_at, updated_at';
+const SERVICO_FIELDS = 'id, name, description, image_url, categoria, preco_min, preco_max, is_active, destaque, restaurant_id, created_at, updated_at';
 
 @Injectable()
 export class ServicosService {
@@ -57,6 +58,7 @@ export class ServicosService {
       .select(SERVICO_FIELDS)
       .eq('restaurant_id', restaurantId)
       .eq('is_active', true)
+      .order('destaque', { ascending: false })
       .order('name');
     if (error) throw error;
     return data ?? [];
@@ -78,6 +80,7 @@ export class ServicosService {
         preco_max: body.preco_max ?? null,
         restaurant_id: restaurantId,
         is_active: true,
+        destaque: body.destaque ?? false,
       })
       .select(SERVICO_FIELDS)
       .single();
@@ -97,6 +100,7 @@ export class ServicosService {
     if (body.preco_min !== undefined) campos.preco_min = body.preco_min;
     if (body.preco_max !== undefined) campos.preco_max = body.preco_max;
     if (body.is_active !== undefined) campos.is_active = body.is_active;
+    if (body.destaque !== undefined) campos.destaque = body.destaque;
 
     const { data, error } = await this.supabase.client
       .from('services')

@@ -31,4 +31,8 @@ export class CriarServicoDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  destaque?: boolean;
 }

@@ -32,4 +32,8 @@ export class EditarServicoDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  destaque?: boolean;
 }

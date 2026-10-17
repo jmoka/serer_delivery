@@ -24,14 +24,18 @@ export class MarketplaceBoostService {
     private config: ConfigService,
   ) {}
 
-  // ── Carrosséis vendáveis: "combos" (fixo) + qualquer tag ativa de
-  // tags_catalogo (dinâmico — admin cria tag nova, ela já vira vendável aqui
-  // sem precisar de deploy). carrossel = slug da tag, ou 'combos'. ──
+  // ── Carrosséis vendáveis: "combos" e "servicos" (fixos) + qualquer tag
+  // ativa de tags_catalogo (dinâmico — admin cria tag nova, ela já vira
+  // vendável aqui sem precisar de deploy). carrossel = slug da tag, ou
+  // 'combos'/'servicos'. "servicos" não tem exibição orgânica na home (ao
+  // contrário de combos) — só aparece ali quem tem campanha paga ou inclusa
+  // no plano (ver catalogo.controller.patrocinados + home do marketplace). ──
 
   async listarCarrosseisDisponiveis(): Promise<{ carrossel: string; label: string }[]> {
     const { tags } = await this.tags.listar(true);
     return [
       { carrossel: 'combos', label: 'Combos' },
+      { carrossel: 'servicos', label: 'Serviços' },
       ...tags.map((t: any) => ({ carrossel: t.slug, label: t.name })),
     ];
   }
@@ -39,7 +43,7 @@ export class MarketplaceBoostService {
   private async validarCarrossel(carrossel: string) {
     const disponiveis = await this.listarCarrosseisDisponiveis();
     if (!disponiveis.some((c) => c.carrossel === carrossel)) {
-      throw new BadRequestException(`Carrossel "${carrossel}" não existe (crie a tag em /admin/tags primeiro, se não for "combos")`);
+      throw new BadRequestException(`Carrossel "${carrossel}" não existe (crie a tag em /admin/tags primeiro, se não for "combos"/"servicos")`);
     }
   }
 
@@ -304,8 +308,14 @@ export class MarketplaceBoostService {
     return data;
   }
 
+  private tabelaDoCarrossel(carrossel: string): 'combos' | 'services' | 'products' {
+    if (carrossel === 'combos') return 'combos';
+    if (carrossel === 'servicos') return 'services';
+    return 'products';
+  }
+
   private async validarItensDoRestaurante(restaurantId: number, carrossel: string, itemIds: number[]) {
-    const tabela = carrossel === 'combos' ? 'combos' : 'products';
+    const tabela = this.tabelaDoCarrossel(carrossel);
     const { data, error } = await this.supabase.client
       .from(tabela).select('id').eq('restaurant_id', restaurantId).in('id', itemIds);
     if (error) throw error;
@@ -316,11 +326,13 @@ export class MarketplaceBoostService {
 
   // Itens vendáveis de uma empresa num carrossel — usado pelo admin pra
   // montar uma campanha em nome da empresa (mesma tabela que o dono vê nas
-  // suas próprias telas de produtos/combos).
+  // suas próprias telas de produtos/combos/serviços). Serviço não tem
+  // price/preco_promo — usa preco_min/preco_max.
   async listarItensVendaveis(restaurantId: number, carrossel: string) {
-    const tabela = carrossel === 'combos' ? 'combos' : 'products';
+    const tabela = this.tabelaDoCarrossel(carrossel);
+    const campos = tabela === 'services' ? 'id, name, preco_min, preco_max' : 'id, name, price, preco_promo';
     const { data, error } = await this.supabase.client
-      .from(tabela).select('id, name, price, preco_promo').eq('restaurant_id', restaurantId);
+      .from(tabela).select(campos).eq('restaurant_id', restaurantId);
     if (error) throw error;
     return data ?? [];
   }
