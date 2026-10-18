@@ -167,9 +167,12 @@ export class RestauranteSalaoController {
     return this.service.removerItem(id, req.restaurantId, itemId);
   }
 
+  // garcom_id null = desvincula o garçom e devolve a comanda pro caixa do
+  // salão (mesmo "Caixa: nome" que já aparece pra comanda aberta direto
+  // pelo balcão, ver abrirComanda/abrirVendaBalcao).
   @Patch('comandas/:id/transferir-garcom')
-  transferirGarcom(@Param('id', ParseIntPipe) id: number, @Body() body: { garcom_id: number }, @Req() req: any) {
-    return this.service.transferirGarcom(id, req.restaurantId, body.garcom_id);
+  transferirGarcom(@Param('id', ParseIntPipe) id: number, @Body() body: { garcom_id: number | null }, @Req() req: any) {
+    return this.service.transferirGarcom(id, req.restaurantId, body.garcom_id, req.userId);
   }
 
   @Patch('comandas/:id/transferir')

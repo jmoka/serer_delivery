@@ -791,9 +791,24 @@ export class SalaoPdvService {
     return this.comandaDetalhe(comandaId, restaurantId);
   }
 
-  // Troca o garçom responsável por uma comanda em andamento (ex: troca de turno).
-  async transferirGarcom(id: number, restaurantId: number, novoGarcomId: number) {
+  // Troca o garçom responsável por uma comanda em andamento (ex: troca de
+  // turno). novoGarcomId null = desvincula e devolve pra "Caixa: nome" (mesmo
+  // aberto_por_nome que uma comanda aberta direto pelo balcão já usa).
+  async transferirGarcom(id: number, restaurantId: number, novoGarcomId: number | null, userId?: string) {
     await this.buscarComanda(id, restaurantId);
+
+    if (novoGarcomId == null) {
+      let abertoPorNome: string | null = null;
+      if (userId) {
+        const { data: userData } = await this.supabase.client.auth.admin.getUserById(userId);
+        const nomeCompleto = userData?.user?.user_metadata?.name as string | undefined;
+        abertoPorNome = nomeCompleto?.trim().split(' ')[0] || null;
+      }
+      const { error } = await this.supabase.client
+        .from('orders').update({ garcom_id: null, aberto_por_nome: abertoPorNome }).eq('id', id);
+      if (error) throw error;
+      return { ok: true };
+    }
 
     const { data: garcom } = await this.supabase.client
       .from('garcons')
