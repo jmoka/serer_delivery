@@ -37,7 +37,14 @@ export class AgenteImpressaoService {
     const ultimoPing = data?.agente_impressao_ultimo_ping ? new Date(data.agente_impressao_ultimo_ping) : null;
     const online = !!ultimoPing && Date.now() - ultimoPing.getTime() < 60_000;
 
-    return { pareado: !!data?.agente_impressao_token, online, ultimo_ping: data?.agente_impressao_ultimo_ping ?? null };
+    // Token volta em claro pro próprio dono poder copiar de novo sem precisar
+    // gerar outro (gerar um novo invalidaria o pareamento já feito no agente).
+    return {
+      pareado: !!data?.agente_impressao_token,
+      online,
+      ultimo_ping: data?.agente_impressao_ultimo_ping ?? null,
+      token: data?.agente_impressao_token ?? null,
+    };
   }
 
   async impressorasDetectadas(restaurantId: number) {
