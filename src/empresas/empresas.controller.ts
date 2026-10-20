@@ -29,6 +29,7 @@ export class EmpresasController {
     modulo_gdoor?: boolean;
     modulo_favicon_personalizado?: boolean;
     modulo_servicos?: boolean;
+    modulo_pagamento_manual?: boolean;
     limite_servicos?: number | null;
   }) {
     return this.service.criar(body);

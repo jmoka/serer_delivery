@@ -87,6 +87,14 @@ export class CriarPlanoDto {
   @IsBoolean()
   inclui_favicon_personalizado?: boolean;
 
+  // Habilita o toggle "Receber pagamento manualmente" em restaurante-config
+  // (sem isso, checkout sempre cobra via PagBank) — ver
+  // PlanosService.atribuirAssinatura, que espelha isso em
+  // restaurants.modulo_pagamento_manual.
+  @IsOptional()
+  @IsBoolean()
+  inclui_pagamento_manual?: boolean;
+
   // Plano exclusivo pra quem ainda não é cliente — some da tela de troca de
   // plano de quem já é cadastrado (ver PlanosService.listarPlanosAtivos).
   @IsOptional()

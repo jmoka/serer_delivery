@@ -67,7 +67,7 @@ export class RestauranteService {
     // (GET /restaurante/config, ver getConfig() nesta mesma classe).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, auto_atendimento_habilitado, permite_frete_embutido, whatsapp, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, auto_atendimento_habilitado, permite_frete_embutido, whatsapp, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -1453,7 +1453,7 @@ export class RestauranteService {
   ) {
     const { data: atual } = await this.supabase.client
       .from('restaurants')
-      .select('payment_config')
+      .select('payment_config, modulo_pagamento_manual')
       .eq('id', restaurantId)
       .maybeSingle();
 
@@ -1470,7 +1470,12 @@ export class RestauranteService {
     if (body.chave_pix !== undefined) novo.chave_pix = body.chave_pix;
 
     const update: Record<string, any> = { payment_config: novo, updated_at: new Date().toISOString() };
-    if (body.pagamento_manual !== undefined) update.pagamento_manual = body.pagamento_manual;
+    // Nunca confia só no front pra esconder o toggle — sem o módulo liberado
+    // pelo plano/admin, pagamento_manual nunca vira true por aqui mesmo que
+    // o body venha manipulado.
+    if (body.pagamento_manual !== undefined) {
+      update.pagamento_manual = body.pagamento_manual && !!atual?.modulo_pagamento_manual;
+    }
     if (body.frete_motoboy !== undefined) update.frete_motoboy = body.frete_motoboy;
     if (body.usa_motoboy !== undefined) update.usa_motoboy = body.usa_motoboy;
     if (body.permite_retirada_balcao !== undefined) update.permite_retirada_balcao = body.permite_retirada_balcao;
