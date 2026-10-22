@@ -164,4 +164,9 @@ export class AuthLoginService {
 
     return { success: true };
   }
+
+  // ── Reset de 2FA via link enviado pelo admin (ver UsuariosService.resetarDoisFatores) ──
+  confirmarResetAdmin2fa(token: string) {
+    return this.twoFactor.confirmarResetViaAdmin(token);
+  }
 }

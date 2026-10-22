@@ -38,4 +38,11 @@ export class AuthLoginController {
   confirmarRecuperacaoSenha(@Body() body: { reset_id: string; codigo: string; nova_senha: string }) {
     return this.service.confirmarRecuperacaoSenha(body.reset_id, body.codigo, body.nova_senha);
   }
+
+  // ── Reset de 2FA via link enviado pelo admin (ver UsuariosController) ──
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('2fa/resetar/confirmar')
+  confirmarResetAdmin2fa(@Body() body: { token: string }) {
+    return this.service.confirmarResetAdmin2fa(body.token);
+  }
 }

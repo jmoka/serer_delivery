@@ -38,4 +38,24 @@ export class TwoFactorEmailService {
 
     if (error) throw new Error(error.message || 'Falha ao enviar código por email');
   }
+
+  async enviarLinkResetAdmin(email: string, link: string): Promise<void> {
+    if (!this.resend) throw new Error('Envio de email não configurado (RESEND_API_KEY ausente).');
+
+    const { error } = await this.resend.emails.send({
+      from: this.from,
+      to: email,
+      subject: 'Desativação da verificação em duas etapas',
+      html: `
+        <div style="font-family: sans-serif; max-width: 420px; margin: 0 auto;">
+          <p>Um administrador solicitou a desativação da verificação em duas etapas da sua conta.</p>
+          <p>Se foi você quem pediu ajuda ao suporte, clique no link abaixo para confirmar:</p>
+          <p style="margin: 24px 0;"><a href="${link}" style="color: #2563EB;">Confirmar e desativar verificação em duas etapas</a></p>
+          <p style="color: #71717A; font-size: 13px;">O link expira em 30 minutos. Se não foi você quem solicitou, ignore este email e entre em contato com o suporte.</p>
+        </div>
+      `,
+    });
+
+    if (error) throw new Error(error.message || 'Falha ao enviar link por email');
+  }
 }

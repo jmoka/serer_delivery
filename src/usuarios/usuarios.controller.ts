@@ -58,4 +58,9 @@ export class UsuariosController {
   liberarBloqueioLogin(@Param('id') id: string, @Req() req: any) {
     return this.service.liberarBloqueioLogin(req.userId, id);
   }
+
+  @Patch(':id/2fa/resetar')
+  resetarDoisFatores(@Param('id') id: string, @Req() req: any) {
+    return this.service.resetarDoisFatores(req.userId, id);
+  }
 }

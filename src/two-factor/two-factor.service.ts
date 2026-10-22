@@ -30,6 +30,19 @@ interface DesafioResetSenha {
 const chaveResetSenha = (resetId: string) => `reset-senha:${resetId}`;
 const chaveTentativasResetSenha = (resetId: string) => `reset-senha:tentativas:${resetId}`;
 
+// Reset de 2FA disparado pelo admin (ver UsuariosService.resetarDoisFatores) —
+// link de uso único por e-mail pra quando o usuário perdeu acesso ao código
+// (app autenticador apagado, e-mail de segurança inacessível etc.) e por isso
+// não pode usar o self-service (POST .../disable, que exige a senha atual).
+const RESET_ADMIN_TTL_S = 30 * 60;
+
+interface ResetAdmin2FA {
+  targetUserId: string;
+  adminUserId: string;
+}
+
+const chaveResetAdmin2fa = (token: string) => `2fa-reset-admin:${token}`;
+
 interface Desafio2FA {
   userId: string;
   method: 'totp' | 'email';
@@ -46,6 +59,10 @@ export class TwoFactorService {
   // Client isolado (sem persistir sessão), mesmo motivo do AuthLoginService:
   // usado só pra reautenticar com senha antes de desativar o 2FA.
   private readonly authClient: SupabaseClient;
+  // Base pra montar o link do reset de 2FA via admin — mesmo build do SPA
+  // serve todos os domínios white-label, então o domínio principal da
+  // plataforma funciona independente de qual loja/papel o usuário tem.
+  private readonly frontendUrl: string;
 
   constructor(
     private supabase: SupabaseService,
@@ -58,6 +75,7 @@ export class TwoFactorService {
       config.getOrThrow('SUPABASE_SERVICE_ROLE_KEY'),
       { auth: { persistSession: false, autoRefreshToken: false } },
     );
+    this.frontendUrl = config.get('FRONTEND_URL') || 'https://pediuvai.com.br';
   }
 
   // ── Usado pelo AuthLoginService, logo após signInWithPassword ter sucesso ──
@@ -276,6 +294,47 @@ export class TwoFactorService {
       .from('user_profiles')
       .update({ two_factor_method: 'none', two_factor_totp_secret: null })
       .eq('id', userId);
+    return { method: 'none' };
+  }
+
+  // ── Reset de 2FA via admin (ver UsuariosService.resetarDoisFatores) ──
+  // Validação de negócio (perfil existe, 2FA realmente ativo) fica no
+  // chamador — aqui só cuida do token e do envio do link.
+
+  async criarTokenResetAdmin(adminUserId: string, targetUserId: string, email: string): Promise<void> {
+    const token = crypto.randomUUID();
+    await this.redis.setJSONStrict(
+      chaveResetAdmin2fa(token),
+      { targetUserId, adminUserId } satisfies ResetAdmin2FA,
+      RESET_ADMIN_TTL_S,
+    );
+    const link = `${this.frontendUrl}/2fa/resetar?token=${token}`;
+    await this.email.enviarLinkResetAdmin(email, link);
+  }
+
+  async confirmarResetViaAdmin(token: string): Promise<{ method: Metodo2FA }> {
+    if (!token) throw new BadRequestException('Link inválido.');
+
+    const pendente = await this.redis.getJSONStrict<ResetAdmin2FA>(chaveResetAdmin2fa(token));
+    if (!pendente) throw new BadRequestException('Link expirado ou já utilizado. Peça pro admin enviar um novo.');
+
+    await this.supabase.client
+      .from('user_profiles')
+      .update({ two_factor_method: 'none', two_factor_totp_secret: null })
+      .eq('id', pendente.targetUserId);
+
+    await this.redis.del(chaveResetAdmin2fa(token));
+
+    // Único ponto do fluxo sem um admin autenticado na request (quem clica é
+    // o próprio usuário, sem sessão) — por isso audita usando o adminUserId
+    // guardado no payload do token, que foi quem solicitou originalmente.
+    await this.supabase.client.from('admin_audit_log').insert({
+      admin_user_id: pendente.adminUserId,
+      target_user_id: pendente.targetUserId,
+      acao: 'resetar_2fa_confirmado',
+      detalhes: { confirmado_pelo_usuario: true },
+    });
+
     return { method: 'none' };
   }
 }

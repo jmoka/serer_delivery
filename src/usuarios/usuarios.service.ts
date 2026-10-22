@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { sanitizarBuscaOr } from '../common/postgrest.util';
+import { TwoFactorService } from '../two-factor/two-factor.service';
 
 @Injectable()
 export class UsuariosService {
-  constructor(private supabase: SupabaseService) {}
+  constructor(private supabase: SupabaseService, private twoFactor: TwoFactorService) {}
 
   // Fonte única da regra "vínculo restaurants.user_id <-> user_profiles.role".
   // Idempotente: pode ser chamado com o mesmo novoUserId que já está no
@@ -71,7 +72,7 @@ export class UsuariosService {
   async listar(params: { busca?: string; role?: string; page: number; limit: number }) {
     let query = this.supabase.client
       .from('user_profiles')
-      .select('id, name, email, role, phone_e164, bloqueado, bloqueado_login_ate, must_change_password, created_at', { count: 'exact' })
+      .select('id, name, email, role, phone_e164, bloqueado, bloqueado_login_ate, must_change_password, two_factor_method, created_at', { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (params.role) query = query.eq('role', params.role);
@@ -278,6 +279,33 @@ export class UsuariosService {
     });
 
     return { ok: true };
+  }
+
+  // Envia link de confirmação pro email do usuário pra desativar o 2FA dele —
+  // saída pra quando o self-service (TwoFactorService.desativar, que exige a
+  // senha atual) não serve porque o problema é justamente não ter mais acesso
+  // ao código (app autenticador apagado, email de segurança inacessível etc.).
+  async resetarDoisFatores(adminUserId: string, targetUserId: string) {
+    const { data: perfil } = await this.supabase.client
+      .from('user_profiles')
+      .select('email, two_factor_method')
+      .eq('id', targetUserId)
+      .maybeSingle();
+    if (!perfil) throw new NotFoundException('Usuário não encontrado.');
+    if (perfil.two_factor_method === 'none') {
+      throw new BadRequestException('Usuário não tem verificação em duas etapas ativa.');
+    }
+
+    await this.twoFactor.criarTokenResetAdmin(adminUserId, targetUserId, perfil.email);
+
+    await this.supabase.client.from('admin_audit_log').insert({
+      admin_user_id: adminUserId,
+      target_user_id: targetUserId,
+      acao: 'resetar_2fa_solicitado',
+      detalhes: { email: perfil.email, method_anterior: perfil.two_factor_method },
+    });
+
+    return { sucesso: true };
   }
 
   async excluir(adminUserId: string, targetUserId: string) {
