@@ -280,7 +280,7 @@ export class PlanosService {
       .order('periodo_inicio', { ascending: false });
     if (error) throw error;
 
-    return { assinatura, faturas: faturas ?? [] };
+    return { assinatura, faturas: await this.assinarComprovantesFaturas(faturas) };
   }
 
   async buscarAssinaturaPorInstalacao(instalacaoId: number) {
@@ -294,7 +294,18 @@ export class PlanosService {
       .order('periodo_inicio', { ascending: false });
     if (error) throw error;
 
-    return { assinatura, faturas: faturas ?? [] };
+    return { assinatura, faturas: await this.assinarComprovantesFaturas(faturas) };
+  }
+
+  // Bucket comprovantes-pix é privado (2026-10-25) — plano_faturas.comprovante_pagamento_url
+  // guarda o path estável, troca por signed URL só ao devolver pro cliente/admin.
+  private async assinarComprovantesFaturas(faturas: any[] | null) {
+    return Promise.all(
+      (faturas ?? []).map(async (f) => ({
+        ...f,
+        comprovante_pagamento_url: await this.supabase.signedComprovantePix(f.comprovante_pagamento_url),
+      })),
+    );
   }
 
   async atribuirAssinatura(titular: Titular, planoId: number, cortesiaAte?: string | null) {
@@ -815,7 +826,7 @@ export class PlanosService {
     if (filtros.tipo === 'local') q = q.not('instalacao_id', 'is', null);
     const { data, error } = await q;
     if (error) throw error;
-    return { faturas: data ?? [] };
+    return { faturas: await this.assinarComprovantesFaturas(data) };
   }
 
   async buscarFatura(id: number) {
@@ -829,15 +840,19 @@ export class PlanosService {
   async buscarFaturaDoRestaurante(restaurantId: number, id: number) {
     const fatura = await this.buscarFatura(id);
     if (fatura.restaurant_id !== restaurantId) throw new NotFoundException('Fatura não encontrada');
+    const faturaComUrlAssinada = {
+      ...fatura,
+      comprovante_pagamento_url: await this.supabase.signedComprovantePix(fatura.comprovante_pagamento_url),
+    };
     if (fatura.comissao_valor > 0) {
       const { comissoes } = await this.buscarComissoesNaoColetadas(
         restaurantId,
         new Date(fatura.periodo_inicio),
         new Date(fatura.periodo_fim),
       );
-      return { ...fatura, comissoes };
+      return { ...faturaComUrlAssinada, comissoes };
     }
-    return fatura;
+    return faturaComUrlAssinada;
   }
 
   async marcarFaturaPaga(id: number) {

@@ -1514,7 +1514,9 @@ export class MotoboyService {
       .update({ comprovante_pagamento_url: comprovanteUrl, updated_at: new Date().toISOString() })
       .eq('id', pedidoId);
 
-    return { url: comprovanteUrl };
+    // Bucket privado — devolve signed URL pra tela do motoboy conseguir
+    // mostrar o comprovante que ele mesmo acabou de subir.
+    return { url: await this.supabase.signedComprovantePix(comprovanteUrl) };
   }
 
   private async limiteRevisoesPlataforma(): Promise<number> {

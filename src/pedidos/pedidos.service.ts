@@ -461,7 +461,15 @@ export class PedidosService {
       ? { ...cliente, address_json: this.encryption.decryptJson((cliente as any).address_json), cpf_cnpj: this.encryption.decryptNullable((cliente as any).cpf_cnpj) }
       : null;
 
-    return { pedido, itens, cliente: clienteDecifrado, empresa, motoboy, pagamento_pago: pagamento ?? null };
+    // comprovante_pagamento_url vem do bucket privado comprovantes-pix (ver
+    // SupabaseService.signedComprovantePix) — troca pela signed URL aqui, no
+    // mesmo chokepoint onde o cliente já é decifrado.
+    const pedidoComUrlAssinada = {
+      ...pedido,
+      comprovante_pagamento_url: await this.supabase.signedComprovantePix(pedido.comprovante_pagamento_url),
+    };
+
+    return { pedido: pedidoComUrlAssinada, itens, cliente: clienteDecifrado, empresa, motoboy, pagamento_pago: pagamento ?? null };
   }
 
   async criar(body: {
@@ -838,7 +846,9 @@ export class PedidosService {
       .update({ comprovante_pagamento_url: comprovanteUrl, updated_at: new Date().toISOString() })
       .eq('id', id);
 
-    return { url: comprovanteUrl };
+    // Bucket privado — devolve signed URL pra tela do cliente conseguir
+    // mostrar o comprovante que ele mesmo acabou de subir.
+    return { url: await this.supabase.signedComprovantePix(comprovanteUrl) };
   }
 
   // Cliente optou por pular o anexo agora e vai mostrar/pagar em pessoa (motoboy

@@ -71,4 +71,18 @@ export class SupabaseService {
     if (!this.baseUrlPublicaLan) return url;
     return url.replace(/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/, this.baseUrlPublicaLan);
   }
+
+  // Bucket comprovantes-pix é privado (2026-10-25) — a URL gravada no banco
+  // (getPublicUrl(), formato .../object/public/comprovantes-pix/<path>) nunca
+  // resolve sozinha; serve só pra guardar o path de forma estável. Troca por
+  // signed URL (expira, token na query) no momento de devolver pro cliente.
+  async signedComprovantePix(urlOuPath: string | null, ttlSegundos = 600): Promise<string | null> {
+    if (!urlOuPath) return null;
+    const marcador = '/comprovantes-pix/';
+    const idx = urlOuPath.indexOf(marcador);
+    const path = idx === -1 ? urlOuPath : urlOuPath.slice(idx + marcador.length);
+    const { data, error } = await this.client.storage.from('comprovantes-pix').createSignedUrl(path, ttlSegundos);
+    if (error || !data) return null;
+    return data.signedUrl;
+  }
 }
