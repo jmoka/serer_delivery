@@ -38,6 +38,7 @@ import { FavoritosMenuModule } from './favoritos-menu/favoritos-menu.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { AcademiaModule } from './academia/academia.module';
 import { PaginasLegaisModule } from './paginas-legais/paginas-legais.module';
+import { VisitasModule } from './visitas/visitas.module';
 
 @Module({
   imports: [
@@ -88,6 +89,7 @@ import { PaginasLegaisModule } from './paginas-legais/paginas-legais.module';
     TelegramModule,
     AcademiaModule,
     PaginasLegaisModule,
+    VisitasModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

@@ -18,12 +18,16 @@ export class EmpresasService {
   async listar(apenasAtivo?: boolean) {
     let query = this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, limite_servicos, created_at')
+      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, limite_servicos, created_at, aparencia')
       .order('name');
 
     const { data, error } = await query;
     if (error) throw error;
-    return { empresas: data, total: data?.length ?? 0 };
+    const empresas = (data ?? []).map((e: any) => {
+      const { aparencia, ...resto } = e;
+      return { ...resto, aberto: aparencia?.aberto === true };
+    });
+    return { empresas, total: empresas.length };
   }
 
   async buscar(id: number) {

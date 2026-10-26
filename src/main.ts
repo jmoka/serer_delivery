@@ -17,6 +17,10 @@ async function bootstrap() {
   }
 
   const app = await NestFactory.create(AppModule);
+  // Atrás do Cloudflare Tunnel — sem isso req.ip vira o IP do tunnel/proxy,
+  // não o do visitante (usado em visitas.controller.ts como fallback do
+  // CF-Connecting-IP).
+  app.getHttpAdapter().getInstance().set('trust proxy', true);
   app.use(helmet());
 
   const corsOrigins = app.get(CorsOriginsService);
