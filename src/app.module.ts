@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { join } from 'path';
 import { SupabaseModule } from './supabase/supabase.module';
 import { R2Module } from './r2/r2.module';
@@ -52,6 +53,7 @@ import { PaginasLegaisModule } from './paginas-legais/paginas-legais.module';
     // "API: 100 requisições por minuto"). Endpoints de login/cadastro usam
     // @Throttle com limite mais apertado (ver motoboy-auth/garcom-auth).
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
+    ScheduleModule.forRoot(),
     SupabaseModule,
     R2Module,
     CommonModule,

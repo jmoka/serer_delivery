@@ -1,5 +1,6 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
@@ -39,6 +40,8 @@ const CORTESIA_ETERNA = '2099-12-31T00:00:00.000Z';
 
 @Injectable()
 export class PlanosService {
+  private readonly logger = new Logger(PlanosService.name);
+
   constructor(
     private supabase: SupabaseService,
     private config: ConfigService,
@@ -419,6 +422,29 @@ export class PlanosService {
     return data;
   }
 
+  // Admin edita direto quando o período atual da assinatura termina — desloca
+  // a data de vencimento projetada em /admin/empresas (usado quando ainda não
+  // existe fatura gerada pro período; se já existe, edita a fatura direto via
+  // atualizarFatura). Não reinicia trial/status, diferente de atribuirAssinatura.
+  async atualizarVigencia(restaurantId: number, ultimoPeriodoFaturadoFim: string) {
+    const existente = await this.buscarAssinaturaRaw({ restaurantId });
+    if (!existente) throw new NotFoundException('Loja não tem assinatura');
+
+    const { error } = await this.supabase.client
+      .from('assinaturas')
+      .update({ ultimo_periodo_faturado_fim: ultimoPeriodoFaturadoFim, updated_at: new Date().toISOString() })
+      .eq('id', existente.id);
+    if (error) throw error;
+
+    // Se a data nova já ficou vencida, gera a fatura (e recalcula bloqueio) na
+    // hora, sem esperar o cron das 6h/próximo acesso do dono — sincronizarPeriodo
+    // sem forçar já gera qualquer período FECHADO (fimPeriodo < agora) normalmente,
+    // só não força abrir fatura de um período ainda em aberto (isso ficaria pro
+    // cron, 5 dias antes, senão toda edição de vigência pra uma data futura
+    // geraria fatura adiantada demais).
+    return this.sincronizarPeriodo({ restaurantId });
+  }
+
   async cancelarAssinatura(titular: Titular) {
     const existente = await this.buscarAssinaturaRaw(titular);
     if (!existente) throw new NotFoundException('Assinatura não encontrada');
@@ -545,12 +571,19 @@ export class PlanosService {
     // "esquecido" por essa função só olhar pra atraso de pagamento (bug real visto
     // em produção: empresa bloqueada pelo admin continuava com acesso total ao
     // painel porque só o atraso de fatura chegava a virar `bloqueado`).
-    let bloqueadoAdmin = false;
+    // bloqueado_motivo distingue a mesma coluna `bloqueado` ter sido setada pelo
+    // admin (vale sempre) ou por este próprio método (motivo='fatura', only aqui
+    // pra saber se é seguro desbloquear de novo sozinho quando a fatura é paga —
+    // nunca libera um bloqueio que o admin fez por outro motivo).
+    let bloqueadoColuna = false;
+    let motivoAtual: string | null = null;
     if ('restaurantId' in titular) {
       const { data: restaurante } = await this.supabase.client
-        .from('restaurants').select('bloqueado').eq('id', titular.restaurantId).maybeSingle();
-      bloqueadoAdmin = !!restaurante?.bloqueado;
+        .from('restaurants').select('bloqueado, bloqueado_motivo').eq('id', titular.restaurantId).maybeSingle();
+      bloqueadoColuna = !!restaurante?.bloqueado;
+      motivoAtual = restaurante?.bloqueado_motivo ?? null;
     }
+    const bloqueadoAdmin = bloqueadoColuna && motivoAtual !== 'fatura';
 
     const assinatura = await this.buscarAssinaturaRaw(titular);
     if (!assinatura || assinatura.status === 'cancelada') {
@@ -658,7 +691,11 @@ export class PlanosService {
         }
       }
 
-      const vencimento = somarDias(fimPeriodo, 5);
+      // Vencimento = fim do próprio período (data que o admin edita/mostra como
+      // "vencimento" em /admin/empresas) — não soma mais 5 dias de carência aqui.
+      // A carência pós-vencimento até bloquear já vem separada (plano_dias_tolerancia,
+      // ver diasTolerancia()); o aviso PRÉ-vencimento vem de gerarFaturasAntecipadas.
+      const vencimento = fimPeriodo;
 
       const novaFatura: Record<string, any> = {
         assinatura_id: assinatura.id,
@@ -720,6 +757,26 @@ export class PlanosService {
 
     const proximaCobranca = somarMeses(ultimoFimFaturado ?? inicioPeriodo, meses);
 
+    // Persiste o bloqueio por atraso na mesma coluna que o marketplace/afiliação
+    // de motoboy já leem (restaurants.bloqueado) — antes esse `bloqueado`
+    // calculado só existia na resposta pro painel do próprio dono, nunca travava
+    // a loja de verdade (ficava visível no marketplace vencida há semanas).
+    // Só toca a coluna se o motivo atual não for 'admin' (bloqueio manual nunca
+    // é sobrescrito/liberado por aqui).
+    if ('restaurantId' in titular && motivoAtual !== 'admin') {
+      if (bloqueado && motivoAtual !== 'fatura') {
+        await this.supabase.client
+          .from('restaurants')
+          .update({ bloqueado: true, bloqueado_motivo: 'fatura', updated_at: agora.toISOString() })
+          .eq('id', titular.restaurantId);
+      } else if (!bloqueado && motivoAtual === 'fatura') {
+        await this.supabase.client
+          .from('restaurants')
+          .update({ bloqueado: false, bloqueado_motivo: null, updated_at: agora.toISOString() })
+          .eq('id', titular.restaurantId);
+      }
+    }
+
     return {
       bloqueado: bloqueado || bloqueadoAdmin,
       admin_bloqueado: bloqueadoAdmin,
@@ -729,6 +786,41 @@ export class PlanosService {
       plano_nome: plano.nome,
       proxima_cobranca: proximaCobranca.toISOString(),
     };
+  }
+
+  // Rodada diária: roda sincronizarPeriodo pra toda assinatura ativa/trial, SaaS
+  // ou instalação local — isso sozinho já marca fatura vencida e persiste o
+  // bloqueio automático por atraso (ver bloco "Persiste o bloqueio..." dentro
+  // de sincronizarPeriodo), mesmo pra quem nunca acessa o painel. Além disso,
+  // quando o vencimento (fim do período) cai em até 5 dias, força (forcar=true)
+  // a geração da fatura do período ainda em aberto — é esse adiantamento que dá
+  // tempo do cliente pagar ANTES do vencimento (antes só se gerava fatura depois
+  // do período fechar, via acesso do dono ou "Renovar agora" manual).
+  // sincronizarPeriodo é idempotente (checa fatura/bloqueio já existente antes de
+  // escrever), então rodar de novo todo dia pra quem já está em dia é seguro.
+  @Cron(CronExpression.EVERY_DAY_AT_6AM)
+  async gerarFaturasAntecipadas() {
+    const emCincoDias = somarDias(new Date(), 5);
+
+    const { data: assinaturas, error } = await this.supabase.client
+      .from('assinaturas')
+      .select('id, restaurant_id, instalacao_id, data_inicio, ultimo_periodo_faturado_fim, planos(periodicidade)')
+      .in('status', ['trial', 'ativa']);
+    if (error) throw error;
+
+    for (const a of assinaturas ?? []) {
+      const meses = MESES_POR_PERIODICIDADE[(a as any).planos?.periodicidade] ?? 1;
+      const inicioPeriodo = a.ultimo_periodo_faturado_fim ? new Date(a.ultimo_periodo_faturado_fim) : new Date(a.data_inicio);
+      const fimPeriodo = somarMeses(inicioPeriodo, meses);
+      const dentroDaJanela = fimPeriodo <= emCincoDias;
+
+      const titular: Titular = a.restaurant_id ? { restaurantId: a.restaurant_id } : { instalacaoId: a.instalacao_id };
+      try {
+        await this.sincronizarPeriodo(titular, dentroDaJanela);
+      } catch (e) {
+        this.logger.error(`gerarFaturasAntecipadas falhou pra assinatura ${a.id}`, e as Error);
+      }
+    }
   }
 
   async detalhePlanoRestaurante(restaurantId: number) {

@@ -157,10 +157,14 @@ export class EmpresasService {
     return { ...data, cnpj: this.encryption.decryptNullable((data as any).cnpj ?? null) };
   }
 
+  // Bloqueio manual do admin — sempre vence (até sobre um bloqueio automático
+  // por fatura: desbloquear aqui limpa o motivo, então PlanosService.sincronizarPeriodo
+  // não vai re-bloquear sozinho se a fatura ainda estiver vencida; ela só volta
+  // a bloquear automaticamente se continuar vencida na próxima verificação).
   async bloquear(id: number, bloqueado: boolean) {
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .update({ bloqueado, updated_at: new Date().toISOString() })
+      .update({ bloqueado, bloqueado_motivo: bloqueado ? 'admin' : null, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select('id, name, bloqueado')
       .single();

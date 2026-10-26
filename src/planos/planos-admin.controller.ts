@@ -5,6 +5,7 @@ import { CriarPlanoDto } from './dto/criar-plano.dto';
 import { AtualizarPlanoDto } from './dto/atualizar-plano.dto';
 import { AtribuirAssinaturaDto } from './dto/atribuir-assinatura.dto';
 import { AtualizarCortesiaDto } from './dto/atualizar-cortesia.dto';
+import { AtualizarVigenciaDto } from './dto/atualizar-vigencia.dto';
 import { CriarFaturaManualDto } from './dto/criar-fatura-manual.dto';
 import { AtualizarFaturaDto } from './dto/atualizar-fatura.dto';
 
@@ -40,6 +41,17 @@ export class PlanosAdminController {
     @Body() body: AtualizarCortesiaDto,
   ) {
     return this.service.atualizarCortesia(restaurantId, body.cortesia_ate ?? null);
+  }
+
+  // Edita quando o período atual termina (vencimento projetado) sem fatura
+  // gerada ainda — ver AtualizarVigenciaDto. Fatura já gerada edita-se direto
+  // via PATCH faturas/:id.
+  @Patch('assinaturas/:restaurantId/vigencia')
+  atualizarVigencia(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Body() body: AtualizarVigenciaDto,
+  ) {
+    return this.service.atualizarVigencia(restaurantId, body.ultimo_periodo_faturado_fim);
   }
 
   @Patch('assinaturas/:restaurantId/cancelar')
