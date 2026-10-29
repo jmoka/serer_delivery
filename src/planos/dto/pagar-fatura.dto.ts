@@ -1,4 +1,42 @@
-import { IsEmail, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsEmail, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+// Só exigido pelo PagBank em pagamento de cartão (antifraude) — Pix não usa.
+export class EnderecoFaturaDto {
+  @IsString()
+  @MinLength(8)
+  @MaxLength(9)
+  cep: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  rua: string;
+
+  @IsString()
+  @MaxLength(20)
+  numero: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  complemento?: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  bairro: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  cidade: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(2)
+  uf: string;
+}
 
 export class PagarFaturaDto {
   @IsString()
@@ -29,4 +67,11 @@ export class PagarFaturaDto {
   @Min(1)
   @Max(12)
   parcelas?: number;
+
+  // Obrigatório só pra credit_card/debit_card — validado no service, não aqui
+  // (não dá pra condicionar @IsOptional em outro campo direto no decorator).
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => EnderecoFaturaDto)
+  endereco?: EnderecoFaturaDto;
 }

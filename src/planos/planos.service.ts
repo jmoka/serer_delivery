@@ -7,6 +7,9 @@ import { UsuariosService } from '../usuarios/usuarios.service';
 import { PagBankClient } from '../pagamentos/pagbank.client';
 import { CriarPlanoDto } from './dto/criar-plano.dto';
 import { AtualizarPlanoDto } from './dto/atualizar-plano.dto';
+import type { PagarFaturaDto } from './dto/pagar-fatura.dto';
+
+type PagarFaturaBody = PagarFaturaDto;
 
 const STATUS_PAGOS = ['PAID', 'COMPLETED', 'AVAILABLE'];
 
@@ -1129,7 +1132,11 @@ export class PlanosService {
     if (error) throw error;
     if (!data) throw new NotFoundException('Link de pagamento inválido');
 
-    const nome = (data as any).restaurants?.name ?? (data as any).instalacoes_locais?.nome_cliente ?? 'Assinatura';
+    return this.montarRespostaFaturaPublica(data);
+  }
+
+  private async montarRespostaFaturaPublica(data: any) {
+    const nome = data.restaurants?.name ?? data.instalacoes_locais?.nome_cliente ?? 'Assinatura';
     const resultado: Record<string, any> = {
       id: data.id,
       nome,
@@ -1148,6 +1155,45 @@ export class PlanosService {
     }
 
     return resultado;
+  }
+
+  // Segundo tipo de link — admin gera (ou reaproveita) pra mandar pro dono do
+  // restaurante via WhatsApp, mas a página exige login (RestauranteGuard no
+  // frontend) antes de mostrar o QR/Pix, diferente do link totalmente público.
+  async gerarLinkPagamentoLogado(id: number) {
+    const fatura = await this.buscarFatura(id);
+    if (fatura.status === 'paga' || fatura.status === 'cancelada' || fatura.status === 'isenta') {
+      throw new BadRequestException('Só é possível gerar link pra fatura pendente ou vencida');
+    }
+    if (!fatura.restaurant_id) {
+      throw new BadRequestException('Link com login só existe pra fatura de restaurante, não de instalação local');
+    }
+    if (fatura.link_pagamento_logado_token) return { token: fatura.link_pagamento_logado_token };
+
+    const token = crypto.randomUUID();
+    const { error } = await this.supabase.client
+      .from('plano_faturas')
+      .update({ link_pagamento_logado_token: token, atualizado_em: new Date().toISOString() })
+      .eq('id', id);
+    if (error) throw error;
+
+    return { token };
+  }
+
+  // Resolvido pelo RestauranteController (guardado) — por isso recebe
+  // restaurantId do dono logado e confere que a fatura é dele mesmo antes de
+  // devolver qualquer dado (evita vazar fatura de outra loja pelo token).
+  async buscarFaturaLogadaPorToken(token: string, restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('plano_faturas')
+      .select('id, valor, vencimento, status, restaurant_id, restaurants(name), instalacoes_locais(nome_cliente)')
+      .eq('link_pagamento_logado_token', token)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Link de pagamento inválido');
+    if (data.restaurant_id !== restaurantId) throw new NotFoundException('Link de pagamento inválido');
+
+    return this.montarRespostaFaturaPublica(data);
   }
 
   // Dono anexa o comprovante do Pix manual da fatura — mesmo padrão de
@@ -1197,9 +1243,24 @@ export class PlanosService {
   async pagarFatura(
     restaurantId: number,
     faturaId: number,
-    body: { nome: string; email: string; cpf_cnpj: string; metodo?: 'pix' | 'credit_card' | 'debit_card'; card_encrypted?: string; parcelas?: number },
+    body: PagarFaturaBody,
   ) {
     const fatura = await this.buscarFaturaDoRestaurante(restaurantId, faturaId);
+    return this.executarPagamentoFatura(fatura, body);
+  }
+
+  // Mesmo fluxo de pagarFatura, mas resolvido pelo token do link público
+  // (gerar-link) em vez de restaurantId — PlanosPublicoController, sem guard.
+  // Habilita o cliente a pagar via PagBank de verdade (Pix/cartão) sem logar.
+  async pagarFaturaPublica(token: string, body: PagarFaturaBody) {
+    const { data, error } = await this.supabase.client
+      .from('plano_faturas').select('*').eq('link_pagamento_token', token).maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Link de pagamento inválido');
+    return this.executarPagamentoFatura(data, body);
+  }
+
+  private async executarPagamentoFatura(fatura: any, body: PagarFaturaBody) {
     if (fatura.status === 'paga') throw new BadRequestException('Fatura já está paga');
     if (fatura.status === 'isenta' || fatura.status === 'cancelada') {
       throw new BadRequestException('Esta fatura não pode ser paga');
@@ -1273,10 +1334,11 @@ export class PlanosService {
   // Cartão confirma na hora (sem espera de webhook) — diferente do Pix
   private async pagarFaturaCartao(
     fatura: any,
-    body: { nome: string; email: string; cpf_cnpj: string; card_encrypted?: string; parcelas?: number },
+    body: PagarFaturaBody,
     metodo: 'credit_card' | 'debit_card',
   ) {
     if (!body.card_encrypted) throw new BadRequestException('Dados do cartão ausentes');
+    if (!body.endereco) throw new BadRequestException('Endereço obrigatório pra pagamento com cartão');
 
     const { client, webhookUrl } = await this.clientPlataforma();
     const valorCentavos = Math.round(fatura.valor * 100);
@@ -1297,6 +1359,16 @@ export class PlanosService {
         parcelas: metodo === 'credit_card' ? (body.parcelas ?? 1) : 1,
         tipo: metodo === 'credit_card' ? 'CREDIT_CARD' : 'DEBIT_CARD',
         webhook_url: webhookUrl,
+        shippingAddress: {
+          street: body.endereco.rua,
+          number: body.endereco.numero,
+          complement: body.endereco.complemento,
+          locality: body.endereco.bairro,
+          city: body.endereco.cidade,
+          region_code: body.endereco.uf,
+          country: 'BRA',
+          postal_code: body.endereco.cep.replace(/\D/g, ''),
+        },
       });
     } catch (e: any) {
       throw new BadRequestException(e?.message ?? 'Falha ao processar cartão no PagBank');

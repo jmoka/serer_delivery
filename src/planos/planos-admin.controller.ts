@@ -89,6 +89,13 @@ export class PlanosAdminController {
     return this.service.gerarLinkPagamento(id);
   }
 
+  // Segundo tipo de link — exige login do dono do restaurante (RestauranteGuard
+  // no frontend), resolvido em RestauranteController (GET .../fatura-logada/:token).
+  @Post('faturas/:id/gerar-link-logado')
+  gerarLinkPagamentoLogado(@Param('id', ParseIntPipe) id: number) {
+    return this.service.gerarLinkPagamentoLogado(id);
+  }
+
   @Post('faturas')
   criarFaturaManual(@Body() body: CriarFaturaManualDto) {
     return this.service.criarFaturaManual(body);

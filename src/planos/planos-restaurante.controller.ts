@@ -41,6 +41,14 @@ export class PlanosRestauranteController {
     return this.service.buscarFaturaDoRestaurante(req.restaurantId, id);
   }
 
+  // Resolve o link com login (gerado pelo admin via gerar-link-logado) — o
+  // token confirma qual fatura, req.restaurantId (do JWT) confirma que é o
+  // dono certo, nunca confiar só no token como no link público.
+  @Get('fatura-logada/:token')
+  faturaLogadaPorToken(@Req() req: any, @Param('token') token: string) {
+    return this.service.buscarFaturaLogadaPorToken(token, req.restaurantId);
+  }
+
   @Post('faturas/:id/pagar')
   pagar(@Req() req: any, @Param('id', ParseIntPipe) id: number, @Body() body: PagarFaturaDto) {
     return this.service.pagarFatura(req.restaurantId, id, body);

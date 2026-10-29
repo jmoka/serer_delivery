@@ -100,6 +100,18 @@ export class PagBankClient {
       method: 'FIXED' | 'PERCENTAGE';
       receivers: Array<{ account: { id: string }; amount: { value: number } }>;
     };
+    // PagBank usa pra antifraude em pagamento com cartão sem cliente cadastrado
+    // (link público) — Pix não usa, omitir nesse caso.
+    shippingAddress?: {
+      street: string;
+      number: string;
+      complement?: string;
+      locality: string;
+      city: string;
+      region_code: string;
+      country: string;
+      postal_code: string;
+    };
   }) {
     const charge: Record<string, any> = {
       reference_id: `CHG_${params.reference_id}`,
@@ -124,6 +136,7 @@ export class PagBankClient {
       notification_urls: [params.webhook_url],
       charges: [charge],
     };
+    if (params.shippingAddress) payload.shipping = { address: params.shippingAddress };
 
     return this.request<any>('POST', '/orders', payload);
   }
