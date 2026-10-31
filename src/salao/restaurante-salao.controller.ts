@@ -233,6 +233,26 @@ export class RestauranteSalaoController {
     return this.service.reabrir(id, req.restaurantId);
   }
 
+  @Get('reivindicacoes')
+  reivindicacoesPendentes(@Req() req: any) {
+    return this.service.reivindicacoesPendentes(req.restaurantId);
+  }
+
+  @Get('comandas-deletadas')
+  comandasDeletadas(@Req() req: any) {
+    return this.service.comandasDeletadas(req.restaurantId);
+  }
+
+  @Post('comandas/:id/reivindicacao/aprovar')
+  aprovarReivindicacao(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.aprovarReivindicacao(id, req.restaurantId);
+  }
+
+  @Post('comandas/:id/reivindicacao/recusar')
+  recusarReivindicacao(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.recusarReivindicacao(id, req.restaurantId);
+  }
+
   @Post('comandas/:id/imprimir-conferencia')
   imprimirConferencia(
     @Param('id', ParseIntPipe) id: number,

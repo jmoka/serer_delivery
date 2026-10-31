@@ -638,6 +638,96 @@ export class SalaoService {
     return comanda;
   }
 
+  // Comandas que o próprio estabelecimento deletou (excluida_em setada só no cancelar()
+  // do PDV — exclusão real, não o 'canceled' de "juntar comandas"). Junta com o status
+  // da reivindicação (se já tentou) pra aba "Deletadas" do garçom.
+  async comandasDeletadas(garcomId: number) {
+    const { data: originais, error } = await this.supabase.client
+      .from('orders')
+      .select('id, mesa_id, numero_comanda, cliente_mesa_nome, total, excluida_em, mesas(numero, nome)')
+      .eq('garcom_id', garcomId)
+      .eq('canal', 'presencial')
+      .not('excluida_em', 'is', null)
+      .order('excluida_em', { ascending: false });
+    if (error) throw error;
+    if (!originais?.length) return [];
+
+    const ids = originais.map((o: any) => o.id);
+    const { data: reivindicacoes } = await this.supabase.client
+      .from('orders')
+      .select('id, reivindicada_de_id, status, decisao_reivindicacao, decisao_reivindicacao_em')
+      .in('reivindicada_de_id', ids);
+    const porOriginal = new Map((reivindicacoes ?? []).map((r: any) => [r.reivindicada_de_id, r]));
+
+    return originais.map((o: any) => ({ ...o, reivindicacao: porOriginal.get(o.id) ?? null }));
+  }
+
+  // Tentativa única: se já existe qualquer comanda com reivindicada_de_id = essa, não
+  // deixa tentar de novo — nem depois de recusada.
+  async reivindicar(comandaId: number, garcomId: number, restaurantId: number) {
+    const { data: original } = await this.supabase.client
+      .from('orders')
+      .select('id, garcom_id, mesa_id, restaurant_id, customer_id, cliente_mesa_nome, cliente_mesa_telefone, caixa_id, excluida_em')
+      .eq('id', comandaId)
+      .maybeSingle();
+    if (!original) throw new NotFoundException('Comanda não encontrada');
+    if (original.garcom_id !== garcomId) throw new ForbiddenException('Comanda não pertence a este garçom');
+    if (!original.excluida_em) throw new BadRequestException('Essa comanda não foi deletada pelo estabelecimento');
+
+    const { data: jaReivindicada } = await this.supabase.client
+      .from('orders')
+      .select('id')
+      .eq('reivindicada_de_id', comandaId)
+      .maybeSingle();
+    if (jaReivindicada) throw new BadRequestException('Essa comanda já teve uma reivindicação — não é possível tentar de novo');
+
+    const { data: itensOriginais } = await this.supabase.client
+      .from('order_items')
+      .select('product_id, combo_id, quantity, unit_price, observacao, combo_nome, combo_quantidade')
+      .eq('order_id', comandaId);
+
+    const inicioDoDia = new Date();
+    inicioDoDia.setHours(0, 0, 0, 0);
+    const { count } = await this.supabase.client
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .gte('created_at', inicioDoDia.toISOString());
+    const numeroComanda = (count ?? 0) + 1;
+
+    const { data: nova, error } = await this.supabase.client
+      .from('orders')
+      .insert({
+        restaurant_id: restaurantId,
+        canal: 'presencial',
+        status: 'pendente_reivindicacao',
+        garcom_id: garcomId,
+        mesa_id: original.mesa_id,
+        customer_id: original.customer_id,
+        cliente_mesa_nome: original.cliente_mesa_nome,
+        cliente_mesa_telefone: original.cliente_mesa_telefone,
+        total: 0,
+        caixa_id: original.caixa_id,
+        numero_comanda: numeroComanda,
+        reivindicada_de_id: comandaId,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    if (itensOriginais?.length) {
+      const novosItens = itensOriginais.map((i: any) => ({ ...i, order_id: nova.id, status: 'pendente' }));
+      const { error: errItens } = await this.supabase.client.from('order_items').insert(novosItens);
+      if (errItens) throw errItens;
+
+      const totalNovo = itensOriginais.reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+      await this.supabase.client.from('orders').update({ total: parseFloat(totalNovo.toFixed(2)) }).eq('id', nova.id);
+    }
+
+    return nova;
+  }
+
   async minhasComandas(garcomId: number) {
     const CAMPOS = 'id, mesa_id, cliente_mesa_nome, cliente_mesa_telefone, status, total, numero_comanda, created_at, conferencia_solicitada_em, conferencia_vista_garcom_em, ultimo_pedido_cliente_em';
     const { data, error } = await this.supabase.client

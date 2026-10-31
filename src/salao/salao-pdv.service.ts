@@ -966,24 +966,25 @@ export class SalaoPdvService {
       await this.supabase.client.from('mesas').update({ status: 'livre' }).eq('id', comanda.mesa_id);
     }
 
-    // Comanda vazia (nunca teve produto lançado, ex: mesa aberta e fechada sem pedir
-    // nada) não deixa rastro nenhum — apaga a linha inteira em vez de só marcar
-    // 'canceled', pra não acumular lixo no histórico/relatórios.
+    // Nunca mais apaga a linha (nem comanda vazia) — se tinha garçom, ele precisa ver
+    // essa exclusão na aba "Deletadas" dele e poder reivindicar. `excluida_em` marca
+    // exclusão real pelo estabelecimento, pra não confundir com o 'canceled' do "juntar
+    // comandas" (que é consolidação, não deleção).
     const { count } = await this.supabase.client
       .from('order_items')
       .select('id', { count: 'exact', head: true })
       .eq('order_id', id);
-    if (!count) {
-      const { error } = await this.supabase.client.from('orders').delete().eq('id', id);
-      if (error) throw error;
-      return { ok: true, deletada: true };
-    }
 
-    const { error } = await this.supabase.client.from('orders').update({ status: 'canceled' }).eq('id', id);
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({ status: 'canceled', excluida_em: new Date().toISOString() })
+      .eq('id', id);
     if (error) throw error;
 
-    await this.estoque.restaurarItensDoPedido(id);
-    await this.salaoService.estornarPagamentosDaComanda(restaurantId, id, `Comanda #${comanda.numero_comanda ?? id} (cancelada)`);
+    if (count) {
+      await this.estoque.restaurarItensDoPedido(id);
+      await this.salaoService.estornarPagamentosDaComanda(restaurantId, id, `Comanda #${comanda.numero_comanda ?? id} (cancelada)`);
+    }
 
     return { ok: true };
   }
@@ -1059,6 +1060,90 @@ export class SalaoPdvService {
     if (comanda.mesa_id) {
       await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', comanda.mesa_id);
     }
+    return { ok: true };
+  }
+
+  // Reivindicações pendentes de comanda deletada (garçom pediu pra reabrir) — o
+  // estabelecimento decide aprovar ou recusar, nunca acontece automático.
+  async reivindicacoesPendentes(restaurantId: number) {
+    const { data, error } = await this.supabase.client
+      .from('orders')
+      .select('id, mesa_id, cliente_mesa_nome, total, numero_comanda, created_at, reivindicada_de_id, mesas(numero, nome), garcons(nome)')
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .eq('status', 'pendente_reivindicacao')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data;
+  }
+
+  // Mesma info que o garçom vê na aba "Deletadas" dele, só que aqui é todo o restaurante
+  // (todos os garçons) — estabelecimento precisa ver o histórico completo de exclusões.
+  async comandasDeletadas(restaurantId: number) {
+    const { data: originais, error } = await this.supabase.client
+      .from('orders')
+      .select('id, mesa_id, numero_comanda, cliente_mesa_nome, total, excluida_em, mesas(numero, nome), garcons(nome)')
+      .eq('restaurant_id', restaurantId)
+      .eq('canal', 'presencial')
+      .not('excluida_em', 'is', null)
+      .order('excluida_em', { ascending: false });
+    if (error) throw error;
+    if (!originais?.length) return [];
+
+    const ids = originais.map((o: any) => o.id);
+    const { data: reivindicacoes } = await this.supabase.client
+      .from('orders')
+      .select('id, reivindicada_de_id, status, decisao_reivindicacao, decisao_reivindicacao_em')
+      .in('reivindicada_de_id', ids);
+    const porOriginal = new Map((reivindicacoes ?? []).map((r: any) => [r.reivindicada_de_id, r]));
+
+    return originais.map((o: any) => ({ ...o, reivindicacao: porOriginal.get(o.id) ?? null }));
+  }
+
+  async aprovarReivindicacao(id: number, restaurantId: number) {
+    const comanda = await this.buscarComanda(id, restaurantId);
+    if (comanda.status !== 'pendente_reivindicacao') {
+      throw new BadRequestException('Essa comanda não está esperando aprovação de reivindicação');
+    }
+
+    if (comanda.mesa_id) {
+      const { data: mesa } = await this.supabase.client.from('mesas').select('status').eq('id', comanda.mesa_id).maybeSingle();
+      if (mesa?.status !== 'livre') {
+        throw new BadRequestException('Mesa já está ocupada por outra comanda — não é possível reabrir aqui');
+      }
+    }
+
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({ status: 'aberta', decisao_reivindicacao: 'aprovada', decisao_reivindicacao_em: new Date().toISOString() })
+      .eq('id', id);
+    if (error) throw error;
+
+    if (comanda.mesa_id) {
+      await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', comanda.mesa_id);
+    }
+    return { ok: true };
+  }
+
+  async recusarReivindicacao(id: number, restaurantId: number) {
+    const comanda = await this.buscarComanda(id, restaurantId);
+    if (comanda.status !== 'pendente_reivindicacao') {
+      throw new BadRequestException('Essa comanda não está esperando aprovação de reivindicação');
+    }
+
+    // Nunca seta excluida_em aqui — essa coluna marca exclusão real pelo estabelecimento
+    // (cancelar()). Se setasse, essa comanda nova (a reivindicação) apareceria de novo
+    // como "deletada" pro garçom, com botão Reivindicar ativo — reabrindo o ciclo.
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({
+        status: 'canceled',
+        decisao_reivindicacao: 'recusada',
+        decisao_reivindicacao_em: new Date().toISOString(),
+      })
+      .eq('id', id);
+    if (error) throw error;
+
     return { ok: true };
   }
 
