@@ -1667,6 +1667,53 @@ export class RestauranteService {
     };
   }
 
+  // Itens cancelados (item cancelado direto no KDS ou pedido inteiro cancelado, que
+  // cascateia pra 'cancelado' em cancelarPedidoAdmin) — aba "Canceladas" de cada ponto de
+  // produção, só do dia, pra equipe ver que o pedido saiu da fila por cancelamento e não
+  // por bug/sumiço.
+  async getKdsSetorCanceladas(restaurantId: number, impressoraId: number) {
+    const inicioDoDia = new Date();
+    inicioDoDia.setHours(0, 0, 0, 0);
+    const { data: itens, error } = await this.supabase.client
+      .from('order_items')
+      .select('id, quantity, observacao, product_id, status, cancelado_em, order_id, products(name), orders(id, restaurant_id, status, mesa_id, cliente_mesa_nome, garcom_id, customer_id, numero_comanda, is_venda_balcao, aberto_por_nome, mesas(numero, nome), garcons(nome))')
+      .eq('impressora_id', impressoraId)
+      .eq('status', 'cancelado')
+      .gte('cancelado_em', inicioDoDia.toISOString())
+      .order('cancelado_em', { ascending: false });
+    if (error) throw error;
+
+    const itensValidos = (itens as any[]).filter((i) => i.orders?.restaurant_id === restaurantId);
+
+    const customerIds = [...new Set(itensValidos.map((i) => i.orders?.customer_id).filter(Boolean))];
+    const { data: customers } = customerIds.length
+      ? await this.supabase.client.from('customers').select('id, name').in('id', customerIds)
+      : { data: [] as any[] };
+    const customerMap = Object.fromEntries((customers ?? []).map((c: any) => [c.id, c.name]));
+
+    return {
+      itens: itensValidos.map((i) => {
+        const ehSalao = !!(i.orders?.mesa_id || i.orders?.garcom_id || i.orders?.cliente_mesa_nome);
+        return {
+          id: i.id,
+          order_id: i.order_id,
+          product_name: i.products?.name,
+          quantity: i.quantity,
+          observacao: i.observacao,
+          status: i.status,
+          cancelado_em: i.cancelado_em,
+          tipo: ehSalao ? 'salao' : 'delivery',
+          mesa: i.orders?.mesas ? `Mesa ${i.orders.mesas.numero}${i.orders.mesas.nome ? ' - ' + i.orders.mesas.nome : ''}` : null,
+          numero_comanda: i.orders?.numero_comanda ?? null,
+          cliente: i.orders?.cliente_mesa_nome ?? (i.orders?.customer_id ? customerMap[i.orders.customer_id] ?? null : null),
+          garcom: i.orders?.garcons?.nome ?? (i.orders?.is_venda_balcao ? 'Balcão' : (i.orders?.aberto_por_nome ?? null)),
+          // Pedido inteiro cancelado (cancelarPedidoAdmin) vs só este item cancelado no KDS.
+          pedido_cancelado: i.orders?.status === 'canceled',
+        };
+      }),
+    };
+  }
+
   // Itens "presos" sem setor: produto sem impressora configurada faz o envio pra cozinha
   // marcar o item como 'enviado' mas com impressora_id null — getKdsSetor acima nunca
   // acha esse item (exige impressora_id concreto), então ele fica invisível em toda tela

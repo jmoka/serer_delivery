@@ -369,6 +369,11 @@ export class RestauranteController {
     return this.service.getKdsSetor(req.restaurantId, impressoraId);
   }
 
+  @Get('kds/canceladas')
+  kdsCanceladas(@Query('impressora_id', ParseIntPipe) impressoraId: number, @Req() req: any) {
+    return this.service.getKdsSetorCanceladas(req.restaurantId, impressoraId);
+  }
+
   // Itens enviados sem impressora configurada no produto — ficam invisíveis nas telas de
   // setor normais (todas exigem impressora_id). Estabelecimento resgata daqui.
   @Get('kds/sem-impressora')

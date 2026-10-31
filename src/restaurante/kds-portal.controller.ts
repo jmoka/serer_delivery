@@ -33,6 +33,14 @@ export class KdsPortalController {
     return this.service.getKdsSetor(req.cozinhaRestaurantId, impressoraId);
   }
 
+  @Get('itens/canceladas')
+  itensCanceladas(@Query('impressora_id', ParseIntPipe) impressoraId: number, @Req() req: any) {
+    if (req.cozinhaImpressoraId && req.cozinhaImpressoraId !== impressoraId) {
+      throw new ForbiddenException('Este token só tem acesso a este setor');
+    }
+    return this.service.getKdsSetorCanceladas(req.cozinhaRestaurantId, impressoraId);
+  }
+
   @Patch('itens/:id/pronto')
   marcarPronto(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.marcarItemPronto(id, req.cozinhaRestaurantId);
