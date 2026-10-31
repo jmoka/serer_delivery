@@ -984,6 +984,15 @@ export class SalaoPdvService {
     if (count) {
       await this.estoque.restaurarItensDoPedido(id);
       await this.salaoService.estornarPagamentosDaComanda(restaurantId, id, `Comanda #${comanda.numero_comanda ?? id} (cancelada)`);
+
+      // Marca os itens também — sem isso o status do item fica congelado em
+      // enviado/preparando/pronto mesmo com a comanda cancelada, e nem a tela da comanda
+      // (salão/garçom) nem a aba "Canceladas" do KDS mostram que foi cancelado.
+      await this.supabase.client
+        .from('order_items')
+        .update({ status: 'cancelado', cancelado_em: new Date().toISOString() })
+        .eq('order_id', id)
+        .in('status', ['enviado', 'preparando', 'pronto']);
     }
 
     return { ok: true };
