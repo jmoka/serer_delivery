@@ -37,6 +37,7 @@ import { TwoFactorModule } from './two-factor/two-factor.module';
 import { FavoritosMenuModule } from './favoritos-menu/favoritos-menu.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { AssistenteModule } from './assistente/assistente.module';
 import { AcademiaModule } from './academia/academia.module';
 import { PaginasLegaisModule } from './paginas-legais/paginas-legais.module';
 import { VisitasModule } from './visitas/visitas.module';
@@ -89,6 +90,7 @@ import { VisitasModule } from './visitas/visitas.module';
     FavoritosMenuModule,
     TelegramModule,
     WhatsappModule,
+    AssistenteModule,
     AcademiaModule,
     PaginasLegaisModule,
     VisitasModule,

@@ -95,6 +95,12 @@ export class CriarPlanoDto {
   @IsBoolean()
   inclui_pagamento_manual?: boolean;
 
+  // Habilita o módulo "Assistente IA" (agente WhatsApp/Telegram próprio da loja) —
+  // ver PlanosService.atribuirAssinatura, espelha em restaurants.modulo_assistente_ia.
+  @IsOptional()
+  @IsBoolean()
+  inclui_assistente_ia?: boolean;
+
   // Plano exclusivo pra quem ainda não é cliente — some da tela de troca de
   // plano de quem já é cadastrado (ver PlanosService.listarPlanosAtivos).
   @IsOptional()

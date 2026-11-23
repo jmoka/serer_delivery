@@ -18,7 +18,7 @@ export class EmpresasService {
   async listar(apenasAtivo?: boolean) {
     let query = this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, limite_servicos, created_at, aparencia')
+      .select('id, name, address, logo_url, comissao_pct, user_id, slug, bloqueado, custom_domain, custom_domain_status, custom_domain_solicitado_em, custom_domain_motivo_recusa, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, modulo_assistente_ia, limite_servicos, created_at, aparencia')
       .order('name');
 
     const { data, error } = await query;
@@ -35,7 +35,7 @@ export class EmpresasService {
     // (GET /empresas/:id/config, ver empresas.controller.ts).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, logo_url, business_hours, comissao_pct, user_id, slug, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, limite_servicos, created_at')
+      .select('id, name, address, logo_url, business_hours, comissao_pct, user_id, slug, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, modulo_assistente_ia, limite_servicos, created_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -76,6 +76,7 @@ export class EmpresasService {
     modulo_favicon_personalizado?: boolean;
     modulo_servicos?: boolean;
     modulo_pagamento_manual?: boolean;
+    modulo_assistente_ia?: boolean;
     limite_servicos?: number | null;
   }) {
     const { data, error } = await this.supabase.client
@@ -93,6 +94,7 @@ export class EmpresasService {
         modulo_favicon_personalizado: body.modulo_favicon_personalizado ?? false,
         modulo_servicos: body.modulo_servicos ?? false,
         modulo_pagamento_manual: body.modulo_pagamento_manual ?? false,
+        modulo_assistente_ia: body.modulo_assistente_ia ?? false,
         limite_servicos: body.limite_servicos ?? null,
       })
       .select()
@@ -116,6 +118,7 @@ export class EmpresasService {
     modulo_favicon_personalizado: boolean;
     modulo_servicos: boolean;
     modulo_pagamento_manual: boolean;
+    modulo_assistente_ia: boolean;
     limite_servicos: number | null;
   }>) {
     // Delega ao serviço central pra manter user_profiles.role sincronizado
@@ -146,6 +149,7 @@ export class EmpresasService {
       // restaurante-config de novo (toggle já nem aparece mais lá).
       if (!body.modulo_pagamento_manual) payload.pagamento_manual = false;
     }
+    if (body.modulo_assistente_ia !== undefined) payload.modulo_assistente_ia = body.modulo_assistente_ia;
     if (body.limite_servicos !== undefined) payload.limite_servicos = body.limite_servicos;
 
     const { data, error } = await this.supabase.client

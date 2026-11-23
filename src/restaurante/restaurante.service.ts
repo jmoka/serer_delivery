@@ -69,7 +69,7 @@ export class RestauranteService {
     // (GET /restaurante/config, ver getConfig() nesta mesma classe).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, auto_atendimento_habilitado, permite_frete_embutido, whatsapp, instagram_url, facebook_url, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, modulo_assistente_ia, auto_atendimento_habilitado, permite_frete_embutido, whatsapp, instagram_url, facebook_url, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 

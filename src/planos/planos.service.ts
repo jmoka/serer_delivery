@@ -161,6 +161,7 @@ export class PlanosService {
         cobra_comissao: body.cobra_comissao ?? false,
         inclui_favicon_personalizado: body.inclui_favicon_personalizado ?? false,
         inclui_pagamento_manual: body.inclui_pagamento_manual ?? false,
+        inclui_assistente_ia: body.inclui_assistente_ia ?? false,
         somente_novos_cadastros: body.somente_novos_cadastros ?? false,
       })
       .select()
@@ -192,6 +193,7 @@ export class PlanosService {
     if (body.cobra_comissao !== undefined) campos.cobra_comissao = body.cobra_comissao;
     if (body.inclui_favicon_personalizado !== undefined) campos.inclui_favicon_personalizado = body.inclui_favicon_personalizado;
     if (body.inclui_pagamento_manual !== undefined) campos.inclui_pagamento_manual = body.inclui_pagamento_manual;
+    if (body.inclui_assistente_ia !== undefined) campos.inclui_assistente_ia = body.inclui_assistente_ia;
     if (body.somente_novos_cadastros !== undefined) campos.somente_novos_cadastros = body.somente_novos_cadastros;
 
     const { data, error } = await this.supabase.client
@@ -333,6 +335,7 @@ export class PlanosService {
           modulo_favicon_personalizado: plano.inclui_favicon_personalizado,
           modulo_servicos: plano.inclui_servicos,
           modulo_pagamento_manual: plano.inclui_pagamento_manual,
+          modulo_assistente_ia: plano.inclui_assistente_ia,
           // Troca pra um plano sem o módulo não pode deixar o checkout preso
           // em "sem PagBank" — mesma regra de EmpresasService.atualizar.
           ...(!plano.inclui_pagamento_manual ? { pagamento_manual: false } : {}),

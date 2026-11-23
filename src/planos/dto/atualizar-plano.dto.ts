@@ -88,6 +88,10 @@ export class AtualizarPlanoDto {
   @IsBoolean()
   inclui_pagamento_manual?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  inclui_assistente_ia?: boolean;
+
   // Plano exclusivo pra quem ainda não é cliente — some da tela de troca de
   // plano de quem já é cadastrado (ver PlanosService.listarPlanosAtivos).
   @IsOptional()
