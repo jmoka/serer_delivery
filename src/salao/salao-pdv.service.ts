@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SalaoService } from './salao.service';
 import type { ItemComandaBody } from './salao.service';
@@ -12,12 +14,35 @@ import { precoVenda } from '../common/preco.util';
 // essas rotas (ver salao.controller.ts, que só cobre abrir/adicionar/enviar/fechar).
 @Injectable()
 export class SalaoPdvService {
+  // Client isolado (sem persistir sessão), mesmo padrão do TwoFactorService — usado
+  // só pra reautenticar com senha antes de deletar/restaurar comanda de verdade.
+  private readonly authClient: SupabaseClient;
+
   constructor(
     private supabase: SupabaseService,
     private salaoService: SalaoService,
     private estoque: EstoqueService,
     private combos: CombosService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.authClient = createClient(
+      config.getOrThrow('SUPABASE_URL'),
+      config.getOrThrow('SUPABASE_SERVICE_ROLE_KEY'),
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    );
+  }
+
+  // Deletar/restaurar comanda de verdade (botão explícito, não os cancelamentos
+  // automáticos de comanda vazia) exige confirmar a senha de login de novo —
+  // mesmo padrão do TwoFactorService.desativar.
+  private async validarSenhaEstabelecimento(userId: string, senha: string) {
+    if (!senha) throw new UnauthorizedException('Senha obrigatória.');
+    const { data: userData } = await this.supabase.client.auth.admin.getUserById(userId);
+    const email = userData?.user?.email;
+    if (!email) throw new ForbiddenException();
+    const { error } = await this.authClient.auth.signInWithPassword({ email, password: senha });
+    if (error) throw new UnauthorizedException('Senha incorreta.');
+  }
 
   async mesas(restaurantId: number) {
     const { data: mesas, error } = await this.supabase.client
@@ -956,10 +981,38 @@ export class SalaoPdvService {
     return { ok: true, comanda_nova_id: novaComanda.id };
   }
 
+  // Cancelamento automático/implícito (fechar comanda vazia pelo X, rede de
+  // segurança da venda balcão ao sair da tela) — sem nada a perder, não pede senha.
   async cancelar(id: number, restaurantId: number) {
+    return this.executarCancelamento(id, restaurantId);
+  }
+
+  // Botão explícito "Cancelar comanda"/"Cancelar venda" — exige confirmar a senha
+  // de novo antes de deletar de verdade.
+  async cancelarComSenha(id: number, restaurantId: number, userId: string, senha: string) {
+    await this.validarSenhaEstabelecimento(userId, senha);
+    return this.executarCancelamento(id, restaurantId);
+  }
+
+  private async executarCancelamento(id: number, restaurantId: number) {
     const comanda = await this.buscarComanda(id, restaurantId);
     if (!['aberta', 'fechada_garcom'].includes(comanda.status)) {
       throw new BadRequestException('Só é possível cancelar comandas abertas ou aguardando pagamento');
+    }
+
+    // Item que já entrou em preparo (ou passou por essa fase) não pode desaparecer sem
+    // a produção saber — senão a cozinha/bar segue fazendo ou já fez algo que não existe
+    // mais em lugar nenhum. Só libera cancelar a comanda depois que a produção voltar o
+    // item pra "Aguardando preparo" (voltarStatusItem em restaurante.service.ts).
+    const { count: countEmPreparo } = await this.supabase.client
+      .from('order_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('order_id', id)
+      .in('status', ['preparando', 'pronto']);
+    if (countEmPreparo) {
+      throw new BadRequestException(
+        'Essa comanda tem item que já entrou em preparo (ou já foi entregue) — não pode ser cancelada assim. Peça pra produção voltar o item até "Aguardando preparo" e só depois cancele a comanda.',
+      );
     }
 
     if (comanda.mesa_id) {
@@ -996,6 +1049,96 @@ export class SalaoPdvService {
     }
 
     return { ok: true };
+  }
+
+  // Restaura uma comanda deletada pelo estabelecimento: cria uma comanda NOVA
+  // clonando dados/itens/pagamentos (nunca reabre a linha original — ela fica intocada
+  // na aba "Comandas deletadas" como histórico). Itens voltam como 'pendente' (igual
+  // reivindicar() do garçom) já que o estoque da original foi revertido no
+  // cancelamento — o operador reenvia pra cozinha. Comanda deletada nunca chegou a
+  // fechar/pagar de verdade (cancelar só deixa abrir/aguardando pagamento), então
+  // restaurar é só carregar os dados de volta — não exige caixa aberto nem lança nada
+  // no caixa (diferente de abrir/receber/pagar comanda nova). Exige senha, tentativa
+  // única por original.
+  async restaurar(id: number, restaurantId: number, userId: string, senha: string) {
+    await this.validarSenhaEstabelecimento(userId, senha);
+
+    const original = await this.buscarComanda(id, restaurantId);
+    if (!original.excluida_em) throw new BadRequestException('Essa comanda não está deletada.');
+
+    const { data: jaRestaurada } = await this.supabase.client
+      .from('orders')
+      .select('id')
+      .eq('restaurada_de_id', id)
+      .maybeSingle();
+    if (jaRestaurada) throw new BadRequestException('Essa comanda já foi restaurada.');
+
+    const { data: caixaAberto } = await this.supabase.client
+      .from('caixas').select('id').eq('restaurant_id', restaurantId).eq('status', 'aberto').maybeSingle();
+    const numeroComanda = await this.proximoNumeroComanda(restaurantId);
+
+    let mesaId: number | null = original.mesa_id ?? null;
+    if (mesaId) {
+      const { data: mesa } = await this.supabase.client.from('mesas').select('id, status').eq('id', mesaId).maybeSingle();
+      if (mesa?.status === 'livre') {
+        await this.supabase.client.from('mesas').update({ status: 'ocupada' }).eq('id', mesaId);
+      } else if (!mesa || mesa.status !== 'ocupada') {
+        mesaId = null;
+      }
+    }
+
+    const { data: nova, error } = await this.supabase.client
+      .from('orders')
+      .insert({
+        restaurant_id: restaurantId,
+        canal: 'presencial',
+        status: 'aberta',
+        mesa_id: mesaId,
+        garcom_id: original.garcom_id,
+        customer_id: original.customer_id,
+        cliente_mesa_nome: original.cliente_mesa_nome,
+        cliente_mesa_telefone: original.cliente_mesa_telefone,
+        total: 0,
+        caixa_id: caixaAberto?.id ?? null,
+        numero_comanda: numeroComanda,
+        restaurada_de_id: id,
+      })
+      .select('id')
+      .single();
+    if (error) throw error;
+
+    const { data: itensOriginais, error: errBuscarItens } = await this.supabase.client
+      .from('order_items')
+      .select('product_id, quantity, unit_price, observacao, combo_nome, combo_quantidade, adicionais')
+      .eq('order_id', id);
+    if (errBuscarItens) throw errBuscarItens;
+
+    if (itensOriginais?.length) {
+      const novosItens = itensOriginais.map((i: any) => ({ ...i, order_id: nova.id, status: 'pendente' }));
+      const { error: errItens } = await this.supabase.client.from('order_items').insert(novosItens);
+      if (errItens) throw errItens;
+
+      const totalNovo = itensOriginais.reduce((acc: number, i: any) => acc + i.quantity * i.unit_price, 0);
+      await this.supabase.client.from('orders').update({ total: parseFloat(totalNovo.toFixed(2)) }).eq('id', nova.id);
+    }
+
+    // Pagamentos já feitos na comanda original voltam junto — senão o cliente que já
+    // pagou parte (ou tudo) ficaria devendo de novo na comanda nova. Comanda deletada
+    // nunca chegou a fechar (cancelar só deixa abrir/aguardando pagamento), então não
+    // houve lançamento real no caixa a desfazer — só copia o registro do pagamento.
+    const { data: pagamentosOriginais, error: errBuscarPagamentos } = await this.supabase.client
+      .from('comanda_pagamentos')
+      .select('valor, forma_pagamento, origem, valor_recebido, troco, taxa_cartao_valor, troco_via_pix, troco_e_gorjeta, taxa_cartao_prejuizo')
+      .eq('order_id', id);
+    if (errBuscarPagamentos) throw errBuscarPagamentos;
+
+    if (pagamentosOriginais?.length) {
+      const novosPagamentos = pagamentosOriginais.map((p: any) => ({ ...p, order_id: nova.id }));
+      const { error: errPagamentos } = await this.supabase.client.from('comanda_pagamentos').insert(novosPagamentos);
+      if (errPagamentos) throw errPagamentos;
+    }
+
+    return this.comandaDetalhe(nova.id, restaurantId);
   }
 
   // Caixa pede a conferência antes de fechar — mesma lógica de impressão do QR do cliente
@@ -1106,7 +1249,17 @@ export class SalaoPdvService {
       .in('reivindicada_de_id', ids);
     const porOriginal = new Map((reivindicacoes ?? []).map((r: any) => [r.reivindicada_de_id, r]));
 
-    return originais.map((o: any) => ({ ...o, reivindicacao: porOriginal.get(o.id) ?? null }));
+    const { data: restauracoes } = await this.supabase.client
+      .from('orders')
+      .select('id, restaurada_de_id, numero_comanda')
+      .in('restaurada_de_id', ids);
+    const restauradaPorOriginal = new Map((restauracoes ?? []).map((r: any) => [r.restaurada_de_id, r]));
+
+    return originais.map((o: any) => ({
+      ...o,
+      reivindicacao: porOriginal.get(o.id) ?? null,
+      restauracao: restauradaPorOriginal.get(o.id) ?? null,
+    }));
   }
 
   async aprovarReivindicacao(id: number, restaurantId: number) {

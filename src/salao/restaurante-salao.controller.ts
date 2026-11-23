@@ -228,6 +228,18 @@ export class RestauranteSalaoController {
     return this.service.cancelar(id, req.restaurantId);
   }
 
+  // Botão explícito "Cancelar comanda"/"Cancelar venda" — exige senha (cancelamento
+  // automático de comanda vazia continua pela rota acima, sem senha).
+  @Post('comandas/:id/cancelar-com-senha')
+  cancelarComSenha(@Param('id', ParseIntPipe) id: number, @Body() body: { senha: string }, @Req() req: any) {
+    return this.service.cancelarComSenha(id, req.restaurantId, req.userId, body.senha);
+  }
+
+  @Post('comandas/:id/restaurar')
+  restaurar(@Param('id', ParseIntPipe) id: number, @Body() body: { senha: string }, @Req() req: any) {
+    return this.service.restaurar(id, req.restaurantId, req.userId, body.senha);
+  }
+
   @Post('comandas/:id/reabrir')
   reabrir(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.service.reabrir(id, req.restaurantId);
