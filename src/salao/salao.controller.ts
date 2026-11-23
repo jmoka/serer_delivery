@@ -116,7 +116,7 @@ export class SalaoController {
 
   @Post('comandas/:id/itens')
   adicionarItens(@Param('id', ParseIntPipe) id: number, @Body() body: { itens: ItemComandaBody[] }, @Req() req: any) {
-    return this.service.adicionarItens(id, req.garcomId, body.itens);
+    return this.service.adicionarItens(id, req.garcomId, body.itens, !!req.garcomPermissoes?.pular_cozinha);
   }
 
   @Patch('comandas/:id/itens/:itemId')

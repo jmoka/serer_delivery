@@ -885,7 +885,11 @@ export class SalaoService {
     return { ...comanda, itens, pagamentos: pagamentos ?? [], saldo, gorjeta_sugestao, taxa_cartao_percentual };
   }
 
-  async adicionarItens(comandaId: number, garcomId: number, itens: ItemComandaBody[]) {
+  // `podePularCozinha` default false — envio pra cozinha é obrigatório pro garçom,
+  // só o salão (PDV do estabelecimento) insere item sem mandar pra produção. Dono libera
+  // por garçom via permissão `pular_cozinha` (ver garcons.service.ts), mesmo padrão de
+  // `pagamento_parcial`.
+  async adicionarItens(comandaId: number, garcomId: number, itens: ItemComandaBody[], podePularCozinha = false) {
     if (!itens?.length) throw new BadRequestException('Informe ao menos 1 item');
 
     const comanda = await this.garantirComandaDoGarcom(comandaId, garcomId);
@@ -914,7 +918,7 @@ export class SalaoService {
       await Promise.all(
         itensCombo.map(async (i) => {
           const linhas = await this.combosService.expandir(i.combo_id as number, i.quantity, comanda.restaurant_id);
-          return linhas.map((l) => ({ ...l, observacao: i.observacao, nao_enviar_cozinha: i.nao_enviar_cozinha }));
+          return linhas.map((l) => ({ ...l, observacao: i.observacao, nao_enviar_cozinha: podePularCozinha && i.nao_enviar_cozinha }));
         }),
       )
     ).flat();
@@ -924,7 +928,7 @@ export class SalaoService {
       quantity: i.quantity,
       unit_price: precoVenda(prodMap[i.product_id as number]),
       observacao: i.observacao,
-      nao_enviar_cozinha: i.nao_enviar_cozinha,
+      nao_enviar_cozinha: podePularCozinha && i.nao_enviar_cozinha,
     }));
 
     const linhasFinais = [...linhasDiretas, ...linhasCombo];

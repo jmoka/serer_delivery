@@ -8,7 +8,7 @@ export interface CriarGarcomBody {
   nome: string;
   telefone?: string;
   senha: string;
-  permissoes?: { pagamento_parcial?: boolean };
+  permissoes?: { pagamento_parcial?: boolean; pular_cozinha?: boolean };
 }
 
 export interface AtualizarGarcomBody {
@@ -16,7 +16,7 @@ export interface AtualizarGarcomBody {
   telefone?: string;
   ativo?: boolean;
   senha?: string;
-  permissoes?: { pagamento_parcial?: boolean };
+  permissoes?: { pagamento_parcial?: boolean; pular_cozinha?: boolean };
 }
 
 export interface ComissaoConfigBody {
@@ -64,6 +64,9 @@ export class GarconsService {
           // Default true — pagamento parcial já era permitido sem restrição antes dessa
           // permissão existir, então continua liberado por padrão.
           pagamento_parcial: body.permissoes?.pagamento_parcial !== false,
+          // Default false — envio pra cozinha é obrigatório pro garçom, dono libera
+          // por garçom se quiser (ver adicionarItens em salao.service.ts).
+          pular_cozinha: body.permissoes?.pular_cozinha === true,
         },
       })
       .select('id, nome, telefone, login_key, ativo, permissoes, created_at')
@@ -109,6 +112,7 @@ export class GarconsService {
     if (body.permissoes !== undefined) {
       update.permissoes = {
         pagamento_parcial: body.permissoes.pagamento_parcial !== false,
+        pular_cozinha: body.permissoes.pular_cozinha === true,
       };
     }
     if (body.senha) {
