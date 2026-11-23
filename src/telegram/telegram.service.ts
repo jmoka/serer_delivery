@@ -2,11 +2,23 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
+import { EncryptionService } from '../common/encryption.service';
 import { TelegramClient } from './telegram.client';
 
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
 const formatarMoeda = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v ?? 0);
+
+// Fallback só usado se MARKETPLACE_BASE_URL não estiver setada no ambiente — mesmo
+// padrão de catalogo.controller.ts.
+const MARKETPLACE_BASE_URL = process.env.MARKETPLACE_BASE_URL ?? 'https://pediuvai.teucurso.top';
+
+const PAGAMENTO_LABEL: Record<string, string> = {
+  pix: 'PIX',
+  credit_card: 'Cartão crédito',
+  debit_card: 'Cartão débito',
+  cash: 'Dinheiro (na entrega)',
+};
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
@@ -17,6 +29,7 @@ export class TelegramService implements OnModuleInit {
   constructor(
     private supabase: SupabaseService,
     private config: ConfigService,
+    private encryption: EncryptionService,
   ) {
     const token = config.get<string>('TELEGRAM_TOKEN');
     this.client = token ? new TelegramClient(token) : null;
@@ -191,14 +204,51 @@ export class TelegramService implements OnModuleInit {
     return partes.join('\n');
   }
 
+  // Mensagem final do ciclo do pedido — agradecimento + link pra repetir/compartilhar
+  // a loja + redes sociais do estabelecimento (se cadastradas em Config > Endereço).
   async avisarPedidoEntregue(orderId: number, customerId: number | null | undefined) {
     if (!customerId) return;
-    const { data } = await this.supabase.client
+    const { data: cliente } = await this.supabase.client
       .from('customers')
       .select('telegram_chat_id')
       .eq('id', customerId)
       .maybeSingle();
-    await this.enviarMensagem(data?.telegram_chat_id, `🎉 Pedido #${orderId} entregue! Bom apetite.`);
+    if (!cliente?.telegram_chat_id) return;
+
+    const { data: pedido } = await this.supabase.client.from('orders').select('restaurant_id').eq('id', orderId).maybeSingle();
+    const { data: restaurante } = pedido?.restaurant_id
+      ? await this.supabase.client
+          .from('restaurants')
+          .select('slug, custom_domain, instagram_url, facebook_url')
+          .eq('id', pedido.restaurant_id)
+          .maybeSingle()
+      : { data: null };
+
+    await this.enviarMensagem(cliente.telegram_chat_id, this.montarMensagemEntregue(orderId, restaurante));
+  }
+
+  private montarMensagemEntregue(
+    orderId: number,
+    restaurante: { slug?: string | null; custom_domain?: string | null; instagram_url?: string | null; facebook_url?: string | null } | null,
+  ): string {
+    const link = restaurante?.custom_domain
+      ? `https://${restaurante.custom_domain}`
+      : restaurante?.slug
+      ? `${MARKETPLACE_BASE_URL}/r/${restaurante.slug}`
+      : null;
+
+    const partes = [`🎉 Pedido #${orderId} entregue! Bom apetite.`, '', 'Obrigado por pedir com a gente! 🙏'];
+    if (link) {
+      partes.push('', `🔁 Repetir esse pedido: ${link}`, `📲 Compartilhe com quem também vai gostar: ${link}`);
+    }
+    const redes = [
+      restaurante?.instagram_url ? `Instagram: ${restaurante.instagram_url}` : null,
+      restaurante?.facebook_url ? `Facebook: ${restaurante.facebook_url}` : null,
+    ].filter((r): r is string => !!r);
+    if (redes.length) {
+      partes.push('', '⭐ Siga nossas redes sociais:', ...redes);
+    }
+    return partes.join('\n');
   }
 
   async avisarPedidoSaiuEntrega(orderId: number, customerId: number | null | undefined) {
@@ -234,12 +284,58 @@ export class TelegramService implements OnModuleInit {
 
   // Avisa o estabelecimento assim que o pedido delivery é criado (status 'pending',
   // antes de qualquer confirmação) — é o alerta que faz o dono abrir o painel, não
-  // dá pra esperar o pedido ser confirmado pra avisar.
+  // dá pra esperar o pedido ser confirmado pra avisar. Mensagem já vem com itens,
+  // forma de pagamento e endereço pra não precisar abrir o painel só pra conferir.
   async avisarPedidoNovo(orderId: number, restaurantId: number) {
-    const [{ data: restaurante }, { data: pedido }] = await Promise.all([
+    const [{ data: restaurante }, { data: pedido }, { data: itens }] = await Promise.all([
       this.supabase.client.from('restaurants').select('telegram_chat_id').eq('id', restaurantId).maybeSingle(),
-      this.supabase.client.from('orders').select('total').eq('id', orderId).maybeSingle(),
+      this.supabase.client
+        .from('orders')
+        .select('total, payment_method, retirada_balcao, customer_id')
+        .eq('id', orderId)
+        .maybeSingle(),
+      this.supabase.client
+        .from('order_items')
+        .select('quantity, unit_price, combo_nome, combo_quantidade, products(name)')
+        .eq('order_id', orderId),
     ]);
-    await this.enviarMensagem(restaurante?.telegram_chat_id, `🔔 Novo pedido #${orderId} recebido! Total: ${formatarMoeda(pedido?.total ?? 0)}`);
+    if (!restaurante?.telegram_chat_id) return;
+
+    let endereco: string | null = null;
+    if (pedido && !pedido.retirada_balcao && pedido.customer_id) {
+      const { data: cliente } = await this.supabase.client
+        .from('customers')
+        .select('address_json')
+        .eq('id', pedido.customer_id)
+        .maybeSingle();
+      const addr = this.encryption.decryptJson(cliente?.address_json ?? null) ?? {};
+      const linhaRua = [addr.logradouro, addr.numero].filter(Boolean).join(', ');
+      const linhaCompl = [addr.complemento, addr.bairro].filter(Boolean).join(' — ');
+      const linhaCidade = [addr.cidade, addr.estado, addr.cep].filter(Boolean).join(', ');
+      endereco = [linhaRua, linhaCompl, linhaCidade].filter(Boolean).join(', ') || null;
+    }
+
+    await this.enviarMensagem(restaurante.telegram_chat_id, this.montarResumoPedidoNovo(orderId, itens ?? [], pedido, endereco));
+  }
+
+  private montarResumoPedidoNovo(
+    orderId: number,
+    itens: any[],
+    pedido: { total: number; payment_method: string; retirada_balcao: boolean } | null,
+    endereco: string | null,
+  ): string {
+    const linhas = itens.map((item) => {
+      const nome = item.combo_nome ?? item.products?.name ?? 'Item';
+      const qtd = item.combo_quantidade ?? item.quantity ?? 1;
+      const valorLinha = Number(item.unit_price ?? 0) * Number(item.quantity ?? 1);
+      return `${qtd}x ${nome} — ${formatarMoeda(valorLinha)}`;
+    });
+
+    const partes = [`🔔 Novo pedido #${orderId} recebido!`];
+    if (linhas.length) partes.push('', '🧾 Itens:', ...linhas);
+    if (pedido?.total != null) partes.push('', `💰 Total: ${formatarMoeda(pedido.total)}`);
+    if (pedido?.payment_method) partes.push(`💳 Pagamento: ${PAGAMENTO_LABEL[pedido.payment_method] ?? pedido.payment_method}`);
+    partes.push(pedido?.retirada_balcao ? '🏠 Retirada no balcão' : `📍 Entrega: ${endereco ?? 'endereço não informado'}`);
+    return partes.join('\n');
   }
 }

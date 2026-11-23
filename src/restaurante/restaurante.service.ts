@@ -69,7 +69,7 @@ export class RestauranteService {
     // (GET /restaurante/config, ver getConfig() nesta mesma classe).
     const { data, error } = await this.supabase.client
       .from('restaurants')
-      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, auto_atendimento_habilitado, permite_frete_embutido, whatsapp, created_at')
+      .select('id, name, address, state, city, neighborhood, cep, lat, lng, lat_ajustado_manualmente, logo_url, slug, custom_domain, custom_domain_status, custom_domain_motivo_recusa, business_hours, comissao_pct, type_id, modulo_delivery, modulo_salao, modulo_gdoor, modulo_favicon_personalizado, modulo_servicos, modulo_pagamento_manual, auto_atendimento_habilitado, permite_frete_embutido, whatsapp, instagram_url, facebook_url, created_at')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -1128,7 +1128,7 @@ export class RestauranteService {
 
   async updateEmpresa(
     restaurantId: number,
-    body: { name?: string; address?: string; state?: string; city?: string; neighborhood?: string; cep?: string; logo_url?: string; slug?: string },
+    body: { name?: string; address?: string; state?: string; city?: string; neighborhood?: string; cep?: string; logo_url?: string; slug?: string; instagram_url?: string; facebook_url?: string },
   ) {
     const campos: Record<string, any> = { updated_at: new Date().toISOString() };
     if (body.name !== undefined) campos.name = body.name;
@@ -1138,6 +1138,8 @@ export class RestauranteService {
     if (body.neighborhood !== undefined) campos.neighborhood = body.neighborhood;
     if (body.cep !== undefined) campos.cep = body.cep ? body.cep.replace(/\D/g, '') : null;
     if (body.logo_url !== undefined) campos.logo_url = body.logo_url;
+    if (body.instagram_url !== undefined) campos.instagram_url = body.instagram_url.trim() || null;
+    if (body.facebook_url !== undefined) campos.facebook_url = body.facebook_url.trim() || null;
     if (body.slug !== undefined) {
       const slug = body.slug.trim().toLowerCase();
       if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug) || slug.length < 3 || slug.length > 60) {
@@ -1150,7 +1152,7 @@ export class RestauranteService {
       .from('restaurants')
       .update(campos)
       .eq('id', restaurantId)
-      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, lat_ajustado_manualmente')
+      .select('id, name, address, state, city, neighborhood, cep, logo_url, slug, lat_ajustado_manualmente, instagram_url, facebook_url')
       .maybeSingle();
 
     if (error) {
