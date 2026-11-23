@@ -9,6 +9,7 @@ import { EMAIL_RE, PHONE_RE, VEICULO_TIPOS, resolverSituacaoMei } from './motobo
 import { CnpjService } from './cnpj.service';
 import { uploadDocumentoMotoboy } from './upload-documento-motoboy.util';
 import { TelegramService } from '../telegram/telegram.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { EncryptionService } from '../common/encryption.service';
 
 export interface MotoboyPeloRestauranteBody {
@@ -52,6 +53,7 @@ export class MotoboyService {
     private salaoService: SalaoService,
     private cnpj: CnpjService,
     private telegram: TelegramService,
+    private whatsapp: WhatsappService,
     private encryption: EncryptionService,
   ) {}
 
@@ -61,6 +63,14 @@ export class MotoboyService {
 
   statusTelegram(motoboyId: number) {
     return this.telegram.statusMotoboy(motoboyId);
+  }
+
+  gerarLinkWhatsapp(motoboyId: number) {
+    return this.whatsapp.gerarLinkMotoboy(motoboyId);
+  }
+
+  statusWhatsapp(motoboyId: number) {
+    return this.whatsapp.statusMotoboy(motoboyId);
   }
 
   // Antes de ver/solicitar vaga em qualquer estabelecimento, a plataforma
@@ -650,6 +660,7 @@ export class MotoboyService {
     if (error) throw error;
 
     await this.telegram.avisarPedidoSaiuEntrega(pedidoId, data?.customer_id);
+    await this.whatsapp.avisarPedidoSaiuEntrega(pedidoId, data?.customer_id);
 
     return { ok: true, status: 'out_for_delivery' };
   }
@@ -852,6 +863,7 @@ export class MotoboyService {
     if (error) throw error;
 
     await this.telegram.avisarPedidoEntregue(pedidoId, pedido.customer_id);
+    await this.whatsapp.avisarPedidoEntregue(pedidoId, pedido.customer_id);
 
     // Registrar entrada(s) no caixa aberto
     if (entregaPagamento && pedido.restaurant_id) {
@@ -942,6 +954,7 @@ export class MotoboyService {
     if (error) throw error;
 
     await this.telegram.avisarPedidoEntregue(pedidoId, pedido.customer_id);
+    await this.whatsapp.avisarPedidoEntregue(pedidoId, pedido.customer_id);
 
     if (entregaPagamento) {
       const { data: caixa } = await this.supabase.client
@@ -1454,6 +1467,7 @@ export class MotoboyService {
     if (error) throw error;
 
     await this.telegram.avisarPedidoSaiuEntrega(pedidoId, pedido.customer_id);
+    await this.whatsapp.avisarPedidoSaiuEntrega(pedidoId, pedido.customer_id);
 
     const trocoValor = pedido.payment_method === 'cash' && pedido.troco_para > pedido.total
       ? Number(pedido.troco_para) - Number(pedido.total)

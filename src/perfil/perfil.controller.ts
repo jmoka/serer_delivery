@@ -46,4 +46,14 @@ export class PerfilController {
   statusTelegram(@Req() req: any) {
     return this.service.statusTelegramCliente(req.userId);
   }
+
+  @Post('whatsapp/link')
+  gerarLinkWhatsapp(@Req() req: any) {
+    return this.service.gerarLinkWhatsappCliente(req.userId);
+  }
+
+  @Get('whatsapp/status')
+  statusWhatsapp(@Req() req: any) {
+    return this.service.statusWhatsappCliente(req.userId);
+  }
 }

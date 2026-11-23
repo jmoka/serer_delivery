@@ -17,9 +17,10 @@ import { PlanosModule } from '../planos/planos.module';
 import { UsuariosModule } from '../usuarios/usuarios.module';
 import { ServicosModule } from '../servicos/servicos.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, CategoriasModule, ProdutosModule, PedidosModule, MotoboyModule, SalaoModule, PlanosModule, UsuariosModule, ServicosModule, TelegramModule],
+  imports: [AuthModule, SupabaseModule, CategoriasModule, ProdutosModule, PedidosModule, MotoboyModule, SalaoModule, PlanosModule, UsuariosModule, ServicosModule, TelegramModule, WhatsappModule],
   controllers: [RestauranteController, OnboardingController, CatalogoController, CozinhaPortalController, KdsPortalController],
   providers: [RestauranteService, CozinhaGuard],
 })

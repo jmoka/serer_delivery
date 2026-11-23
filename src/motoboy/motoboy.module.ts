@@ -13,9 +13,10 @@ import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { SalaoModule } from '../salao/salao.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, SalaoModule, TelegramModule],
+  imports: [AuthModule, SupabaseModule, SalaoModule, TelegramModule, WhatsappModule],
   controllers: [
     RestauranteMotoboysController,
     MotoboyPortalController,

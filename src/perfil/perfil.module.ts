@@ -7,9 +7,10 @@ import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { MotoboyModule } from '../motoboy/motoboy.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, MotoboyModule, TelegramModule],
+  imports: [AuthModule, SupabaseModule, MotoboyModule, TelegramModule, WhatsappModule],
   controllers: [PerfilController, EnderecosController],
   providers: [PerfilService, EnderecosService],
   exports: [PerfilService],

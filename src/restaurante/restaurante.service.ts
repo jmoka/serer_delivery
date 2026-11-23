@@ -14,6 +14,7 @@ import { aplicarEspacoCorte, aplicarEspacoInicio } from '../salao/espaco-corte.u
 import { RedisService } from '../redis/redis.service';
 import { GarcomTurnoService } from '../salao/garcom-turno.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { EncryptionService } from '../common/encryption.service';
 import { R2Service } from '../r2/r2.service';
 
@@ -34,6 +35,7 @@ export class RestauranteService {
     private redis: RedisService,
     private garcomTurnoService: GarcomTurnoService,
     private telegram: TelegramService,
+    private whatsapp: WhatsappService,
     private encryption: EncryptionService,
     private r2: R2Service,
   ) {}
@@ -1813,6 +1815,7 @@ export class RestauranteService {
       if (todosProntos) {
         await this.supabase.client.from('orders').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', item.order_id);
         await this.telegram.avisarPedidoPronto(item.order_id);
+        await this.whatsapp.avisarPedidoPronto(item.order_id);
       }
     }
 

@@ -32,6 +32,16 @@ export class MotoboyPortalController {
     return this.service.statusTelegram(req.motoboyId);
   }
 
+  @Post('whatsapp/link')
+  gerarLinkWhatsapp(@Req() req: any) {
+    return this.service.gerarLinkWhatsapp(req.motoboyId);
+  }
+
+  @Get('whatsapp/status')
+  statusWhatsapp(@Req() req: any) {
+    return this.service.statusWhatsapp(req.motoboyId);
+  }
+
   @Get('ganhos')
   ganhos(@Req() req: any) {
     return this.service.ganhosResumo(req.motoboyId);

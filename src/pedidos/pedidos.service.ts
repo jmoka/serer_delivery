@@ -9,6 +9,7 @@ import { haversineKm } from '../common/geo.util';
 import { precoVenda } from '../common/preco.util';
 import { aplicarEspacoCorte, aplicarEspacoInicio } from '../salao/espaco-corte.util';
 import { TelegramService } from '../telegram/telegram.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { EncryptionService } from '../common/encryption.service';
 
 const STATUS_VALIDOS = ['pending', 'confirmed', 'preparing', 'ready', 'motoboy_collecting', 'out_for_delivery', 'delivered', 'canceled'] as const;
@@ -24,6 +25,7 @@ export class PedidosService {
     private estoque: EstoqueService,
     private combos: CombosService,
     private telegram: TelegramService,
+    private whatsapp: WhatsappService,
     private encryption: EncryptionService,
   ) {}
 
@@ -721,6 +723,7 @@ export class PedidosService {
 
     if (status === 'confirmed' && statusAnterior !== 'confirmed') {
       await this.telegram.avisarPedidoConfirmado(id, data.customer_id);
+      await this.whatsapp.avisarPedidoConfirmado(id, data.customer_id);
     }
 
     if (status === 'canceled' && statusAnterior !== 'canceled') {
@@ -745,6 +748,7 @@ export class PedidosService {
 
     if (status === 'delivered' && statusAnterior !== 'delivered') {
       await this.telegram.avisarPedidoEntregue(id, data.customer_id);
+      await this.whatsapp.avisarPedidoEntregue(id, data.customer_id);
     }
 
     // GDOOR não é mais disparado automaticamente aqui — o dono pediu envio manual

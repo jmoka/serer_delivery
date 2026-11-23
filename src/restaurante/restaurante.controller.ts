@@ -7,6 +7,7 @@ import { RestauranteService } from './restaurante.service';
 import { RestaurantOwnerGuard } from '../auth/restaurant-owner.guard';
 import { SalaoService } from '../salao/salao.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 @Controller('restaurante')
 @UseGuards(RestaurantOwnerGuard)
@@ -15,6 +16,7 @@ export class RestauranteController {
     private service: RestauranteService,
     private salaoService: SalaoService,
     private telegram: TelegramService,
+    private whatsapp: WhatsappService,
   ) {}
 
   // Notificações via Telegram do próprio estabelecimento (pedido novo etc.) —
@@ -27,6 +29,16 @@ export class RestauranteController {
   @Get('minha-empresa/telegram/status')
   statusTelegram(@Req() req: any) {
     return this.telegram.statusEstabelecimento(req.restaurantId);
+  }
+
+  @Post('minha-empresa/whatsapp/link')
+  gerarLinkWhatsapp(@Req() req: any) {
+    return this.whatsapp.gerarLinkEstabelecimento(req.restaurantId);
+  }
+
+  @Get('minha-empresa/whatsapp/status')
+  statusWhatsapp(@Req() req: any) {
+    return this.whatsapp.statusEstabelecimento(req.restaurantId);
   }
 
   @Get('minha-empresa')

@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { R2Service } from '../r2/r2.service';
 import { GeocodingService } from '../motoboy/geocoding.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { EncryptionService } from '../common/encryption.service';
 
 const SELECT_PERFIL = 'id, name, email, phone_e164, address_json, foto_perfil_url, cpf_cnpj';
@@ -14,6 +15,7 @@ export class PerfilService {
     private r2: R2Service,
     private geocoding: GeocodingService,
     private telegram: TelegramService,
+    private whatsapp: WhatsappService,
     private encryption: EncryptionService,
   ) {}
 
@@ -39,6 +41,18 @@ export class PerfilService {
     const perfil = await this.getMeuPerfil(userId);
     if (!perfil) throw new NotFoundException('Perfil não encontrado');
     return this.telegram.statusCliente(perfil.id);
+  }
+
+  async gerarLinkWhatsappCliente(userId: string) {
+    const perfil = await this.getMeuPerfil(userId);
+    if (!perfil) throw new NotFoundException('Perfil não encontrado');
+    return this.whatsapp.gerarLinkCliente(perfil.id);
+  }
+
+  async statusWhatsappCliente(userId: string) {
+    const perfil = await this.getMeuPerfil(userId);
+    if (!perfil) throw new NotFoundException('Perfil não encontrado');
+    return this.whatsapp.statusCliente(perfil.id);
   }
 
   // Cobre o caso de alguém ter uma conta de motoboy (tabela própria, sem vínculo
