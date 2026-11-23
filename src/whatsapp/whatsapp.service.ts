@@ -221,4 +221,15 @@ export class WhatsappService {
       (motoboys ?? []).map((m) => this.enviarMensagem(m.whatsapp_chat_id, `🛵 Pedido #${orderId} está pronto pra retirada!`)),
     );
   }
+
+  // Avisa o estabelecimento assim que o pedido delivery é criado (status 'pending',
+  // antes de qualquer confirmação) — é o alerta que faz o dono abrir o painel, não
+  // dá pra esperar o pedido ser confirmado pra avisar.
+  async avisarPedidoNovo(orderId: number, restaurantId: number) {
+    const [{ data: restaurante }, { data: pedido }] = await Promise.all([
+      this.supabase.client.from('restaurants').select('whatsapp_chat_id').eq('id', restaurantId).maybeSingle(),
+      this.supabase.client.from('orders').select('total').eq('id', orderId).maybeSingle(),
+    ]);
+    await this.enviarMensagem(restaurante?.whatsapp_chat_id, `🔔 Novo pedido #${orderId} recebido! Total: ${formatarMoeda(pedido?.total ?? 0)}`);
+  }
 }

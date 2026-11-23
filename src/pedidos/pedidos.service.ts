@@ -696,6 +696,9 @@ export class PedidosService {
     // cobre item vendido direto e item vindo de combo igual.
     await this.estoque.decrementarItens(linhasFinais);
 
+    await this.telegram.avisarPedidoNovo(pedido.id, body.restaurant_id);
+    await this.whatsapp.avisarPedidoNovo(pedido.id, body.restaurant_id);
+
     return { pedido, itens: itensResposta };
   }
 
