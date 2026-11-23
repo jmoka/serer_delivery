@@ -1,4 +1,5 @@
 import { Controller, Get, Headers, NotFoundException, Param, Query } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SupabaseJwtService } from '../auth/supabase-jwt.service';
 import { RedisService } from '../redis/redis.service';
@@ -290,6 +291,11 @@ export class CatalogoController {
   // payload pesado de `aparencia` (carousel_images pode ter dezenas de URLs) que o
   // marketplace público precisa mas o agente não, e sem cache (TTL de 15s não compensa
   // pra uma query que já é rápida e tem combinação de termo praticamente ilimitada).
+  // Throttle mais apertado que o default global (100/60s) — o ramo com `q` bate direto
+  // no banco sem cache (busca livre do agente, combinação de termo ilimitada); o ramo
+  // sem `q` já tem cache Redis de 15s, mas raspagem em massa do catálogo inteiro
+  // (200 produtos por chamada) não devia valer a mesma cota generosa das rotas normais.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Get('produtos')
   async todosOsProdutos(@Query('q') q?: string) {
     const cacheKey = q ? null : 'catalogo:produtos:marketplace';
