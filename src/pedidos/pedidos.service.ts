@@ -474,6 +474,26 @@ export class PedidosService {
     return { pedido: pedidoComUrlAssinada, itens, cliente: clienteDecifrado, empresa, motoboy, pagamento_pago: pagamento ?? null };
   }
 
+  // Usado pelo link público "acompanhar pedido" (ver PedidoTrackingLinkService) — a
+  // posse já foi validada pelo token, não pelo JwtGuard, então aqui tem que redigir
+  // tudo que é PII/dado sensível que buscarBruto normalmente devolve (telefone, email,
+  // endereço, CPF do cliente; comissão do estabelecimento) — só o necessário pra
+  // renderizar a tela de acompanhamento sai daqui.
+  async buscarParaAcompanhamentoPublico(id: number) {
+    const bruto = await this.buscarBruto(id);
+    const { user_id, customer_id, comprovante_pagamento_url, ...pedidoPublico } = bruto.pedido as any;
+    return {
+      pedido: pedidoPublico,
+      itens: bruto.itens,
+      cliente: bruto.cliente ? { lat: bruto.cliente.lat, lng: bruto.cliente.lng } : null,
+      empresa: bruto.empresa
+        ? { id: bruto.empresa.id, name: bruto.empresa.name, lat: bruto.empresa.lat, lng: bruto.empresa.lng, tipo_restaurante: bruto.empresa.tipo_restaurante }
+        : null,
+      motoboy: bruto.motoboy ? { name: bruto.motoboy.name } : null,
+      pagamento_pago: bruto.pagamento_pago,
+    };
+  }
+
   async criar(body: {
     restaurant_id: number;
     customer_id?: number;

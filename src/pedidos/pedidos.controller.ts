@@ -1,14 +1,31 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseIntPipe,
+  Body, Controller, Delete, Get, NotFoundException, Param, ParseIntPipe,
   Patch, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { PedidosService } from './pedidos.service';
+import { PedidoTrackingLinkService } from './pedido-tracking-link.service';
 import { JwtGuard } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
 
 @Controller('pedidos')
 export class PedidosController {
-  constructor(private service: PedidosService) {}
+  constructor(
+    private service: PedidosService,
+    private trackingLink: PedidoTrackingLinkService,
+  ) {}
+
+  // Público (sem guard) — o token já prova o direito de ver esse pedido específico
+  // (ver PedidoTrackingLinkService). Usado pelo link "acompanhar pedido" mandado por
+  // Telegram/WhatsApp na confirmação. Retorno é redigido (sem PII) em
+  // PedidosService.buscarParaAcompanhamentoPublico.
+  @Get('acompanhar/:token')
+  async acompanhar(@Param('token') token: string) {
+    const resolvido = await this.trackingLink.resolverOrderId(token);
+    if (!resolvido || resolvido.expirado) {
+      throw new NotFoundException('Link inválido ou expirado');
+    }
+    return this.service.buscarParaAcompanhamentoPublico(resolvido.orderId);
+  }
 
   // Admin: lista todos (com filtros)
   @Get()

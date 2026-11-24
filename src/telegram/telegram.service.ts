@@ -5,6 +5,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { EncryptionService } from '../common/encryption.service';
 import { TelegramClient } from './telegram.client';
 import { MotoboyAcaoLinkService } from '../motoboy/motoboy-acao-link.service';
+import { PedidoTrackingLinkService } from '../pedidos/pedido-tracking-link.service';
 
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
@@ -32,6 +33,7 @@ export class TelegramService implements OnModuleInit {
     private config: ConfigService,
     private encryption: EncryptionService,
     private acaoLink: MotoboyAcaoLinkService,
+    private trackingLink: PedidoTrackingLinkService,
   ) {
     const token = config.get<string>('TELEGRAM_TOKEN');
     this.client = token ? new TelegramClient(token) : null;
@@ -177,18 +179,44 @@ export class TelegramService implements OnModuleInit {
 
   async avisarPedidoConfirmado(orderId: number, customerId: number | null | undefined) {
     if (!customerId) return;
-    const [{ data: cliente }, { data: itens }, { data: pedido }] = await Promise.all([
+    const [{ data: cliente }, { data: itens }, { data: pedido }, { data: pagamento }] = await Promise.all([
       this.supabase.client.from('customers').select('telegram_chat_id').eq('id', customerId).maybeSingle(),
       this.supabase.client
         .from('order_items')
         .select('quantity, unit_price, combo_nome, combo_quantidade, products(name)')
         .eq('order_id', orderId),
-      this.supabase.client.from('orders').select('total').eq('id', orderId).maybeSingle(),
+      this.supabase.client
+        .from('orders')
+        .select('total, payment_method, retirada_balcao, frete_cobrado, frete_excedente_cobrado, frete_embutido_no_pedido, acrescimo_valor, desconto_valor, pago_em')
+        .eq('id', orderId)
+        .maybeSingle(),
+      this.supabase.client.from('pagamentos').select('id').eq('order_id', orderId).eq('status', 'paid').maybeSingle(),
     ]);
-    await this.enviarMensagem(cliente?.telegram_chat_id, this.montarResumoConfirmacao(orderId, itens ?? [], pedido?.total));
+    if (!cliente?.telegram_chat_id) return;
+
+    const link = await this.trackingLink.gerarLink(orderId);
+    await this.enviarMensagem(
+      cliente.telegram_chat_id,
+      this.montarResumoConfirmacao(orderId, itens ?? [], pedido, !!pedido?.pago_em || !!pagamento, link),
+    );
   }
 
-  private montarResumoConfirmacao(orderId: number, itens: any[], total: number | null | undefined): string {
+  private montarResumoConfirmacao(
+    orderId: number,
+    itens: any[],
+    pedido: {
+      total: number;
+      payment_method: string;
+      retirada_balcao: boolean;
+      frete_cobrado: number;
+      frete_excedente_cobrado: number;
+      frete_embutido_no_pedido: boolean;
+      acrescimo_valor: number;
+      desconto_valor: number;
+    } | null | undefined,
+    pago: boolean,
+    link: string | null,
+  ): string {
     const linhas = itens.map((item) => {
       const nome = item.combo_nome ?? item.products?.name ?? 'Item';
       const qtd = item.combo_quantidade ?? item.quantity ?? 1;
@@ -200,9 +228,31 @@ export class TelegramService implements OnModuleInit {
     if (linhas.length) {
       partes.push('', '🧾 Itens:', ...linhas);
     }
-    if (total != null) {
-      partes.push('', `💰 Total: ${formatarMoeda(total)}`);
+
+    if (pedido) {
+      const frete = parseFloat(String(pedido.frete_cobrado ?? 0));
+      const excedente = parseFloat(String(pedido.frete_excedente_cobrado ?? 0));
+      const acrescimo = parseFloat(String(pedido.acrescimo_valor ?? 0));
+      const desconto = parseFloat(String(pedido.desconto_valor ?? 0));
+      const detalhes: string[] = [];
+
+      if (!pedido.retirada_balcao) {
+        detalhes.push(`🚚 Frete: ${pedido.frete_embutido_no_pedido ? 'Grátis' : formatarMoeda(frete)}`);
+        if (excedente > 0) detalhes.push(`📍 Excedente distância: ${formatarMoeda(excedente)}`);
+      }
+      if (acrescimo > 0) detalhes.push(`➕ Acréscimo: ${formatarMoeda(acrescimo)}`);
+      if (desconto > 0) detalhes.push(`➖ Desconto: -${formatarMoeda(desconto)}`);
+      if (detalhes.length) partes.push('', ...detalhes);
+
+      partes.push('', `💰 Total: ${formatarMoeda(pedido.total)}`);
+      partes.push(`💳 Pagamento: ${PAGAMENTO_LABEL[pedido.payment_method] ?? pedido.payment_method}`);
+      partes.push(pago ? '✅ Pagamento já confirmado' : '🕒 Pagamento pendente');
     }
+
+    if (link) {
+      partes.push('', `🔗 Acompanhar pedido: ${link}`);
+    }
+
     return partes.join('\n');
   }
 
