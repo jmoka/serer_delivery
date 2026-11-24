@@ -313,6 +313,47 @@ export class TelegramService implements OnModuleInit {
     await this.enviarMensagem(data?.telegram_chat_id, `🛵 Pedido #${orderId} saiu para entrega!`);
   }
 
+  // Endereço/distância/ganho/itens — mesmo bloco usado nas duas mensagens do motoboy
+  // (concorrer e pegar), pro motoboy decidir se vale a corrida sem abrir o app. Ganho
+  // estimado usa a mesma fórmula de MotoboyService.calcularGanhoEstimado (frete +
+  // excedente de distância — nunca o total do pedido, que inclui o valor dos produtos).
+  private async montarDetalhesCorrida(orderId: number): Promise<string> {
+    const { data: pedido } = await this.supabase.client
+      .from('orders')
+      .select('distancia_entrega_km, frete_cobrado, frete_excedente_cobrado, customer_id')
+      .eq('id', orderId)
+      .maybeSingle();
+    const { data: itens } = await this.supabase.client
+      .from('order_items')
+      .select('quantity, combo_nome, combo_quantidade, products(name)')
+      .eq('order_id', orderId);
+
+    let endereco: string | null = null;
+    if (pedido?.customer_id) {
+      const { data: cliente } = await this.supabase.client
+        .from('customers')
+        .select('address_json')
+        .eq('id', pedido.customer_id)
+        .maybeSingle();
+      const addr = this.encryption.decryptJson(cliente?.address_json ?? null) ?? {};
+      const linhaRua = [addr.logradouro, addr.numero].filter(Boolean).join(', ');
+      const linhaCompl = [addr.complemento, addr.bairro].filter(Boolean).join(' — ');
+      const linhaCidade = [addr.cidade, addr.estado, addr.cep].filter(Boolean).join(', ');
+      endereco = [linhaRua, linhaCompl, linhaCidade].filter(Boolean).join(', ') || null;
+    }
+
+    const ganho = Math.round(((pedido?.frete_cobrado ?? 0) + (pedido?.frete_excedente_cobrado ?? 0)) * 100) / 100;
+    const itensTexto = (itens ?? [])
+      .map((i: any) => `${i.combo_quantidade ?? i.quantity ?? 1}x ${i.combo_nome ?? i.products?.name ?? 'Item'}`)
+      .join(', ');
+
+    const linhas = [`📍 Endereço: ${endereco ?? 'não informado'}`];
+    if (pedido?.distancia_entrega_km != null) linhas.push(`📏 Distância: ${pedido.distancia_entrega_km} km`);
+    linhas.push(`💰 Você ganha: ${formatarMoeda(ganho)}`);
+    if (itensTexto) linhas.push(`🧾 Itens: ${itensTexto}`);
+    return linhas.join('\n');
+  }
+
   // Só avisa quem já demonstrou interesse nesse pedido específico (pedido_interesses_motoboy)
   // — na hora que o pedido fica pronto ainda não existe motoboy_id atribuído, então não dá
   // pra mirar em "o" motoboy. Sem fallback de broadcast pra todo mundo (decisão de produto).
@@ -329,13 +370,13 @@ export class TelegramService implements OnModuleInit {
       .select('id, telegram_chat_id')
       .in('id', motoboyIds);
 
+    const detalhes = await this.montarDetalhesCorrida(orderId);
     await Promise.all(
       (motoboys ?? []).map(async (m) => {
         const link = await this.acaoLink.gerarLink('pegar', orderId, m.id);
-        const texto = link
-          ? `🛵 Pedido #${orderId} está pronto pra retirada! Toque pra aceitar e ir buscar:\n${link}`
-          : `🛵 Pedido #${orderId} está pronto pra retirada!`;
-        await this.enviarMensagem(m.telegram_chat_id, texto);
+        const partes = [`🛵 Pedido #${orderId} está pronto pra retirada!`, '', detalhes];
+        partes.push('', link ? `Toque pra aceitar e ir buscar:\n${link}` : 'Abra o app pra aceitar.');
+        await this.enviarMensagem(m.telegram_chat_id, partes.join('\n'));
       }),
     );
   }
@@ -365,13 +406,13 @@ export class TelegramService implements OnModuleInit {
       .select('id, telegram_chat_id')
       .in('id', motoboyIds);
 
+    const detalhes = await this.montarDetalhesCorrida(orderId);
     await Promise.all(
       (motoboys ?? []).map(async (m) => {
         const link = await this.acaoLink.gerarLink('concorrer', orderId, m.id);
-        const texto = link
-          ? `📦 Novo pedido #${orderId} disponível! Toque pra concorrer:\n${link}`
-          : `📦 Novo pedido #${orderId} disponível! Abra o app pra concorrer.`;
-        await this.enviarMensagem(m.telegram_chat_id, texto);
+        const partes = [`📦 Novo pedido #${orderId} disponível!`, '', detalhes];
+        partes.push('', link ? `Toque pra concorrer:\n${link}` : 'Abra o app pra concorrer.');
+        await this.enviarMensagem(m.telegram_chat_id, partes.join('\n'));
       }),
     );
   }
