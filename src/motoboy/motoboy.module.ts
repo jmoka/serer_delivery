@@ -9,6 +9,8 @@ import { MotoboyPortalController } from './motoboy-portal.controller';
 import { MotoboyAuthController } from './motoboy-auth.controller';
 import { MotoboyEstabelecimentosController } from './motoboy-estabelecimentos.controller';
 import { MotoboyAdminController } from './motoboy-admin.controller';
+import { MotoboyAcaoLinkController } from './motoboy-acao-link.controller';
+import { MotoboyAcaoLinkModule } from './motoboy-acao-link.module';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { SalaoModule } from '../salao/salao.module';
@@ -16,13 +18,14 @@ import { TelegramModule } from '../telegram/telegram.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
 @Module({
-  imports: [AuthModule, SupabaseModule, SalaoModule, TelegramModule, WhatsappModule],
+  imports: [AuthModule, SupabaseModule, SalaoModule, TelegramModule, WhatsappModule, MotoboyAcaoLinkModule],
   controllers: [
     RestauranteMotoboysController,
     MotoboyPortalController,
     MotoboyAuthController,
     MotoboyEstabelecimentosController,
     MotoboyAdminController,
+    MotoboyAcaoLinkController,
   ],
   providers: [MotoboyService, MotoboyAuthService, ComissaoService, GeocodingService, CnpjService],
   exports: [MotoboyService, ComissaoService, GeocodingService],

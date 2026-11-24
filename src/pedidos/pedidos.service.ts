@@ -714,7 +714,7 @@ export class PedidosService {
       .from('orders')
       .update({ status, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, status, total, restaurant_id, payment_method, updated_at, motoboy_id, frete_cobrado, frete_excedente_cobrado, distancia_entrega_km, customer_id')
+      .select('id, status, total, restaurant_id, payment_method, updated_at, motoboy_id, frete_cobrado, frete_excedente_cobrado, distancia_entrega_km, customer_id, canal, retirada_balcao')
       .single();
 
     if (error) throw error;
@@ -727,6 +727,13 @@ export class PedidosService {
     if (status === 'confirmed' && statusAnterior !== 'confirmed') {
       await this.telegram.avisarPedidoConfirmado(id, data.customer_id);
       await this.whatsapp.avisarPedidoConfirmado(id, data.customer_id);
+    }
+
+    // Pedido entrou em produção: motoboys afiliados/ativos já podem concorrer (ver
+    // registrarInteresse) — avisa por Telegram/WhatsApp com link de um clique.
+    if (status === 'confirmed' && statusAnterior !== 'confirmed' && data.canal === 'delivery' && !data.retirada_balcao) {
+      await this.telegram.avisarPedidoDisponivelMotoboy(id, data.restaurant_id);
+      await this.whatsapp.avisarPedidoDisponivelMotoboy(id, data.restaurant_id);
     }
 
     if (status === 'canceled' && statusAnterior !== 'canceled') {

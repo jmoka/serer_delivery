@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { EncryptionService } from '../common/encryption.service';
 import { TelegramClient } from './telegram.client';
+import { MotoboyAcaoLinkService } from '../motoboy/motoboy-acao-link.service';
 
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
@@ -30,6 +31,7 @@ export class TelegramService implements OnModuleInit {
     private supabase: SupabaseService,
     private config: ConfigService,
     private encryption: EncryptionService,
+    private acaoLink: MotoboyAcaoLinkService,
   ) {
     const token = config.get<string>('TELEGRAM_TOKEN');
     this.client = token ? new TelegramClient(token) : null;
@@ -274,11 +276,53 @@ export class TelegramService implements OnModuleInit {
 
     const { data: motoboys } = await this.supabase.client
       .from('motoboys')
-      .select('telegram_chat_id')
+      .select('id, telegram_chat_id')
       .in('id', motoboyIds);
 
     await Promise.all(
-      (motoboys ?? []).map((m) => this.enviarMensagem(m.telegram_chat_id, `🛵 Pedido #${orderId} está pronto pra retirada!`)),
+      (motoboys ?? []).map(async (m) => {
+        const link = await this.acaoLink.gerarLink('pegar', orderId, m.id);
+        const texto = link
+          ? `🛵 Pedido #${orderId} está pronto pra retirada! Toque pra aceitar e ir buscar:\n${link}`
+          : `🛵 Pedido #${orderId} está pronto pra retirada!`;
+        await this.enviarMensagem(m.telegram_chat_id, texto);
+      }),
+    );
+  }
+
+  // Avisa TODOS os motoboys afiliados/ativos da loja quando o pedido entra em produção
+  // (status 'confirmed') — momento em que ele já pode demonstrar interesse (ver
+  // registrarInteresse). Link de um clique faz a ação direto, sem abrir o app.
+  async avisarPedidoDisponivelMotoboy(orderId: number, restaurantId: number) {
+    const { data: restaurante } = await this.supabase.client
+      .from('restaurants')
+      .select('usa_motoboy')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    if (!restaurante?.usa_motoboy) return;
+
+    const { data: afiliacoes } = await this.supabase.client
+      .from('motoboy_estabelecimentos')
+      .select('motoboy_id')
+      .eq('restaurant_id', restaurantId)
+      .eq('status', 'aceito')
+      .eq('bloqueado', false);
+    const motoboyIds = (afiliacoes ?? []).map((a) => a.motoboy_id);
+    if (!motoboyIds.length) return;
+
+    const { data: motoboys } = await this.supabase.client
+      .from('motoboys')
+      .select('id, telegram_chat_id')
+      .in('id', motoboyIds);
+
+    await Promise.all(
+      (motoboys ?? []).map(async (m) => {
+        const link = await this.acaoLink.gerarLink('concorrer', orderId, m.id);
+        const texto = link
+          ? `📦 Novo pedido #${orderId} disponível! Toque pra concorrer:\n${link}`
+          : `📦 Novo pedido #${orderId} disponível! Abra o app pra concorrer.`;
+        await this.enviarMensagem(m.telegram_chat_id, texto);
+      }),
     );
   }
 
