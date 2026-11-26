@@ -14,6 +14,19 @@ export interface QrCodeResult {
   connectedDireto: boolean; // alguns fluxos conectam sem precisar escanear (ex: já pareado)
 }
 
+// Carrega o status HTTP da resposta — sem isso o service não consegue
+// distinguir "instância não existe mais no Evolution" (404, cai pra recriar)
+// de qualquer outro erro (rede, Evolution fora do ar, etc).
+export class EvolutionHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'EvolutionHttpError';
+  }
+}
+
 export class EvolutionManagerClient {
   private readonly baseUrl: string;
 
@@ -33,7 +46,7 @@ export class EvolutionManagerClient {
     const text = await res.text();
     const json = text ? JSON.parse(text) : null;
     if (!res.ok) {
-      throw new Error(`Evolution: HTTP ${res.status} ${text}`);
+      throw new EvolutionHttpError(res.status, `Evolution: HTTP ${res.status} ${text}`);
     }
     return json as T;
   }

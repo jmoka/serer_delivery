@@ -5,10 +5,14 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { EncryptionService } from '../common/encryption.service';
 import { TelegramClient } from '../telegram/telegram.client';
 import { WhatsappClient } from '../whatsapp/whatsapp.client';
-import { EvolutionManagerClient } from './evolution-manager.client';
+import { EvolutionManagerClient, EvolutionHttpError } from './evolution-manager.client';
 import { GroqClient, ChatMessage, ToolSpec } from './groq.client';
 
 const HISTORICO_MAX_MENSAGENS = 10;
+// QR do WhatsApp expira depois disso — precisa bater com QR_TTL_MS em
+// restaurante-assistente-ia/index.jsx (frontend só espelha pra contagem,
+// backend é a fonte da verdade).
+const QR_TTL_MS = 120_000;
 
 const TOOLS: ToolSpec[] = [
   {
@@ -57,8 +61,26 @@ export class AssistenteService {
     this.backendPublicUrl = (config.get<string>('BACKEND_PUBLIC_URL') || '').replace(/\/$/, '');
   }
 
-  private nomeInstancia(restaurantId: number): string {
-    return `assistente-${restaurantId}`;
+  // Reusa o nome já salvo quando a instância já existe (não pode recalcular do
+  // slug atual — se o slug mudar depois, perderia a referência da instância
+  // já criada no Evolution). Só na primeira criação busca o slug da loja.
+  private async obterNomeInstancia(restaurantId: number, cfg: { whatsapp_evolution_instance?: string | null }): Promise<string> {
+    if (cfg.whatsapp_evolution_instance) return cfg.whatsapp_evolution_instance;
+    const { data } = await this.supabase.client
+      .from('restaurants')
+      .select('slug')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    const base = data?.slug || `loja-${restaurantId}`;
+    return `assistente-${base}`;
+  }
+
+  private instanciaExpirada(cfg: { whatsapp_connection_status?: string | null; whatsapp_qr_gerado_em?: string | null }): boolean {
+    return (
+      cfg.whatsapp_connection_status === 'aguardando_qr' &&
+      !!cfg.whatsapp_qr_gerado_em &&
+      Date.now() - new Date(cfg.whatsapp_qr_gerado_em).getTime() > QR_TTL_MS
+    );
   }
 
   private async buscarOuCriarConfig(restaurantId: number) {
@@ -158,11 +180,47 @@ export class AssistenteService {
     if (!this.evolutionManager) throw new BadRequestException('Evolution API não configurada no servidor.');
     if (!this.backendPublicUrl) throw new BadRequestException('BACKEND_PUBLIC_URL não configurada no servidor.');
 
-    await this.buscarOuCriarConfig(restaurantId);
-    const instance = this.nomeInstancia(restaurantId);
+    const cfg = await this.buscarOuCriarConfig(restaurantId);
 
-    const qr = await this.evolutionManager.criarInstancia(instance);
-    await this.evolutionManager.configurarWebhook(instance, `${this.backendPublicUrl}/assistente/webhook/whatsapp/${instance}`);
+    if (cfg.whatsapp_connection_status === 'conectado' && cfg.ativo_whatsapp) {
+      throw new BadRequestException('WhatsApp já está conectado. Desconecte antes de gerar um novo QR.');
+    }
+
+    const expirada = this.instanciaExpirada(cfg);
+    const instance = await this.obterNomeInstancia(restaurantId, cfg);
+
+    if (expirada && cfg.whatsapp_evolution_instance) {
+      // QR anterior passou do TTL — limpa a instância velha antes de recriar
+      // do zero (pedido do usuário: expirar não pode deixar lixo no Evolution).
+      await this.evolutionManager
+        .deletarInstancia(cfg.whatsapp_evolution_instance)
+        .catch((e: any) => this.logger.warn(`Falha ao deletar instância expirada '${cfg.whatsapp_evolution_instance}': ${e.message}`));
+    }
+
+    let qr;
+    try {
+      qr = cfg.whatsapp_evolution_instance && !expirada
+        ? await this.evolutionManager.reconectar(instance)
+        : await this.evolutionManager.criarInstancia(instance);
+    } catch (e: any) {
+      if (e instanceof EvolutionHttpError && e.status === 404 && cfg.whatsapp_evolution_instance) {
+        // Instância salva no banco não existe mais no Evolution (apagada manual
+        // por fora, por exemplo) — recria do zero em vez de propagar o 404.
+        try {
+          qr = await this.evolutionManager.criarInstancia(instance);
+        } catch (e2: any) {
+          this.logger.error(`Falha ao criar instância Evolution '${instance}' (loja ${restaurantId}): ${e2.message}`);
+          throw new BadRequestException('Não foi possível gerar o QR code agora. Tente novamente em alguns instantes.');
+        }
+      } else {
+        this.logger.error(`Falha ao conectar WhatsApp (loja ${restaurantId}, instância '${instance}'): ${e.message}`);
+        throw new BadRequestException('Não foi possível gerar o QR code agora. Tente novamente em alguns instantes.');
+      }
+    }
+
+    await this.evolutionManager
+      .configurarWebhook(instance, `${this.backendPublicUrl}/assistente/webhook/whatsapp/${instance}`)
+      .catch((e: any) => this.logger.warn(`Falha ao configurar webhook da instância '${instance}': ${e.message}`));
 
     const { error } = await this.supabase.client
       .from('assistentes_estabelecimento')
@@ -170,6 +228,7 @@ export class AssistenteService {
         whatsapp_evolution_instance: instance,
         whatsapp_connection_status: qr.connectedDireto ? 'conectado' : 'aguardando_qr',
         ativo_whatsapp: qr.connectedDireto,
+        whatsapp_qr_gerado_em: qr.connectedDireto ? null : new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
       .eq('restaurant_id', restaurantId);
@@ -183,7 +242,31 @@ export class AssistenteService {
     if (!this.evolutionManager || !cfg.whatsapp_evolution_instance) {
       return { status: cfg.whatsapp_connection_status ?? 'desconectado' };
     }
-    const estado = await this.evolutionManager.estadoConexao(cfg.whatsapp_evolution_instance);
+
+    if (this.instanciaExpirada(cfg)) {
+      await this.evolutionManager
+        .deletarInstancia(cfg.whatsapp_evolution_instance)
+        .catch((e: any) => this.logger.warn(`Falha ao deletar instância expirada '${cfg.whatsapp_evolution_instance}': ${e.message}`));
+      await this.supabase.client
+        .from('assistentes_estabelecimento')
+        .update({
+          whatsapp_evolution_instance: null,
+          whatsapp_connection_status: 'expirado',
+          ativo_whatsapp: false,
+          whatsapp_qr_gerado_em: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('restaurant_id', restaurantId);
+      return { status: 'expirado' };
+    }
+
+    let estado: 'open' | 'close' | 'connecting';
+    try {
+      estado = await this.evolutionManager.estadoConexao(cfg.whatsapp_evolution_instance);
+    } catch (e: any) {
+      this.logger.warn(`Falha ao consultar estado da instância '${cfg.whatsapp_evolution_instance}': ${e.message}`);
+      return { status: cfg.whatsapp_connection_status ?? 'desconectado' };
+    }
     const status = estado === 'open' ? 'conectado' : estado === 'connecting' ? 'aguardando_qr' : 'desconectado';
 
     await this.supabase.client
@@ -207,6 +290,7 @@ export class AssistenteService {
         whatsapp_evolution_instance: null,
         whatsapp_connection_status: 'desconectado',
         ativo_whatsapp: false,
+        whatsapp_qr_gerado_em: null,
         updated_at: new Date().toISOString(),
       })
       .eq('restaurant_id', restaurantId);
