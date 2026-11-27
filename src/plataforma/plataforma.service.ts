@@ -150,6 +150,9 @@ export class PlataformaService {
       permitir_cadastro_estabelecimento: cfg.permitir_cadastro_estabelecimento ?? true,
       // Branding do marketplace público (/menu-catalog-product-browse)
       aparencia_marketplace: { ...DEFAULT_APARENCIA_MARKETPLACE, ...(cfg.aparencia_marketplace ?? {}) },
+      // Lembrete de vencimento de plano mensal — ver PlanosService.enviarLembretesVencimento
+      lembretes_vencimento_ativo: cfg.lembretes_vencimento_ativo ?? false,
+      lembretes_vencimento_regras: cfg.lembretes_vencimento_regras ?? [],
     };
   }
 
@@ -199,6 +202,8 @@ export class PlataformaService {
     stripe_secret_key?: string;
     stripe_webhook_secret?: string;
     stripe_connect_webhook_secret?: string;
+    lembretes_vencimento_ativo?: boolean;
+    lembretes_vencimento_regras?: { dias_offset: number; ativo: boolean }[];
   }) {
     const { data: atual } = await this.supabase.client
       .from('platform_settings')
@@ -262,6 +267,16 @@ export class PlataformaService {
     }
     if (body.stripe_connect_webhook_secret?.trim()) {
       novo.stripe_connect_webhook_secret = body.stripe_connect_webhook_secret.trim();
+    }
+    if (body.lembretes_vencimento_ativo !== undefined) {
+      novo.lembretes_vencimento_ativo = body.lembretes_vencimento_ativo;
+    }
+    if (body.lembretes_vencimento_regras !== undefined) {
+      // Whitelist de forma — o resto do JSON é confiado, mas uma regra com
+      // dias_offset não-numérico quebraria a comparação de data no cron.
+      novo.lembretes_vencimento_regras = body.lembretes_vencimento_regras
+        .filter((r) => r && Number.isInteger(r.dias_offset))
+        .map((r) => ({ dias_offset: r.dias_offset, ativo: !!r.ativo }));
     }
 
     const { error } = await this.supabase.client

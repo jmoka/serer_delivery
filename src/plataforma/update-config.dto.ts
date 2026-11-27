@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class UpdateConfigDto {
   @IsOptional()
@@ -95,4 +95,17 @@ export class UpdateConfigDto {
   @IsString()
   @MaxLength(500)
   stripe_connect_webhook_secret?: string;
+
+  // Lembrete de vencimento de plano mensal pro WhatsApp do estabelecimento
+  // (instância Pediuvai) — kill switch + lista livre de regras de offset em
+  // dias relativo à próxima renovação da assinatura (negativo=antes, 0=no
+  // dia, positivo=depois). Validação de forma solta aqui, whitelisting real
+  // no service.
+  @IsOptional()
+  @IsBoolean()
+  lembretes_vencimento_ativo?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  lembretes_vencimento_regras?: { dias_offset: number; ativo: boolean }[];
 }

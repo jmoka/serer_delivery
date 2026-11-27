@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
 import { PagBankClient } from '../pagamentos/pagbank.client';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { CriarPlanoDto } from './dto/criar-plano.dto';
 import { AtualizarPlanoDto } from './dto/atualizar-plano.dto';
 import type { PagarFaturaDto } from './dto/pagar-fatura.dto';
@@ -49,6 +50,7 @@ export class PlanosService {
     private supabase: SupabaseService,
     private config: ConfigService,
     private usuarios: UsuariosService,
+    private whatsapp: WhatsappService,
   ) {}
 
   // Eleva o dono da loja assim que um pagamento (ou trial sem cobrança) é
@@ -827,6 +829,80 @@ export class PlanosService {
         this.logger.error(`gerarFaturasAntecipadas falhou pra assinatura ${a.id}`, e as Error);
       }
     }
+  }
+
+  // Lembrete de vencimento de plano mensal pro WhatsApp do estabelecimento —
+  // admin configura em /admin/configuracoes (kill switch + lista de regras
+  // de offset em dias relativo à PRÓXIMA RENOVAÇÃO da assinatura, não à
+  // fatura: negativo=antes, 0=no dia, positivo=depois). Roda depois do cron
+  // de fatura (6h) pra não competir por ultimo_periodo_faturado_fim no meio
+  // da geração antecipada.
+  @Cron(CronExpression.EVERY_DAY_AT_7AM)
+  async enviarLembretesVencimento() {
+    const { data: settings } = await this.supabase.client
+      .from('platform_settings')
+      .select('config')
+      .eq('id', 1)
+      .maybeSingle();
+    const cfg = (settings?.config ?? {}) as Record<string, any>;
+    if (!cfg.lembretes_vencimento_ativo) return;
+
+    const regras = ((cfg.lembretes_vencimento_regras ?? []) as { dias_offset: number; ativo: boolean }[]).filter(
+      (r) => r.ativo,
+    );
+    if (!regras.length) return;
+
+    const { data: assinaturas, error } = await this.supabase.client
+      .from('assinaturas')
+      .select('id, restaurant_id, data_inicio, ultimo_periodo_faturado_fim, planos(nome, periodicidade)')
+      .in('status', ['trial', 'ativa'])
+      .not('restaurant_id', 'is', null);
+    if (error) throw error;
+
+    const hojeChave = new Date().toISOString().slice(0, 10);
+
+    for (const a of assinaturas ?? []) {
+      const plano = (a as any).planos;
+      if (plano?.periodicidade !== 'mensal') continue;
+
+      const inicioPeriodo = a.ultimo_periodo_faturado_fim ? new Date(a.ultimo_periodo_faturado_fim) : new Date(a.data_inicio);
+      const proximaRenovacao = somarMeses(inicioPeriodo, 1);
+
+      for (const regra of regras) {
+        const alvo = somarDias(proximaRenovacao, regra.dias_offset);
+        if (alvo.toISOString().slice(0, 10) !== hojeChave) continue;
+
+        // Grava o log ANTES de enviar — dedupe por (assinatura, regra, dia de
+        // hoje) vale mesmo se a loja não tiver WhatsApp vinculado (pula o
+        // envio mas não tenta de novo nas próximas rodadas do mesmo dia).
+        const { error: logErro } = await this.supabase.client
+          .from('lembretes_vencimento_enviados')
+          .insert({ assinatura_id: a.id, dias_offset: regra.dias_offset, data_referencia: hojeChave });
+        if (logErro) {
+          if (!String(logErro.message).includes('duplicate')) {
+            this.logger.error(`enviarLembretesVencimento falhou ao logar assinatura ${a.id}`, logErro as any);
+          }
+          continue;
+        }
+
+        try {
+          const texto = this.montarMensagemLembreteVencimento(plano.nome, regra.dias_offset);
+          await this.whatsapp.avisarVencimentoPlano(a.restaurant_id, texto);
+        } catch (e) {
+          this.logger.error(`enviarLembretesVencimento falhou ao enviar assinatura ${a.id}`, e as Error);
+        }
+      }
+    }
+  }
+
+  private montarMensagemLembreteVencimento(planoNome: string, diasOffset: number): string {
+    const quando =
+      diasOffset === 0
+        ? 'vence hoje'
+        : diasOffset > 0
+        ? `venceu há ${diasOffset} dia${diasOffset > 1 ? 's' : ''}`
+        : `vence em ${Math.abs(diasOffset)} dia${Math.abs(diasOffset) > 1 ? 's' : ''}`;
+    return `⏰ Lembrete PediuVai: o plano *${planoNome}* da sua loja ${quando}.\nFique em dia pra não perder o acesso ao painel.`;
   }
 
   async detalhePlanoRestaurante(restaurantId: number) {

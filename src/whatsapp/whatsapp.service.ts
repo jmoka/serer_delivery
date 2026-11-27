@@ -440,6 +440,18 @@ export class WhatsappService {
     return partes.join('\n');
   }
 
+  // Lembrete de vencimento de plano mensal (ver PlanosService.enviarLembretesVencimento)
+  // — mesmo padrão best-effort dos demais avisos, pula em silêncio se a loja
+  // nunca vinculou o WhatsApp.
+  async avisarVencimentoPlano(restaurantId: number, texto: string) {
+    const { data } = await this.supabase.client
+      .from('restaurants')
+      .select('whatsapp_chat_id')
+      .eq('id', restaurantId)
+      .maybeSingle();
+    await this.enviarMensagem(data?.whatsapp_chat_id, texto);
+  }
+
   private montarMensagemEntregue(
     orderId: number,
     restaurante: { slug?: string | null; custom_domain?: string | null; instagram_url?: string | null; facebook_url?: string | null } | null,

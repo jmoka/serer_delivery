@@ -6,9 +6,10 @@ import { PlanosWebhookController } from './planos-webhook.controller';
 import { PlanosPublicoController } from './planos-publico.controller';
 import { AuthModule } from '../auth/auth.module';
 import { UsuariosModule } from '../usuarios/usuarios.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
 @Module({
-  imports: [AuthModule, UsuariosModule],
+  imports: [AuthModule, UsuariosModule, WhatsappModule],
   controllers: [PlanosAdminController, PlanosRestauranteController, PlanosWebhookController, PlanosPublicoController],
   providers: [PlanosService],
   exports: [PlanosService],
