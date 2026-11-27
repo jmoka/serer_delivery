@@ -1,15 +1,31 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseService } from '../supabase/supabase.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
 import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class EmpresasService {
+  private readonly logger = new Logger(EmpresasService.name);
+  // Instância própria (não persiste sessão) só pra trocar o magic link pela sessão
+  // real — mesmo motivo do authClient em AuthLoginService: nunca reaproveitar
+  // this.supabase.client pra login, senão a sessão logada ali vazaria pra todas as
+  // outras queries service_role em andamento.
+  private readonly authClient: SupabaseClient;
+
   constructor(
     private supabase: SupabaseService,
     private usuarios: UsuariosService,
     private encryption: EncryptionService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.authClient = createClient(
+      config.getOrThrow('SUPABASE_URL'),
+      config.getOrThrow('SUPABASE_SERVICE_ROLE_KEY'),
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    );
+  }
 
   private gerarSlug(name: string): string {
     return name.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').trim();
@@ -178,6 +194,45 @@ export class EmpresasService {
       .single();
     if (error) throw error;
     return data;
+  }
+
+  // Admin acessando o painel real do dono da loja (botão "Painel" em
+  // /admin/empresas) — gera uma sessão válida via magic link (Supabase Auth
+  // Admin API) e troca pelos tokens imediatamente aqui no backend, sem nunca
+  // expor o link/token de magic link em si pro frontend. Logado (quem/quando/
+  // em qual empresa) pois é uma ação sensível — admin ganhando sessão de outra
+  // conta.
+  async acessarPainel(id: number, adminUserId: string) {
+    const { data: empresa, error: empresaErro } = await this.supabase.client
+      .from('restaurants')
+      .select('id, name, user_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (empresaErro) throw empresaErro;
+    if (!empresa) throw new NotFoundException(`Empresa ${id} não encontrada`);
+    if (!empresa.user_id) throw new BadRequestException('Empresa sem usuário dono vinculado');
+
+    const { data: userData, error: userErro } = await this.supabase.client.auth.admin.getUserById(empresa.user_id);
+    if (userErro || !userData?.user?.email) throw new NotFoundException('Usuário dono da empresa não encontrado');
+
+    const { data: linkData, error: linkErro } = await this.supabase.client.auth.admin.generateLink({
+      type: 'magiclink',
+      email: userData.user.email,
+    });
+    if (linkErro) throw linkErro;
+
+    const { data: sessionData, error: sessionErro } = await this.authClient.auth.verifyOtp({
+      token_hash: linkData.properties.hashed_token,
+      type: 'magiclink',
+    });
+    if (sessionErro || !sessionData?.session) throw sessionErro ?? new Error('Falha ao gerar sessão de acesso ao painel');
+
+    this.logger.warn(`Admin ${adminUserId} acessou o painel da empresa ${id} (${empresa.name}) como ${userData.user.email}`);
+
+    return {
+      access_token: sessionData.session.access_token,
+      refresh_token: sessionData.session.refresh_token,
+    };
   }
 
   async atenderSolicitacaoDominio(id: number) {

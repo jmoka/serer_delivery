@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { EmpresasService } from './empresas.service';
 import { AdminGuard } from '../auth/admin.guard';
 
@@ -54,6 +54,11 @@ export class EmpresasController {
   @Delete(':id')
   remover(@Param('id', ParseIntPipe) id: number) {
     return this.service.remover(id);
+  }
+
+  @Post(':id/painel')
+  acessarPainel(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.service.acessarPainel(id, req.userId);
   }
 
   @Patch(':id/dominio/atender')
