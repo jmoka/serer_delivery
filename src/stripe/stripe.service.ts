@@ -115,7 +115,18 @@ export class StripeService {
     return { url: link.url };
   }
 
+  // Chave da plataforma configurada ou não — é o que decide se o botão
+  // "Conectar com Stripe" aparece pro dono em /restaurante/config (ver
+  // StripeConectarCard no frontend). Independe de ter cliente conectado: se o
+  // admin nunca configurou Stripe, ninguém deveria ver a opção.
+  private async disponivel(): Promise<boolean> {
+    const cfg = await this.getPlatformConfig();
+    return !!(cfg.stripe_secret_key || this.config.get<string>('STRIPE_SECRET_KEY'));
+  }
+
   async status(restaurantId: number) {
+    const disponivel = await this.disponivel();
+
     const { data: restaurante } = await this.supabase.client
       .from('restaurants')
       .select('stripe_account_id')
@@ -124,6 +135,7 @@ export class StripeService {
 
     if (!restaurante?.stripe_account_id) {
       return {
+        disponivel,
         conectado: false,
         status: 'nao_conectado' as const,
         charges_enabled: false,
@@ -137,6 +149,7 @@ export class StripeService {
     await this.persistirFlags(restaurantId, conta);
 
     return {
+      disponivel,
       conectado: true,
       status: this.statusDaConta(conta),
       charges_enabled: !!conta.charges_enabled,
